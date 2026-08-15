@@ -196,6 +196,16 @@ button{font-family:inherit}
 }
 .cmdbar input:focus{outline:none;border-color:var(--accent)}
 
+/* ---------- Jarvis reasoning banner (Phase E) ---------- */
+.jarvis-banner{
+  margin:0;padding:.5rem .75rem;font-size:.78rem;line-height:1.4;
+  border-top:1px solid var(--line);flex-shrink:0;display:flex;gap:.5rem;align-items:flex-start;
+}
+.jarvis-banner.needkey{background:var(--warn-bg);color:var(--warn);border-top:1px dashed var(--warn)}
+.jarvis-banner.armed{background:var(--ok-bg);color:var(--ok)}
+.jarvis-banner b{font-weight:600}
+.jarvis-banner .jb-ico{font-size:1rem;line-height:1}
+
 /* ---------- escalation strip ---------- */
 .strip{
   display:flex;align-items:stretch;gap:0;padding:.55rem .7rem;
@@ -687,6 +697,7 @@ pre.cli{
             </div>
           </div>
         </div>
+        <div class="jarvis-banner" id="jarvisBanner" hidden></div>
         <div class="cmdbar">
           <span class="cmd-target" id="cmdTarget">To: Jarvis</span>
           <input id="cmdInput" placeholder="Ask Jarvis — or @mention any agent…">
@@ -1412,6 +1423,36 @@ function selectAgent(id){
   var row = $('eng-'+id); if(row) row.classList.add('selected');
   var t = $('cmdTarget'); if(t) t.textContent = 'To: ' + agentName(id);
   var inp = $('cmdInput'); if(inp) inp.placeholder = 'Ask ' + agentName(id) + ' — or @mention any agent…';
+  updateJarvisBanner();
+}
+
+/* Jarvis reasoning banner — the honest "needs your API key to think" state.
+   Only shown when Jarvis is the target; driven by presence of the key on the
+   server (never the value). */
+var jarvisKey = null; // {present, model, message} once fetched
+function renderJarvisBanner(){
+  var b = $('jarvisBanner'); if(!b) return;
+  if(selectedAgent !== 'jarvis' || !jarvisKey){ b.hidden = true; return; }
+  b.hidden = false;
+  if(jarvisKey.present){
+    b.className = 'jarvis-banner armed';
+    b.innerHTML = '<span class="jb-ico">🧠</span><span><b>Jarvis reasoning is live.</b> '+
+      'Ask in plain words — Jarvis reasons about who to task ('+escapeHtml(jarvisKey.model||'')+'), '+
+      'gathers their live findings through the permission gate, and answers.</span>';
+  } else {
+    b.className = 'jarvis-banner needkey';
+    b.innerHTML = '<span class="jb-ico">🔑</span><span><b>Jarvis needs your Anthropic API key to think.</b> '+
+      'Real delegation reasoning runs on a live Claude call. Without the key Jarvis will say so and '+
+      'run nothing — it will not fake a plan or fall back to a keyword router. '+
+      'Add ANTHROPIC_API_KEY to .env.local to arm it. You can still @mention any engineer or open a triage now.</span>';
+  }
+}
+function updateJarvisBanner(){
+  if(DEMO){ jarvisKey = {present:false, model:'', message:'Demo — connect the live server.'}; renderJarvisBanner(); return; }
+  if(jarvisKey){ renderJarvisBanner(); return; }
+  fetch('/api/jarvis/status').then(function(r){ return r.json(); }).then(function(s){
+    jarvisKey = s; renderJarvisBanner();
+  }).catch(function(){ jarvisKey = {present:false, model:'', message:''}; renderJarvisBanner(); });
 }
 /* Clicking any engineer in the roster picks them as the message target. */
 $('roster').addEventListener('click', function(e){
