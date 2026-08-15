@@ -56,8 +56,13 @@ function setBroadcast(fn) { onRecord = typeof fn === 'function' ? fn : null; }
 function scrub(text) {
   if (text == null) return text;
   let s = String(text);
-  // JSON token fields: "token":"...", "Token":"...", "APIC-cookie":"..."
-  s = s.replace(/("?(?:token|Token|apic[-_]?cookie|password|pwd|pass)"?\s*[:=]\s*")([^"]{4,})(")/gi,
+  // JSON credential fields: "token":"...", "APIC-cookie":"...", and the login
+  // identity ("username":"...") which some device APIs (e.g. Catalyst Center's
+  // Command Runner task metadata) echo back inside an otherwise-real response
+  // body. A username is half a credential — against real kit it names the
+  // service account — so it is redacted too. Host/device names are never
+  // redacted; only the login identity + the secret half.
+  s = s.replace(/("?(?:token|Token|apic[-_]?cookie|password|pwd|pass|username|userName|user[-_]?name)"?\s*[:=]\s*")([^"]{4,})(")/gi,
     (m, a, _v, c) => a + '«redacted»' + c);
   return s;
 }
