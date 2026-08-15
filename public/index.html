@@ -1497,7 +1497,7 @@ function sendAgentMessage(){
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ agent: selectedAgent, command: text })
   }).catch(function(err){
-    renderChat({type:'incoming', agent:'system', agentName:'Mission Control', agentIcon:'⚠️',
+    renderChat({type:'incoming', agent:'system', agentName:'NOC Triage', agentIcon:'⚠️',
       text:'Could not reach the server: ' + err.message, timestamp:new Date().toISOString()});
   });
 }
@@ -1994,7 +1994,7 @@ function connectWS(){
     // Direct-conversation replies (message-any-agent) come back as chat_message.
     if(m.type === 'chat_message' && m.data){ renderChat(m.data); return; }
     if(m.type === 'system_error' && m.data){
-      renderChat({type:'incoming', agent:'system', agentName:'Mission Control', agentIcon:'⚠️',
+      renderChat({type:'incoming', agent:'system', agentName:'NOC Triage', agentIcon:'⚠️',
         text:(m.data.message||'System error'), timestamp:new Date().toISOString()});
     }
   };

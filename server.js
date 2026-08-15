@@ -443,7 +443,7 @@ function handleCommandInner(data) {
     broadcast('chat_message', {
       type: 'incoming',
       agent: 'system',
-      agentName: 'Mission Control',
+      agentName: 'NOC Triage',
       agentIcon: '🎯',
       text:
         `🤷 There is no agent called @${unknown[0]}.\n` +
@@ -902,11 +902,19 @@ function detectJarvisIntent(input) {
       ]
     },
     {
+      // Help is a BARE/EXPLICIT request for the capability card only — never any
+      // sentence that merely contains "help". "help me figure out why x is slow"
+      // is a reasoning request and must fall through to real Jarvis, so "help"
+      // only counts when it stands alone (or as "need/show help"), not when it
+      // leads into a task ("help me…", "can you help…").
       type: 'help',
       patterns: [
-        /\b(help|what can you (do|help)|what are your (commands|capabilities))\b/,
-        /\b(how do (i|you)|what do you (do|know|understand)|your (commands|options|features))\b/,
-        /\b(guide|instructions|capabilities|show me what you can)\b/
+        /^\s*(help|halp|\?+)\s*$/,
+        /^\s*(i\s+)?(need|want|show|show me|get)\s+help\s*[!?.]*$/,
+        /\bwhat can you (do|help with)\b/,
+        /\bwhat are your (commands|capabilities|options|features)\b/,
+        /\b(list|show me) your (commands|capabilities|options|features)\b/,
+        /\bhow do i use (you|jarvis)\b/
       ]
     }
   ];
@@ -938,46 +946,6 @@ function detectJarvisIntent(input) {
   }
 
   return { type: 'general' };
-}
-
-// Strip leading intent words and greetings to extract the clean subject
-function extractJarvisSubject(input) {
-  return input
-    .replace(/^(hey|hi|hello)[,\s]+jarvis[,.\s]*/i, '')
-    .replace(/^jarvis[,.\s]*/i, '')
-    .replace(/^(please|can you|could you|would you)[,\s]*/i, '')
-    .replace(/^(triage|assign|escalate|handle|deal with|look into|check on|investigate|route|delegate)[,\s]*/i, '')
-    .replace(/^(there'?s?|i have|we have|we need)[,\s]*/i, '')
-    .trim() || input.trim();
-}
-
-// When intent is genuinely unclear, Jarvis reasons through it and acts
-// Jarvis's dead end. It used to "Roger that" anything it did not understand and
-// then triage it into a real task assigned to a real agent — which sent live
-// device reads off the back of a request nobody could answer. A request Jarvis
-// cannot place is now said out loud, and no work is created.
-function simulateJarvisGeneralResponse(agentId, command) {
-  const jarvis = agents[agentId];
-
-  setTimeout(() => {
-    broadcast('chat_message', {
-      type: 'incoming', agent: agentId, agentName: jarvis.name, agentIcon: jarvis.icon,
-      text:
-        `🤷 I don't have a way to answer that.\n──────────────────────────────────\n` +
-        `You asked: "${String(command).slice(0, 140)}"\n\n` +
-        `I have created no task and sent nothing to any device. This squad only knows the ` +
-        `network it is wired to — Cisco Catalyst Center, the ACI fabric and the SD-WAN overlay.\n\n` +
-        `Here is what I can actually do:\n` +
-        `• One live picture across every connected source — ask "network overview"\n` +
-        `• Squad standup, roll call and status\n` +
-        `• Triage a piece of network work to an agent — say "triage <the work>"\n` +
-        `• Escalate something to Vikas — say "escalate <the issue>"\n\n` +
-        `Or @mention an agent directly — type "help" for the full list.`,
-      timestamp: new Date().toISOString()
-    });
-    appendToActivityLog(`[${new Date().toISOString()}] [Jarvis] No way to answer — ran nothing: "${String(command).slice(0, 60)}"\n`);
-    updateAgentStatus(agentId, 'idle', 'No way to answer that — ran nothing');
-  }, 300);
 }
 
 // Main Jarvis entry point.
@@ -1098,58 +1066,6 @@ function simulateSquadStatus(agentId) {
   }, 1000);
 }
 
-// Jarvis: Triage/assign a task
-function simulateTriage(agentId, command) {
-  const jarvis = agents[agentId];
-  updateAgentStatus(agentId, 'active', 'Triaging task');
-
-  const taskText = command.replace(/^(triage|assign)\s*/i, '').trim() || 'Incoming task';
-
-  setTimeout(() => {
-    broadcast('chat_message', {
-      type: 'incoming', agent: agentId, agentName: jarvis.name, agentIcon: jarvis.icon,
-      text: `🔍 Triaging: "${taskText}"`,
-      timestamp: new Date().toISOString()
-    });
-  }, 500);
-
-  setTimeout(() => {
-    // Auto-assign based on keywords
-    let assignTo = 'netops';
-    if (taskText.match(/firewall|acl|policy|rule/i)) assignTo = 'firewall-pro';
-    else if (taskText.match(/load.?bal|f5|vip|pool/i)) assignTo = 'loadbal-pro';
-    else if (taskText.match(/route|bgp|ospf|isis|path/i)) assignTo = 'router-expert';
-    else if (taskText.match(/monitor|alert|snmp|syslog/i)) assignTo = 'monitor-eye';
-    else if (taskText.match(/config|backup|compliance|drift/i)) assignTo = 'config-keeper';
-    else if (taskText.match(/incident|outage|down|critical/i)) assignTo = 'incident-handler';
-    else if (taskText.match(/doc|runbook|wiki|document/i)) assignTo = 'doc-writer';
-    else if (taskText.match(/security|threat|vuln|scan/i)) assignTo = 'sentinel';
-
-    const assignedAgent = agents[assignTo];
-    const assignedName = assignedAgent ? assignedAgent.name : assignTo;
-    const assignedIcon = assignedAgent ? assignedAgent.icon : '🤖';
-
-    addTaskToBoard('inbox', { title: taskText, agent: assignedName });
-
-    broadcast('chat_message', {
-      type: 'incoming', agent: agentId, agentName: jarvis.name, agentIcon: jarvis.icon,
-      text: `✅ Task triaged & assigned:\n📋 "${taskText}"\n➡️ Assigned to: ${assignedIcon} **${assignedName}**\n📥 Added to INBOX\n\n@${assignedName} I'm assigning you: ${taskText}`,
-      timestamp: new Date().toISOString()
-    });
-
-    // Route the @mention to the assigned agent
-    handleMention(agentId, assignTo, `I'm assigning you: ${taskText}`);
-
-    // After acknowledgment, trigger the assigned agent to actually execute the task
-    setTimeout(() => {
-      simulateAgentAction(assignTo, taskText);
-    }, 3000);
-
-    appendToActivityLog(`[${new Date().toISOString()}] [Jarvis] Triaged task "${taskText}" → assigned to ${assignedName}\n`);
-    updateAgentStatus(agentId, 'active', `Assigned "${taskText}" to ${assignedName}`);
-  }, 2000);
-}
-
 // Jarvis: Weekly summary report
 function simulateWeeklyReport(agentId) {
   const jarvis = agents[agentId];
@@ -1225,37 +1141,6 @@ ${managedAgents.map(id => {
     updateAgentStatus(agentId, 'active', `Weekly report: ${reportName}`);
     moveTaskOnBoard('Weekly Summary Report', 'inProgress', 'done');
   }, 4000);
-}
-
-// Jarvis: Escalation
-function simulateEscalation(agentId, command) {
-  const jarvis = agents[agentId];
-  const issue = command.replace(/^(escalate|alert|critical)\s*/i, '').trim() || 'Unspecified critical issue';
-
-  updateAgentStatus(agentId, 'active', `ESCALATION: ${issue}`);
-
-  setTimeout(() => {
-    // Write to ALERTS.md
-    const alertEntry = `- [${new Date().toISOString()}] [Jarvis] 🚨 ESCALATION: ${issue}\n`;
-    // Runs inside a timer — every branch must be unable to throw.
-    let updated = null;
-    try {
-      const alertsContent = fs.readFileSync(PATHS.alertsFile, 'utf-8');
-      updated = alertsContent.replace('## CRITICAL\n', `## CRITICAL\n${alertEntry}`);
-    } catch (e) {
-      updated = `# Alerts\n\n## CRITICAL\n${alertEntry}\n## WARNING\n\n## INFO\n`;
-    }
-    safeWrite(PATHS.alertsFile, updated, 'alerts file');
-
-    broadcast('chat_message', {
-      type: 'incoming', agent: agentId, agentName: jarvis.name, agentIcon: jarvis.icon,
-      text: `🚨🚨🚨 **ESCALATION TO VIKAS** 🚨🚨🚨\n\n⚠️ Issue: ${issue}\n📢 Priority: CRITICAL\n🕐 Time: ${new Date().toLocaleTimeString()}\n📝 Logged to ALERTS.md\n\n@Vikas — Immediate attention required!`,
-      timestamp: new Date().toISOString()
-    });
-
-    appendToActivityLog(`[${new Date().toISOString()}] [Jarvis] 🚨 ESCALATION: ${issue} — notified Vikas\n`);
-    updateAgentStatus(agentId, 'active', `ESCALATION: ${issue}`);
-  }, 1000);
 }
 
 // Jarvis help
@@ -2455,7 +2340,7 @@ try {
 server.listen(PORT, HOST, () => {
   console.log('');
   console.log('╔═══════════════════════════════════════════════════════════╗');
-  console.log('║       🚀 MISSION CONTROL DASHBOARD - LIVE SERVER 🚀       ║');
+  console.log('║     🚀 NOC TRIAGE — EVIDENCE SPLIT CONSOLE (LIVE) 🚀     ║');
   console.log('╠═══════════════════════════════════════════════════════════╣');
   console.log(`║  Dashboard: http://${HOST}:${PORT}`);
   console.log(`║  WebSocket: ws://${HOST}:${PORT}`);
