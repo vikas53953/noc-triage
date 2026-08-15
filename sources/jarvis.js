@@ -150,7 +150,7 @@ async function ask(question) {
         role: 'user',
         content: `Squad roster (the only things that can see the network):\n${rosterText()}\n\nOperator request:\n"${q}"`,
       }],
-      maxTokens: 900,
+      maxTokens: 2048,
       effort: 'high',
       format,
     });
