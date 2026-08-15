@@ -4286,6 +4286,17 @@
 
     // ---------- event dispatcher ----------
     function handleTriageEvent(type, p) {
+      // The server broadcasts triage events to EVERY client with no per-triage
+      // subscription, so if a second triage runs concurrently (another browser,
+      // or a second triage started while one is open) its progress/message/
+      // evidence/verdict events would otherwise interleave into the board we are
+      // currently watching. The board DOM is keyed by front/tier, not triageId,
+      // so that would corrupt the display. Guard: once a triage is active, drop
+      // events for any other triageId. `triage_opened` is exempt — it takes over
+      // the console (last-opened wins) and sets the new activeTriageId.
+      if (type !== 'triage_opened' && activeTriageId && p && p.triageId && p.triageId !== activeTriageId) {
+        return;
+      }
       switch (type) {
         case 'triage_opened':   renderTriageOpened(p); break;
         case 'triage_progress': renderTriageProgress(p); break;
@@ -4408,11 +4419,15 @@
       const tier = p.tier || 'L1';
       const tm = TIER_META[tier] || { ico: '🤖', badge: tier };
       const sev = p.severity || triageSeverity;
+      // Prefer the friendly display name the backend sends (agentName); fall
+      // back to the raw agent id, then a generic label. The contract's message
+      // carries both `agent` (id) and `agentName` (display) — show the display.
+      const who = p.agentName || p.agent || 'Engineer';
       const el = document.createElement('div');
       el.className = 'tmsg';
       el.innerHTML =
-        '<div class="tmsg-ico">' + (tm.ico || '🤖') + '</div><div class="tmsg-main">' +
-        '<div class="tmsg-top"><span class="tmsg-who">' + escapeHtml(p.agent || 'Engineer') + '</span>' +
+        '<div class="tmsg-ico">' + escapeHtml(p.agentIcon || tm.ico || '🤖') + '</div><div class="tmsg-main">' +
+        '<div class="tmsg-top"><span class="tmsg-who">' + escapeHtml(who) + '</span>' +
         '<span class="tbadge tier-' + escapeHtml(tier) + '">' + escapeHtml(tm.badge || tier) + '</span>' +
         '<span class="tbadge sev-' + escapeHtml(sev) + '">' + escapeHtml(sev) + '</span>' +
         '<span class="tmsg-time">' + escapeHtml(fmtTs(p.ts)) + '</span></div>' +
