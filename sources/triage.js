@@ -572,7 +572,9 @@ function getTriage(id) {
     staffed: t.staffed,
     blindSpots: t.blindSpots,
     fronts: t.fronts,
-    progress: t.progress,
+    // Escalation strip as an array in tier order — the UI's restore path reads
+    // progress as [{tier, status}], not a keyed object.
+    progress: ['L1', 'L2', 'L3', 'L4'].map((tier) => ({ tier, status: t.progress[tier] })),
     evidence: t.fronts.map((f) => t.evidence[f]).filter(Boolean),
     messages: t.messages,
     verdict: t.verdict,
