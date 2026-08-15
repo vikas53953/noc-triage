@@ -696,6 +696,71 @@ const DEBATE_BUILDERS = {
   },
 };
 
+// ── Jarvis delegation gather (Phase E) ──────────────────────────────────────
+// Jarvis (real Claude) hands an agent a piece of the question; this runs that
+// agent's REAL live read and returns the findings for Jarvis to compose from.
+//
+// This is the honesty-critical seam: the read goes through the SAME path as any
+// other live read — the permission gate (auto/ask/deny) and the CLI/session log
+// — so a denied read runs nothing, a not-connected agent says so, and a dead
+// source is reported as unreachable. Nothing here is fabricated. Jarvis's
+// synthesis is instructed to use ONLY what these objects carry.
+//
+// Returns { agentId, name, connected, stance, text }:
+//   stance ∈ 'evidence' | 'not-connected' | 'denied' | 'unreachable'
+async function gatherForJarvis(agentId, question) {
+  const agent = (ctx && ctx.agents && ctx.agents[agentId]) || { name: agentId };
+  const name = agent.name || agentId;
+
+  // Not-connected agents never invent a report — Jarvis is told so plainly.
+  if (NO_BACKEND[agentId]) {
+    const need = NO_BACKEND[agentId];
+    return {
+      agentId, name, connected: false, stance: 'not-connected',
+      text: `Not connected — no ${need} wired up. Nothing real to report.`,
+    };
+  }
+
+  const builder = DEBATE_BUILDERS[agentId];
+  if (!builder) {
+    return {
+      agentId, name, connected: false, stance: 'not-connected',
+      text: 'No live data source mapped for this agent — nothing real to report.',
+    };
+  }
+
+  // Every gathered read passes the permission gate and is tagged for the CLI
+  // session log, exactly like a direct question or a triage read.
+  const meta = {
+    agentId, agentName: name,
+    command: `Jarvis delegation: ${String(question || '').slice(0, 80)}`,
+    target: (typeof builder.source === 'function' ? builder.source() : 'live source'),
+    reason: 'Jarvis (Principal Engineer) delegated this read',
+  };
+
+  try {
+    const g = await approvals.gate(meta, () =>
+      session.runWithContext(
+        { agentId, agentName: name, label: `Jarvis delegation` },
+        () => builder.build(question),
+      ));
+
+    if (g.denied) {
+      return {
+        agentId, name, connected: true, stance: 'denied',
+        text: 'Read denied by the operator — ran nothing, and I will not invent a result.',
+      };
+    }
+    return { agentId, name, connected: true, stance: 'evidence', text: String(g.result || '').trim() };
+  } catch (err) {
+    const src = typeof builder.source === 'function' ? builder.source() : 'the source';
+    return {
+      agentId, name, connected: true, stance: 'unreachable',
+      text: `Source unreachable — ${src} did not answer: ${err.message}. No readings, so nothing to report.`,
+    };
+  }
+}
+
 // Called once per participating agent when a debate runs.
 async function debateContribution(agentId, topic) {
   if (NO_BACKEND[agentId]) return noDataContribution(agentId, topic);
@@ -882,5 +947,5 @@ function handle(agentId, command) {
 module.exports = {
   init, handle, refuseWrite, notConnected, hasLiveBackend, NO_BACKEND, readCommandFrom,
   canAnswer, cannotAnswer, CAPABILITIES,
-  debateContribution,
+  debateContribution, gatherForJarvis,
 };

@@ -12,6 +12,7 @@ const http = require('http');
 const { AsyncLocalStorage } = require('async_hooks');
 
 const live = require('./sources/live-agents');
+const jarvis = require('./sources/jarvis');
 const triage = require('./sources/triage');
 const catalyst = require('./sources/catalyst-center');
 const aci = require('./sources/aci');
@@ -297,6 +298,40 @@ live.init({
     safeWrite(full, content, `report ${filename}`);
     return filename;
   },
+});
+
+// Hand the REAL agentic Jarvis (Phase E) its plumbing. Jarvis reasons with a
+// real Claude call about WHO to delegate to, then gathers each agent's live read
+// through the SAME gate + guardrail + session log as any other read. The only
+// LLM steps are the plan and the synthesis; everything around them is real and
+// testable without a key. With no key, Jarvis declines to reason (honest state)
+// — it never falls back to a rule-router.
+function jarvisSay(agentId, text) {
+  const a = agents[agentId] || {};
+  broadcast('chat_message', {
+    type: 'incoming',
+    agent: agentId,
+    agentName: a.name || agentId,
+    agentIcon: a.icon || '🤖',
+    text,
+    timestamp: new Date().toISOString(),
+  });
+}
+jarvis.init({
+  say: jarvisSay,
+  status: updateAgentStatus,
+  log: (line) => appendToActivityLog(`[${new Date().toISOString()}] ${line}\n`),
+  nameOf: (id) => (agents[id]?.name || id),
+  // Delegation gather goes through the real gate + guardrail + session log.
+  gather: (agentId, question) => live.gatherForJarvis(agentId, question),
+  // The roster the planner reasons over: who exists + what each can actually see.
+  roster: () => (agents.jarvis.manages || []).map((id) => ({
+    id,
+    name: agents[id]?.name || id,
+    connected: !live.NO_BACKEND[id],
+    sees: (live.CAPABILITIES[id] && live.CAPABILITIES[id].can) || [],
+    note: live.NO_BACKEND[id] ? `not connected — ${live.NO_BACKEND[id]}` : '',
+  })),
 });
 
 // Hand the triage engine the same broadcast/status plumbing. It reuses the live
@@ -945,30 +980,43 @@ function simulateJarvisGeneralResponse(agentId, command) {
   }, 300);
 }
 
-// Main Jarvis entry point — intent-driven, no fixed commands
+// Main Jarvis entry point.
+//
+// Phase E: Jarvis is a REAL agentic Principal Engineer. Open-ended, plain-words
+// questions are reasoned about with a real Claude call (sources/jarvis.js) —
+// Jarvis decides who to delegate to, gathers their live findings, and answers.
+// With no API key it declines honestly; it NEVER falls back to a keyword router
+// pretending to reason.
+//
+// Deterministic, PRESERVED squad operations (standup, roll call, weekly report,
+// help, ping) are unambiguous app actions the operator typed — not Jarvis
+// reasoning about the network — so they stay rule-handled and work with or
+// without a key. EVERYTHING else the operator says in plain words — including
+// "who should look at this?", incident descriptions, and any network question —
+// is REAL agentic reasoning. It is never keyword-routed to a canned triage /
+// escalate / overview and passed off as thinking: with a key Jarvis plans and
+// delegates for real; with no key it shows the honest "needs your API key" state.
+//
+// (The manual "Open Triage" flow from Phase A is a separate surface and is
+// untouched — it still works regardless of the key.)
 function simulateJarvisAction(agentId, command) {
-  // A question about the NETWORK (not about the squad) is answered from the
-  // live sandboxes, never from the squad roster.
-  if (/\b(network|device|devices|inventory|fabric|switch(es)?|router|wan|sd-?wan|aci|health|reachab|overview)\b/i.test(command)) {
-    appendToActivityLog(`[${new Date().toISOString()}] [Jarvis] Intent: live_network — "${command.slice(0, 60)}"\n`);
-    return live.handle(agentId, command);
-  }
-
   const intent = detectJarvisIntent(command);
-  const subject = extractJarvisSubject(command);
 
   appendToActivityLog(`[${new Date().toISOString()}] [Jarvis] Intent: ${intent.type}${intent.inferred ? ' (inferred)' : ''} — "${command.slice(0, 60)}"\n`);
 
-  switch (intent.type) {
-    case 'standup':        return simulateStandup(agentId);
-    case 'squad_status':   return simulateSquadStatus(agentId);
-    case 'weekly_report':  return simulateWeeklyReport(agentId);
-    case 'escalate':       return simulateEscalation(agentId, subject);
-    case 'triage':         return simulateTriage(agentId, subject);
-    case 'ping':           return simulatePing(agentId);
-    case 'help':           return showJarvisHelp(agentId);
-    default:               return simulateJarvisGeneralResponse(agentId, command);
+  // Only unambiguous, explicitly-typed squad operations stay deterministic.
+  if (!intent.inferred) {
+    switch (intent.type) {
+      case 'standup':        return simulateStandup(agentId);
+      case 'squad_status':   return simulateSquadStatus(agentId);
+      case 'weekly_report':  return simulateWeeklyReport(agentId);
+      case 'ping':           return simulatePing(agentId);
+      case 'help':           return showJarvisHelp(agentId);
+    }
   }
+
+  // Open-ended reasoning (triage/escalate/general/inferred) → REAL agentic Jarvis.
+  return jarvis.ask(command);
 }
 
 // Jarvis: Daily standup — collect status from all agents
@@ -1735,6 +1783,13 @@ function resolveDebate(agentId) {
 }
 
 // API Endpoints
+
+// Jarvis reasoning status — presence of the Anthropic key ONLY (never the value),
+// so the UI can show the honest "needs your API key to think" banner.
+app.get('/api/jarvis/status', (req, res) => {
+  res.json(jarvis.keyStatus());
+});
+
 app.get('/api/agents', (req, res) => {
   // Refresh status before responding
   Object.keys(agents).forEach(loadAgentStatus);
