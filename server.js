@@ -12,6 +12,7 @@ const http = require('http');
 const { AsyncLocalStorage } = require('async_hooks');
 
 const live = require('./sources/live-agents');
+const triage = require('./sources/triage');
 const catalyst = require('./sources/catalyst-center');
 const aci = require('./sources/aci');
 const sdwan = require('./sources/sdwan');
@@ -284,6 +285,15 @@ live.init({
     safeWrite(full, content, `report ${filename}`);
     return filename;
   },
+});
+
+// Hand the triage engine the same broadcast/status plumbing. It reuses the live
+// adapters directly for its reads; this seam only carries dashboard events.
+triage.init({
+  agents,
+  broadcast,
+  updateAgentStatus,
+  appendToActivityLog,
 });
 
 // WebSocket connection handler
@@ -1916,6 +1926,31 @@ app.get('/api/debates/:id', (req, res) => {
   const thread = debateThreads.find(t => t.id === parseInt(req.params.id));
   if (!thread) return res.status(404).json({ error: 'Debate not found' });
   res.json(thread);
+});
+
+// ── Triage bridge endpoints ─────────────────────────────────────────────────
+// POST starts a triage; the bridge then streams its events over the WebSocket.
+// A description that names no real network subject is refused here (422) and no
+// bridge is started — the honesty rule, enforced at the entry point.
+app.post('/api/triage', (req, res) => {
+  const { severity, description } = req.body || {};
+  const result = triage.startTriage(severity, description);
+  if (result.refused) {
+    return res.status(422).json({ error: result.reason });
+  }
+  res.json({ triageId: result.triageId });
+});
+
+// List of recent triages (id, severity, title, status, openedAt).
+app.get('/api/triage', (req, res) => {
+  res.json(triage.listTriages());
+});
+
+// Full current triage object, for reconnect/refresh.
+app.get('/api/triage/:id', (req, res) => {
+  const t = triage.getTriage(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Triage not found' });
+  res.json(t);
 });
 
 // Mention counts endpoint

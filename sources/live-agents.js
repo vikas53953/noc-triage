@@ -736,7 +736,12 @@ const CAPABILITIES = {
     ],
   },
   'incident-handler': {
-    subjects: /\b(incident|incidents|fault|faults|issue|issues|outage|rca|root[\s-]?cause|impact|severity|critical|major|problem|problems|network|fabric|aci|catalyst|device|devices)\b/i,
+    // "problem"/"problems" were subjects here — but they are generic English,
+    // not something a source can see. Paired with the verb "triage" they let
+    // "triage my landlord problem" through as a real live read (dictionary
+    // overlap). A real network noun (incident, fault, device, fabric…) must be
+    // named, so a nonsense triage is refused honestly instead of running a read.
+    subjects: /\b(incident|incidents|fault|faults|issue|issues|outage|rca|root[\s-]?cause|impact|severity|critical|major|network|fabric|aci|catalyst|device|devices)\b/i,
     verbs: ['triage', 'diagnose', 'troubleshoot', 'investigate'],
     can: [
       'read open issues from Catalyst Center',
