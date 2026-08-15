@@ -1953,6 +1953,19 @@ app.get('/api/triage/:id', (req, res) => {
   res.json(t);
 });
 
+// Operator posts a message into an OPEN triage bridge (context / a nudge). It is
+// streamed on the bridge, recorded in the triage record, and marked as coming
+// from the operator — it never touches the evidence board. Write-rate-limited.
+app.post('/api/triage/:id/message', (req, res) => {
+  const { text } = req.body || {};
+  const result = triage.postOperatorMessage(req.params.id, text);
+  if (result.error) {
+    const code = result.error === 'not_found' ? 404 : 422;
+    return res.status(code).json({ error: result.reason || 'Could not post that.' });
+  }
+  res.json({ ok: true, message: result.message });
+});
+
 // Mention counts endpoint
 app.get('/api/mentions', (req, res) => {
   res.json(mentionCounts);

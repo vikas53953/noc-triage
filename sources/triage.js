@@ -211,6 +211,26 @@ function progress(triage, tier, status) {
   return ev;
 }
 
+// ── Per-triage bridge membership ─────────────────────────────────────────────
+// The agents a triage puts on the bridge ARE its staffed roster — nothing else
+// is ever flipped active during its run. Membership is therefore per-triage, so
+// one triage closing can only ever idle its OWN agents, never those another
+// still-open triage is using. This is the fix for "stuck on bridge": the old
+// finally idled the whole global roster on any close.
+function bridgeAgentsOf(triage) {
+  return (triage.staffed || []).map((s) => s.agent);
+}
+
+// Is this agent still on the bridge of some OTHER triage that has not closed?
+// If so we must not idle it just because THIS triage finished.
+function agentHeldByOpenBridge(agentId, exceptTriageId) {
+  for (const t of triages.values()) {
+    if (t.id === exceptTriageId) continue;
+    if (t.status !== 'closed' && bridgeAgentsOf(t).includes(agentId)) return true;
+  }
+  return false;
+}
+
 // ── The bridge ──────────────────────────────────────────────────────────────
 async function runBridge(triage) {
   const staffedTiers = tiersFor(triage.severity);
@@ -233,9 +253,12 @@ async function runBridge(triage) {
     triage.status = 'closed';
     emit('triage_closed', triage.id, {});
   } finally {
-    // Everyone back to idle no matter how it ended.
-    [...ROSTER.L1, ...ROSTER.L2, ...ROSTER.L3, ...ROSTER.L4].forEach((id) =>
-      setStatus(id, 'idle', 'Bridge concluded'));
+    // Idle only the agents on THIS triage's bridge, and only when no other
+    // still-open triage is holding them. Precise, per-triage — a concurrent
+    // triage's agents are never touched, so nobody is left "stuck on bridge".
+    bridgeAgentsOf(triage).forEach((id) => {
+      if (!agentHeldByOpenBridge(id, triage.id)) setStatus(id, 'idle', 'Bridge concluded');
+    });
   }
 }
 
@@ -581,6 +604,40 @@ function getTriage(id) {
   };
 }
 
+// ── Operator posts into an open bridge ───────────────────────────────────────
+// During a live triage the operator (the person watching) can post context onto
+// the bridge — "ignore sw3, it's in maintenance", or a nudge to an engineer.
+// The post is stamped as coming from the OPERATOR (never an agent), streamed on
+// the bridge like any other message, and recorded in the triage so it shows up
+// again on reconnect via getTriage. It touches ONLY the message stream — no
+// evidence card, no agent status — so it cannot corrupt the evidence board.
+// (Agents do not yet re-plan around it — that is Phase E.)
+function postOperatorMessage(triageId, text) {
+  const t = triages.get(triageId);
+  if (!t) return { error: 'not_found', reason: 'No such triage.' };
+  if (t.status === 'closed') {
+    return { error: 'closed', reason: 'That triage has already closed — nothing more can be posted to it.' };
+  }
+  const clean = String(text || '').trim();
+  if (!clean) return { error: 'empty', reason: 'An operator note needs some text.' };
+
+  // Round follows where the bridge currently is, purely for display ordering.
+  const round = t.progress && t.progress.L4 === 'done' ? 2 : 1;
+  const msg = emit('triage_message', t.id, {
+    agent: 'operator',
+    agentName: 'Operator (You)',
+    agentIcon: '🧑‍💻',
+    tier: 'OPS',
+    severity: t.severity,
+    round,
+    text: clean,
+    operator: true,      // the UI marks this clearly as the operator, not an engineer
+  });
+  t.messages.push(msg);
+  log(`[Triage ${t.id}] operator note on the bridge — "${clean.slice(0, 80)}"`);
+  return { ok: true, message: msg };
+}
+
 // Recent list (newest first).
 function listTriages() {
   return [...triages.values()]
@@ -599,6 +656,7 @@ module.exports = {
   startTriage,
   getTriage,
   listTriages,
+  postOperatorMessage,
   isNetworkSubject,
   FRONTS,
   BLIND_SPOTS,

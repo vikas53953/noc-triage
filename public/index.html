@@ -429,6 +429,32 @@ pre.cli{
 }
 .stage.maxed .maxed-hint{display:inline}
 
+/* ---------- interactive: roster select, direct chat, operator post ---------- */
+.eng{cursor:pointer}
+.eng.selected{border-color:var(--accent);background:rgba(59,130,246,.12);box-shadow:inset 3px 0 0 var(--accent)}
+.eng.dark-src{cursor:pointer;opacity:.55}
+.cmd-target{
+  font-size:.66rem;font-weight:800;letter-spacing:.04em;color:var(--accent);
+  background:rgba(59,130,246,.12);border:1px solid rgba(59,130,246,.4);
+  border-radius:7px;padding:.4rem .55rem;white-space:nowrap;display:flex;align-items:center;
+  flex-shrink:0;max-width:150px;overflow:hidden;text-overflow:ellipsis
+}
+.chat-stream{
+  margin-top:1rem;border:1px solid var(--line);border-radius:12px;background:var(--panel);
+  overflow:hidden
+}
+.chat-stream .cs-head{
+  padding:.5rem .75rem;border-bottom:1px solid var(--line-soft);
+  font-size:.66rem;font-weight:800;letter-spacing:.11em;text-transform:uppercase;color:var(--ink3)
+}
+.chat-stream .cs-body{padding:.2rem 0}
+.chat-empty{font-size:.74rem;color:var(--ink3);font-style:italic;padding:.9rem .8rem;line-height:1.5}
+.msg.msg-you .msg-ico{background:linear-gradient(135deg,#3b82f6,#8b5cf6);border-color:transparent;color:#fff}
+.msg.msg-operator .msg-ico{border-color:var(--accent);background:rgba(59,130,246,.14)}
+.badge.ops{background:rgba(59,130,246,.16);color:var(--accent);border-color:rgba(59,130,246,.5)}
+.stream-foot input:not([disabled]){border-color:var(--accent)}
+.stream-foot .btn{padding:.45rem .8rem;font-size:.78rem}
+
 ::-webkit-scrollbar{width:7px;height:7px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
@@ -508,10 +534,19 @@ pre.cli{
             <button class="quick-fill" data-sev="P2" data-desc="Campus reachability sweep — any unreachable Catalyst devices or health drops?"><b>Campus sweep</b><span>Catalyst reachability + health</span></button>
             <button class="quick-fill" data-sev="P3" data-desc="WAN / SD-WAN overlay check — any active vManage alarms on the edge?"><b>WAN check</b><span>SD-WAN alarms</span></button>
           </div>
+          <div class="chat-stream">
+            <div class="cs-head">💬 Direct messages · ask any agent</div>
+            <div class="cs-body" id="chatStream">
+              <p class="chat-empty">Pick an engineer on the left (or @mention one) and ask a question — you get a real
+                answer from their live source, or an honest "I can't answer that / not connected". No triage needed.</p>
+            </div>
+          </div>
         </div>
         <div class="cmdbar">
-          <input placeholder="Message the squad or type / for commands…" disabled>
-          <button class="btn btn-primary" id="openTriageBtn2">Open Triage</button>
+          <span class="cmd-target" id="cmdTarget">To: Jarvis</span>
+          <input id="cmdInput" placeholder="Ask Jarvis — or @mention any agent…">
+          <button class="btn btn-primary" id="sendBtn">Send</button>
+          <button class="btn btn-ghost" id="openTriageBtn2">Triage</button>
         </div>
       </div>
 
@@ -528,7 +563,8 @@ pre.cli{
             </div>
             <div class="stream" id="stream"></div>
             <div class="stream-foot">
-              <input placeholder="The bridge is read-only — engineers post live findings." disabled>
+              <input id="bridgeInput" placeholder="Post context to the bridge — e.g. &quot;ignore sw3, it's in maintenance&quot;…">
+              <button class="btn btn-primary" id="bridgePostBtn">Post</button>
             </div>
           </div>
 
@@ -835,6 +871,16 @@ function openConsole(){
   $('console').classList.add('on');
   $('closeTriageBtn').style.display = 'flex';
 }
+/* Operator can post into the bridge only while the triage is live. */
+function setBridgeInput(on){
+  var inp = $('bridgeInput'), btn = $('bridgePostBtn');
+  if(!inp) return;
+  inp.disabled = !on;
+  if(btn) btn.disabled = !on;
+  inp.placeholder = on
+    ? 'Post context to the bridge — e.g. "ignore sw3, it\'s in maintenance"…'
+    : 'Bridge closed — the triage has concluded.';
+}
 function resetConsole(){
   $('stream').innerHTML = '';
   $('board').innerHTML = '';
@@ -859,6 +905,7 @@ $('closeTriageBtn').onclick = function(){
   $('idleWrap').style.display = 'flex';
   $('stageTitle').textContent = '💬 Squad chat & commands';
   $('closeTriageBtn').style.display = 'none';
+  setBridgeInput(false);
   currentTriageId = null;
 };
 
@@ -933,6 +980,9 @@ function addReporterMsg(desc, severity, ts){
 }
 function tierClass(tier){ return ['L1','L2','L3','L4'].indexOf(tier) >= 0 ? 'tier-'+tier : 'tier-L1'; }
 function renderMsg(m){
+  // An operator post is the person watching, not an engineer — mark it clearly,
+  // and never treat it as an agent going "on bridge".
+  if(m.operator){ renderOperatorMsg(m); return; }
   if(m.agent) markOnBridge(m.agent);
   var el = document.createElement('div');
   el.className = 'msg';
@@ -949,6 +999,18 @@ function renderMsg(m){
   $('stream').appendChild(el); scrollStream();
   var posted = $('stream').querySelectorAll('.msg').length;
   $('msgCount').textContent = posted + ' posts';
+}
+function renderOperatorMsg(m){
+  var el = document.createElement('div');
+  el.className = 'msg msg-operator';
+  el.innerHTML =
+    '<div class="msg-ico">🧑‍💻</div><div class="msg-main">'+
+    '<div class="msg-top"><span class="msg-who">'+escapeHtml(m.agentName||'Operator (You)')+'</span>'+
+    '<span class="badge ops">Operator</span>'+
+    '<span class="msg-time">'+escapeHtml(tsClock(m.ts))+'</span></div>'+
+    '<div class="msg-text">'+escapeHtml(m.text)+'</div></div>';
+  $('stream').appendChild(el); scrollStream();
+  $('msgCount').textContent = $('stream').querySelectorAll('.msg').length + ' posts';
 }
 function renderVerdictCard(v){
   markOnBridge('jarvis');
@@ -1009,6 +1071,7 @@ function handleOpened(d){
   // Mark staffed engineers as on-bridge; blind ones stay off.
   (d.staffed||[]).forEach(function(s){ markOnBridge(s.agent); });
   addReporterMsg(d.description, currentSeverity, d.openedAt);
+  setBridgeInput(true);
   pushActivity('NOC Triage', 'opened ' + currentSeverity + ' triage — "' + (d.title||'') + '"', tsClock(d.openedAt));
 }
 function handleProgress(d){
@@ -1031,7 +1094,12 @@ function handleClosed(d){
   hideTyping();
   $('stageTitle').textContent = '✅ Triage · ' + currentSeverity + ' · verdict in';
   $('boardClock').textContent = 'settled';
-  pushActivity('NOC Triage', 'triage concluded', nowClock());
+  // The bridge is over: every engineer returns to idle in the roster the moment
+  // the triage closes (no-one is left "on bridge"), and the operator post box is
+  // shut. The backend idles the real agent status in parallel (per-triage).
+  clearBridge();
+  setBridgeInput(false);
+  pushActivity('NOC Triage', 'triage concluded — engineers back to idle', nowClock());
 }
 
 function dispatchTriageEvent(type, d){
@@ -1047,6 +1115,100 @@ function dispatchTriageEvent(type, d){
     case 'triage_closed':   handleClosed(d);   break;
   }
 }
+
+/* ============================================================
+   INTERACTIVE — message any agent directly (normal conversation),
+   and post operator context into an open triage bridge.
+   ============================================================ */
+
+/* id → display name / icon, from the roster we already built. */
+var AGENT_BY_ID = {};
+ROSTER.forEach(function(g){ g.engs.forEach(function(e){ AGENT_BY_ID[e.id] = e; }); });
+function agentName(id){ return (AGENT_BY_ID[id] && AGENT_BY_ID[id].name) || id; }
+function agentIco(id){ return (AGENT_BY_ID[id] && AGENT_BY_ID[id].ico) || '🤖'; }
+
+/* Which engineer a plain message is addressed to (default: the Principal Eng). */
+var selectedAgent = 'jarvis';
+function selectAgent(id){
+  if(!AGENT_BY_ID[id]) return;
+  selectedAgent = id;
+  [].forEach.call(document.querySelectorAll('.eng'), function(e){ e.classList.remove('selected'); });
+  var row = $('eng-'+id); if(row) row.classList.add('selected');
+  var t = $('cmdTarget'); if(t) t.textContent = 'To: ' + agentName(id);
+  var inp = $('cmdInput'); if(inp) inp.placeholder = 'Ask ' + agentName(id) + ' — or @mention any agent…';
+}
+/* Clicking any engineer in the roster picks them as the message target. */
+$('roster').addEventListener('click', function(e){
+  var row = e.target.closest('.eng'); if(!row) return;
+  var id = row.id.replace(/^eng-/, ''); if(id) selectAgent(id);
+});
+selectAgent('jarvis');
+
+/* Render one direct-conversation message (outside a triage). */
+function renderChat(d){
+  var host = $('chatStream'); if(!host) return;
+  var empty = host.querySelector('.chat-empty'); if(empty) empty.remove();
+  var outgoing = d.type === 'outgoing';
+  var id = d.agent;
+  var who = outgoing ? 'You' : (d.agentName || agentName(id) || 'Agent');
+  var ico = outgoing ? '🧑‍💻' : (d.agentIcon || agentIco(id));
+  var target = outgoing ? (' → ' + agentName(id)) : '';
+  var el = document.createElement('div');
+  el.className = 'msg' + (outgoing ? ' msg-you' : '');
+  el.innerHTML =
+    '<div class="msg-ico">'+escapeHtml(ico)+'</div><div class="msg-main">'+
+    '<div class="msg-top"><span class="msg-who">'+escapeHtml(who + target)+'</span>'+
+    '<span class="msg-time">'+escapeHtml(tsClock(d.timestamp))+'</span></div>'+
+    '<div class="msg-text">'+escapeHtml(d.text)+'</div></div>';
+  host.appendChild(el);
+  host.scrollTop = host.scrollHeight;
+}
+
+/* Send a direct message to the selected agent (or an @mentioned one). */
+function sendAgentMessage(){
+  var inp = $('cmdInput'); if(!inp) return;
+  var text = inp.value.trim(); if(!text) return;
+  if(DEMO){
+    renderChat({type:'outgoing', agent:selectedAgent, text:text, timestamp:new Date().toISOString()});
+    renderChat({type:'incoming', agent:selectedAgent, text:'(Demo mode — connect the live server to get a real answer.)', timestamp:new Date().toISOString()});
+    inp.value=''; return;
+  }
+  inp.value='';
+  fetch('/api/command', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ agent: selectedAgent, command: text })
+  }).catch(function(err){
+    renderChat({type:'incoming', agent:'system', agentName:'Mission Control', agentIcon:'⚠️',
+      text:'Could not reach the server: ' + err.message, timestamp:new Date().toISOString()});
+  });
+}
+$('sendBtn').onclick = sendAgentMessage;
+$('cmdInput').addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); sendAgentMessage(); } });
+
+/* Post operator context into the OPEN triage bridge. */
+function postBridgeMessage(){
+  var inp = $('bridgeInput'); if(!inp || inp.disabled) return;
+  var text = inp.value.trim(); if(!text || !currentTriageId) return;
+  if(DEMO){
+    renderMsg({operator:true, agentName:'Operator (You)', text:text, ts:new Date().toISOString()});
+    inp.value=''; return;
+  }
+  var btn = $('bridgePostBtn'); if(btn) btn.disabled = true;
+  inp.value='';
+  fetch('/api/triage/' + encodeURIComponent(currentTriageId) + '/message', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ text: text })
+  }).then(function(r){
+    if(!r.ok){ return r.json().then(function(b){
+      pushActivity('Bridge', 'operator post refused — ' + ((b&&b.error)||('HTTP '+r.status)), nowClock());
+    }); }
+    // Success repaints via the triage_message WS event.
+  }).catch(function(err){
+    pushActivity('Bridge', 'operator post failed — ' + err.message, nowClock());
+  }).finally(function(){ if(btn) btn.disabled = false; });
+}
+$('bridgePostBtn').onclick = postBridgeMessage;
+$('bridgeInput').addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); postBridgeMessage(); } });
 
 /* ---------- WebSocket ---------- */
 var ws = null, wsRetry = 0;
@@ -1067,7 +1229,13 @@ function connectWS(){
   ws.onmessage = function(ev){
     var m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
     if(!m || !m.type) return;
-    if(m.type.indexOf('triage_') === 0) dispatchTriageEvent(m.type, m.data);
+    if(m.type.indexOf('triage_') === 0){ dispatchTriageEvent(m.type, m.data); return; }
+    // Direct-conversation replies (message-any-agent) come back as chat_message.
+    if(m.type === 'chat_message' && m.data){ renderChat(m.data); return; }
+    if(m.type === 'system_error' && m.data){
+      renderChat({type:'incoming', agent:'system', agentName:'Mission Control', agentIcon:'⚠️',
+        text:(m.data.message||'System error'), timestamp:new Date().toISOString()});
+    }
   };
 }
 function scheduleReconnect(){
@@ -1109,6 +1277,7 @@ function repaintFromRecord(t){
   (t.evidence||[]).forEach(function(e){ applyEvidence(e); });
   (t.progress||[]).forEach(function(p){ setStep(p.tier, p.status); });
   if(t.verdict) renderVerdictCard(t.verdict);
+  setBridgeInput(live);
   pushActivity('NOC Triage', 'restored ' + currentSeverity + ' triage — "' + (t.title||'') + '"', tsClock(t.openedAt));
 }
 
