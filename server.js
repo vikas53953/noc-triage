@@ -16,6 +16,7 @@ const triage = require('./sources/triage');
 const catalyst = require('./sources/catalyst-center');
 const aci = require('./sources/aci');
 const sdwan = require('./sources/sdwan');
+const session = require('./sources/session-log');
 const { checkIntent } = require('./sources/guardrails');
 
 // One module owns where the workspace is and how any caller-supplied path is
@@ -239,6 +240,11 @@ function broadcast(type, data) {
     }
   });
 }
+
+// Live-stream every recorded wire call (real command → raw output) to the UI's
+// CLI/session view. Rate-limited endpoints below still serve the same records
+// for reconnect/restore.
+session.setBroadcast((rec) => broadcast('session_record', rec));
 
 // Surface a problem on the dashboard instead of dying quietly (or loudly).
 // The detail stays in the server log; the browser gets plain words.
@@ -1997,6 +2003,60 @@ app.get('/api/sources', async (req, res) => {
     notConnected: live.NO_BACKEND,
     readOnly: true,
   });
+});
+
+// ── CLI / session view (Phase B) ────────────────────────────────────────────
+// The real recorded wire calls: which source was logged into, the exact request
+// issued, the RAW response that came back, and a plain-words interpretation. An
+// engineer reads these to make sense of the logs the way an SME does. Rate-
+// limited via the /api/ read budget. Everything here is REAL — never fabricated.
+app.get('/api/session', (req, res) => {
+  const { triageId, source, agent, limit } = req.query || {};
+  const lim = Math.min(Number(limit) || 300, 600);
+  res.json({ records: session.query({ triageId, source, agentId: agent, limit: lim }), readOnly: true });
+});
+
+app.get('/api/session/:agent', (req, res) => {
+  const lim = Math.min(Number((req.query || {}).limit) || 300, 600);
+  res.json({ agent: req.params.agent, records: session.query({ agentId: req.params.agent, limit: lim }), readOnly: true });
+});
+
+// ── Retry a down source on demand (Phase B) ─────────────────────────────────
+// Re-attempt the live connection + a representative read from one source right
+// now, and return the REAL fresh result. Success → live data; still down → the
+// real new error string. Never a faked success. Write-rate-limited.
+const SOURCE_RETRY = {
+  'catalyst-center': { mod: catalyst, agent: 'netops', read: async (m) => ({ devices: (await m.getDevices()).length }) },
+  'aci':             { mod: aci,      agent: 'router-expert', read: async (m) => ({ nodes: (await m.getFabricNodes()).length }) },
+  'sdwan':           { mod: sdwan,    agent: 'router-expert', read: async (m) => ({ devices: (await m.getDevices()).length }) },
+};
+app.post('/api/sources/:id/retry', async (req, res) => {
+  const spec = SOURCE_RETRY[req.params.id];
+  if (!spec) return res.status(404).json({ error: 'Unknown source.' });
+  const { mod, agent } = spec;
+  if (!mod.configured()) {
+    return res.json({ id: req.params.id, host: mod.host, status: 'not connected', detail: 'credentials not set — nothing to retry against' });
+  }
+  try {
+    const out = await session.runWithContext(
+      { agentId: agent, agentName: (agents[agent] || {}).name || agent, label: `Manual retry — ${mod.label}` },
+      async () => { await mod.probe(); return spec.read(mod); });
+    return res.json({ id: req.params.id, host: mod.host, status: 'live', detail: out });
+  } catch (e) {
+    // The REAL fresh error — the source is genuinely still down.
+    return res.json({ id: req.params.id, host: mod.host, status: 'unreachable', detail: e.message });
+  }
+});
+
+// Retry one front INSIDE an open triage — recolours the evidence card from a
+// real fresh read (or a real fresh error). Write-rate-limited.
+app.post('/api/triage/:id/retry/:front', async (req, res) => {
+  const result = await triage.retryFront(req.params.id, req.params.front);
+  if (result.error) {
+    const code = result.error === 'not_found' ? 404 : 422;
+    return res.status(code).json({ error: result.reason || 'Could not retry that front.' });
+  }
+  res.json(result);
 });
 
 app.post('/api/command', (req, res) => {
