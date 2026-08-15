@@ -18,6 +18,7 @@ const aci = require('./sources/aci');
 const sdwan = require('./sources/sdwan');
 const session = require('./sources/session-log');
 const approvals = require('./sources/approvals');
+const artifacts = require('./sources/artifacts');
 const { checkIntent } = require('./sources/guardrails');
 
 // One module owns where the workspace is and how any caller-supplied path is
@@ -1975,6 +1976,42 @@ app.post('/api/triage/:id/message', (req, res) => {
     return res.status(code).json({ error: result.reason || 'Could not post that.' });
   }
   res.json({ ok: true, message: result.message });
+});
+
+// ── Triage records / history + auto-written docs (Phase D) ──────────────────
+// After a triage closes, its complete REAL record (timeline, every command + raw
+// output, evidence transition history, operator posts, verdict) plus two derived
+// documents (SLT + engineer) are persisted under the workspace. These read-only
+// endpoints let anyone browse them after the fact. Rate-limited via the shared
+// /api/ read budget. Every file read is resolved through the workspace safeJoin
+// (the Tier-1 path guard) inside sources/artifacts.js — a triage id that tries to
+// climb out of the triages folder resolves to null and 404s.
+app.get('/api/records', (req, res) => {
+  res.json({ records: artifacts.listRecords(), readOnly: true });
+});
+
+// One triage's full artifacts (the raw "what actually happened").
+app.get('/api/records/:id', (req, res) => {
+  const rec = artifacts.getRecord(req.params.id);
+  if (!rec) return res.status(404).json({ error: 'No such triage record.' });
+  res.json(rec);
+});
+
+// One triage's auto-written document — 'slt' (leadership) or 'engineer'.
+app.get('/api/records/:id/doc/:which', (req, res) => {
+  const which = req.params.which;
+  if (which !== 'slt' && which !== 'engineer') {
+    return res.status(400).json({ error: 'Unknown document — use slt or engineer.' });
+  }
+  const content = artifacts.getDoc(req.params.id, which);
+  if (content == null) return res.status(404).json({ error: 'Document not found (or path refused).' });
+  res.json({
+    id: req.params.id,
+    which,
+    name: which === 'slt' ? 'Leadership summary' : 'Engineer writeup',
+    content,
+    readOnly: true,
+  });
 });
 
 // Mention counts endpoint
