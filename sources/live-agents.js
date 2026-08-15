@@ -12,6 +12,7 @@
 const catalyst = require('./catalyst-center');
 const aci = require('./aci');
 const sdwan = require('./sdwan');
+const session = require('./session-log');
 const { checkCommand, checkIntent, commandWord, READ_VERBS } = require('./guardrails');
 
 // The host app injects its broadcast/status/task-board plumbing here so this
@@ -46,7 +47,9 @@ async function runLive(agentId, taskTitle, busyLabel, worker) {
     // Inside the try: a task-board problem must not abort the live read, and
     // must not escape as an unhandled rejection.
     ctx.addTaskToBoard('inProgress', { title: taskTitle, agent: agent.name });
-    await worker();
+    // Tag every wire call this worker makes with the agent + task, so the
+    // CLI/session view can show "who logged into what and ran which command".
+    await session.runWithContext({ agentId, agentName: agent.name, label: taskTitle }, worker);
     ctx.appendToActivityLog(`[${new Date().toISOString()}] [${agent.name}] ${taskTitle} — live data returned\n`);
     ctx.updateAgentStatus(agentId, 'idle', `${taskTitle} complete (live data)`);
   } catch (err) {

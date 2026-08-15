@@ -19,6 +19,7 @@
 const catalyst = require('./catalyst-center');
 const aci = require('./aci');
 const sdwan = require('./sdwan');
+const session = require('./session-log');
 
 // The host app injects broadcast + status plumbing here so this module stays
 // free of server internals — the same seam live-agents.js uses.
@@ -277,7 +278,9 @@ async function runL1(triage, staffedTiers) {
   // Basic sweep: a real reading for EVERY live front so no card is blank even
   // at P3, where no SME (L3) is staffed to go deeper on fabric/wan.
   for (const front of LIVE_FRONTS) {
-    const r = await READERS[front]();
+    const r = await session.runWithContext(
+      { triageId: triage.id, agentId: 'monitor-eye', agentName: agentInfo('monitor-eye').name, front, label: `Triage ${triage.id} — L1 sweep` },
+      () => READERS[front]());
     postEvidence(triage, front, r);
     post(triage, {
       agent, tier: 'L1', round: 1,
@@ -480,7 +483,11 @@ function buildNextChecks(triage, ev, degraded, suspect) {
 async function withAgent(agentId, triage, worker) {
   setStatus(agentId, 'active', `Triage ${triage.id}`);
   try {
-    await worker(agentId);
+    // Tag every wire call this turn makes with the triage + agent, so the
+    // CLI/session view can replay exactly what each engineer read on the bridge.
+    await session.runWithContext(
+      { triageId: triage.id, agentId, agentName: agentInfo(agentId).name, label: `Triage ${triage.id}` },
+      () => worker(agentId));
   } catch (err) {
     log(`[Triage ${triage.id}] ${agentId} turn error — ${err.message}`);
   }
@@ -638,6 +645,33 @@ function postOperatorMessage(triageId, text) {
   return { ok: true, message: msg };
 }
 
+// ── Retry a down front inside an open triage ────────────────────────────────
+// The operator hits "retry" on a suspect/degraded card. We re-run the REAL
+// reader for that front right now, re-emit the evidence card (it recolours from
+// the fresh read), and return the real outcome. No fake success: if the source
+// is still down, the card goes suspect again with the new error string.
+async function retryFront(triageId, front) {
+  const t = triages.get(triageId);
+  if (!t) return { error: 'not_found', reason: 'No such triage.' };
+  if (!READERS[front]) {
+    return { error: 'not_retryable', reason: `The ${front} front has no live source to re-read (it is a blind spot).` };
+  }
+  // Which engineer owns this front (for the session-log tag + the bridge note).
+  const owner = { campus: 'netops', fabric: 'router-expert', wan: 'router-expert', incidents: 'incident-handler' }[front] || 'monitor-eye';
+  const r = await session.runWithContext(
+    { triageId: t.id, agentId: owner, agentName: agentInfo(owner).name, front, label: `Manual retry — ${front}` },
+    () => READERS[front]());
+  postEvidence(t, front, r);
+  post(t, {
+    agent: owner, tier: 'OPS', round: t.progress && t.progress.L4 === 'done' ? 2 : 1,
+    text: r.state === 'suspect'
+      ? `🔁 Retry of the ${front} front — still down: ${r.detail}. Nothing invented.`
+      : `🔁 Retry of the ${front} front — back with live data: ${r.detail} [${r.source}].`,
+  });
+  log(`[Triage ${t.id}] manual retry of ${front} — ${r.state}`);
+  return { ok: true, front, result: { state: r.state, detail: r.detail, source: r.source || null } };
+}
+
 // Recent list (newest first).
 function listTriages() {
   return [...triages.values()]
@@ -657,6 +691,7 @@ module.exports = {
   getTriage,
   listTriages,
   postOperatorMessage,
+  retryFront,
   isNetworkSubject,
   FRONTS,
   BLIND_SPOTS,

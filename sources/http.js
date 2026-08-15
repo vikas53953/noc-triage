@@ -3,10 +3,25 @@
 // request rather than globally — a global NODE_TLS_REJECT_UNAUTHORIZED would
 // weaken every other outbound call this server makes.
 const https = require('https');
+const session = require('./session-log');
 
 const DEFAULT_TIMEOUT = 30000;
 
 function request(opts, body) {
+  // Every real wire call is recorded for the CLI/session view (Phase B). The
+  // request BODY is deliberately NOT passed to the recorder — login bodies carry
+  // passwords, so only the method + path (the "command") and the RAW response
+  // are ever captured. Timing wraps the whole call.
+  const started = Date.now();
+  return rawRequest(opts, body).then((res) => {
+    try {
+      session.record({ host: opts.host, method: opts.method || 'GET', path: opts.path, res, durationMs: Date.now() - started });
+    } catch (e) { /* telemetry must never break a live read */ }
+    return res;
+  });
+}
+
+function rawRequest(opts, body) {
   // DELIBERATE: certificate checking is ON by default and only relaxed when a
   // caller passes verifyTls: false. The Cisco DevNet always-on sandboxes serve
   // self-signed certificates, so the sandbox adapters set that flag on purpose.

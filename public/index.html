@@ -455,6 +455,52 @@ pre.cli{
 .stream-foot input:not([disabled]){border-color:var(--accent)}
 .stream-foot .btn{padding:.45rem .8rem;font-size:.78rem}
 
+/* ---------- sources panel (live source status + retry) ---------- */
+.src-panel{margin-top:.7rem}
+.src-row{display:flex;align-items:center;gap:.5rem;padding:.45rem .55rem;border:1px solid var(--line-soft);border-radius:9px;margin-bottom:.4rem;background:var(--panel)}
+.src-row .src-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;background:var(--ink3)}
+.src-row.live .src-dot{background:#22c55e}
+.src-row.unreachable .src-dot{background:#ef4444}
+.src-row.notset .src-dot{background:#94a3b8}
+.src-row .src-txt{flex:1;min-width:0}
+.src-row .src-name{font-size:.74rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.src-row .src-stat{font-size:.64rem;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.src-row.unreachable .src-stat{color:#ef4444}
+.mini-btn{font:inherit;font-size:.64rem;font-weight:700;padding:.28rem .5rem;border-radius:7px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer;white-space:nowrap}
+.mini-btn:hover{border-color:var(--accent);color:var(--accent)}
+.mini-btn:disabled{opacity:.5;cursor:default}
+.eng-sess{font-size:.62rem;font-weight:700;padding:.2rem .42rem;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--ink3);cursor:pointer;margin-left:.35rem;flex-shrink:0}
+.eng-sess:hover{border-color:var(--accent);color:var(--accent)}
+.ev-actions{display:flex;gap:.35rem;margin-top:.5rem}
+.ev-actions .mini-btn.retry{border-color:rgba(239,68,68,.5);color:#ef4444}
+.ev-actions .mini-btn.retry:hover{background:rgba(239,68,68,.1)}
+
+/* ---------- CLI / session drawer ---------- */
+.drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;z-index:60}
+.drawer-overlay.on{display:block}
+.drawer{position:absolute;top:0;right:0;height:100%;width:min(760px,94vw);background:var(--bg);border-left:1px solid var(--line);display:flex;flex-direction:column;box-shadow:-18px 0 50px rgba(0,0,0,.35)}
+.drawer-head{display:flex;align-items:center;gap:.6rem;padding:.8rem 1rem;border-bottom:1px solid var(--line);flex-shrink:0}
+.drawer-head h3{font-size:.92rem;font-weight:800;flex:1;display:flex;align-items:center;gap:.5rem}
+.drawer-head .sub{font-size:.66rem;color:var(--ink3);font-weight:600}
+.drawer-body{flex:1;overflow-y:auto;padding:.9rem 1rem}
+.sess-empty{font-size:.78rem;color:var(--ink3);font-style:italic;padding:1.2rem .4rem;line-height:1.6}
+.sess-rec{border:1px solid var(--line-soft);border-radius:11px;margin-bottom:.85rem;overflow:hidden;background:var(--panel)}
+.sess-rec .sr-top{display:flex;align-items:center;gap:.5rem;padding:.5rem .7rem;border-bottom:1px solid var(--line-soft);flex-wrap:wrap}
+.sess-rec .sr-src{font-size:.7rem;font-weight:800}
+.sess-rec .sr-who{font-size:.64rem;color:var(--ink3);font-weight:600}
+.sess-rec .sr-time{font-size:.62rem;color:var(--ink3);margin-left:auto;font-variant-numeric:tabular-nums}
+.sr-badge{font-size:.58rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:.12rem .4rem;border-radius:5px;border:1px solid var(--line)}
+.sr-badge.ok{color:#16a34a;border-color:rgba(34,197,94,.5);background:rgba(34,197,94,.1)}
+.sr-badge.fail{color:#ef4444;border-color:rgba(239,68,68,.5);background:rgba(239,68,68,.1)}
+.sr-badge.kind{color:var(--ink3)}
+.sess-rec .sr-login{font-size:.66rem;color:var(--ink3);padding:.4rem .7rem 0}
+.sess-rec .sr-cmd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.72rem;padding:.35rem .7rem;color:var(--accent);word-break:break-all}
+.sr-split{display:grid;grid-template-columns:1fr;gap:0}
+.sess-rec .sr-raw{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.68rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;background:#0b1020;color:#c9d5e6;padding:.6rem .7rem;max-height:280px;overflow:auto;margin:0 .7rem .55rem;border-radius:8px;border:1px solid rgba(255,255,255,.06)}
+.sess-rec .sr-interp{font-size:.72rem;line-height:1.5;padding:.5rem .7rem;margin:0 .7rem .7rem;border-radius:8px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.25);color:var(--ink)}
+.sess-rec .sr-interp b{color:var(--accent)}
+.drawer-foot{padding:.55rem 1rem;border-top:1px solid var(--line);font-size:.64rem;color:var(--ink3);flex-shrink:0}
+
 ::-webkit-scrollbar{width:7px;height:7px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
@@ -498,6 +544,18 @@ pre.cli{
       <div class="roster-foot">
         Engineers with no live source are kept <b>off the bridge</b> — they never post,
         and their front shows as a blind spot on the evidence board.
+      </div>
+    </div>
+
+    <div class="panel src-panel" id="srcPanel">
+      <div class="panel-head">
+        <h2>🔌 Live sources</h2>
+        <button class="mini-btn" id="srcRefresh" title="Re-check every source">Re-check</button>
+      </div>
+      <div id="srcList" style="padding:.2rem"></div>
+      <div class="roster-foot" style="margin-top:.3rem">
+        A source that's down shows the <b>real error</b>. Hit <b>Retry</b> to re-attempt the
+        live connection on demand — a real re-read, never a faked success.
       </div>
     </div>
   </div>
@@ -638,6 +696,24 @@ pre.cli{
   </div>
 </div>
 
+<!-- ============ CLI / SESSION DRAWER ============ -->
+<div class="drawer-overlay" id="sessDrawer">
+  <div class="drawer">
+    <div class="drawer-head">
+      <h3><span>🖥</span> <span id="sessTitle">CLI session</span></h3>
+      <span class="sub" id="sessSub"></span>
+      <button class="iconbtn" id="sessClose">✕</button>
+    </div>
+    <div class="drawer-body" id="sessBody">
+      <p class="sess-empty">No recorded reads yet.</p>
+    </div>
+    <div class="drawer-foot">
+      Every line is the <b>real</b> wire session — the exact request sent and the raw response the
+      device/API returned. Credential values are never shown. Read-only.
+    </div>
+  </div>
+</div>
+
 <script>
 /* =========================================================
    NOC TRIAGE — live console wiring.
@@ -692,7 +768,8 @@ var ROSTER = [
         '<div class="eng-ico">'+e.ico+'</div>'+
         '<div class="eng-txt"><div class="eng-name">'+escapeHtml(e.name)+'</div>'+
         '<div class="eng-src">'+escapeHtml(e.src)+'</div></div>'+
-        '<span class="eng-state '+(e.live?'st-idle':'st-off')+'">'+(e.live?'idle':'no data')+'</span>';
+        '<span class="eng-state '+(e.live?'st-idle':'st-off')+'">'+(e.live?'idle':'no data')+'</span>'+
+        (e.live?'<button class="eng-sess" data-sess="'+escapeHtml(e.id)+'" title="See this engineer\'s real CLI session">🖥 CLI</button>':'');
       host.appendChild(row);
     });
   });
@@ -921,6 +998,7 @@ function buildBoard(fronts){
       '<div class="ev-head"><span class="ev-ico">'+m.ico+'</span><h4>'+escapeHtml(m.name)+'</h4>'+
       '<span class="ev-pill">waiting</span></div>'+
       '<div class="ev-body"><p class="ev-empty">No evidence yet.</p></div>'+
+      '<div class="ev-actions" id="eva-'+f+'"></div>'+
       '<div class="ev-foot"><span class="ev-src">'+escapeHtml(m.src)+'</span><span class="ev-by">—</span></div>';
     host.appendChild(el);
   });
@@ -941,8 +1019,44 @@ function applyEvidence(u){
   var src = el.querySelector('.ev-src');
   if(src && u.source) src.textContent = u.source;
   el.querySelector('.ev-by').textContent = tsClock(u.ts);
+  renderEvActions(u.front, u.state);
   el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
   updateVerdictBanner();
+}
+/* Retry (down/blind fronts) + a link to the real CLI session for the front. */
+function renderEvActions(front, state){
+  var host = $('eva-'+front); if(!host) return;
+  var live = ['campus','fabric','wan','incidents'].indexOf(front) >= 0;
+  var down = state === 'suspect' || state === 'degraded' || state === 'blind';
+  var html = '';
+  if(live && down){
+    html += '<button class="mini-btn retry" data-retry="'+escapeHtml(front)+'">🔁 Retry read</button>';
+  }
+  if(live){
+    html += '<button class="mini-btn" data-evsess="'+escapeHtml(front)+'">🖥 View session</button>';
+  }
+  host.innerHTML = html;
+}
+/* Delegated clicks for the evidence-board action buttons. */
+$('board').addEventListener('click', function(e){
+  var rb = e.target.closest('[data-retry]');
+  if(rb){ retryFront(rb.getAttribute('data-retry'), rb); return; }
+  var sb = e.target.closest('[data-evsess]');
+  if(sb){ openSession({ front: sb.getAttribute('data-evsess') }); return; }
+});
+/* Re-attempt one front's live read inside the open triage. Real fresh result. */
+function retryFront(front, btn){
+  if(!currentTriageId || DEMO) return;
+  if(btn){ btn.disabled = true; btn.textContent = '…retrying'; }
+  fetch('/api/triage/'+encodeURIComponent(currentTriageId)+'/retry/'+encodeURIComponent(front), {method:'POST'})
+    .then(function(r){ return r.json().then(function(b){ return {ok:r.ok, body:b}; }); })
+    .then(function(res){
+      if(!res.ok){ pushActivity('Retry', (res.body&&res.body.error)||'retry refused', nowClock()); }
+      else { var st = res.body.result||{}; pushActivity('Retry', front+' → '+(st.state||'?')+' — '+(st.detail||''), nowClock()); }
+      // The evidence card + bridge note repaint via the WS events the retry emits.
+    })
+    .catch(function(err){ pushActivity('Retry', front+' retry failed — '+err.message, nowClock()); })
+    .finally(function(){ if(btn){ btn.disabled = false; btn.textContent = '🔁 Retry read'; } });
 }
 function updateVerdictBanner(){
   var reds = document.querySelectorAll('.ev[data-state="red"]').length;
@@ -1139,6 +1253,8 @@ function selectAgent(id){
 }
 /* Clicking any engineer in the roster picks them as the message target. */
 $('roster').addEventListener('click', function(e){
+  var sb = e.target.closest('.eng-sess');
+  if(sb){ e.stopPropagation(); openSession({ agentId: sb.getAttribute('data-sess') }); return; }
   var row = e.target.closest('.eng'); if(!row) return;
   var id = row.id.replace(/^eng-/, ''); if(id) selectAgent(id);
 });
@@ -1210,6 +1326,124 @@ function postBridgeMessage(){
 $('bridgePostBtn').onclick = postBridgeMessage;
 $('bridgeInput').addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); postBridgeMessage(); } });
 
+/* ============================================================
+   CLI / SESSION VIEW — the REAL wire session per agent / front.
+   Each record = the exact request issued + the raw response the
+   device/API returned + a plain-words interpretation. Live-updated
+   from the session_record WS event; seeded from GET /api/session.
+   ============================================================ */
+var SESSION_RECORDS = [];
+var SESSION_SEEN = {};
+var SESSION_FILTER = null;
+var FRONT_SOURCE = { campus:'catalyst-center', fabric:'aci', wan:'sdwan', incidents:'catalyst-center' };
+var SOURCE_LABEL = { 'catalyst-center':'Cisco Catalyst Center', 'aci':'Cisco ACI (APIC)', 'sdwan':'Cisco SD-WAN (vManage)' };
+
+function ingestRecord(rec){
+  if(!rec || !rec.id || SESSION_SEEN[rec.id]) return false;
+  SESSION_SEEN[rec.id] = 1;
+  SESSION_RECORDS.push(rec);
+  if(SESSION_RECORDS.length > 700) SESSION_RECORDS.splice(0, SESSION_RECORDS.length - 700);
+  return true;
+}
+function recMatches(rec){
+  var f = SESSION_FILTER; if(!f) return true;
+  if(f.agentId) return rec.agentId === f.agentId;
+  if(f.front)   return rec.source === FRONT_SOURCE[f.front];
+  if(f.source)  return rec.source === f.source;
+  return true;
+}
+function seedSession(){
+  fetch('/api/session?limit=600').then(function(r){ return r.json(); }).then(function(d){
+    (d && d.records || []).forEach(ingestRecord);
+  }).catch(function(){});
+}
+function recCard(rec){
+  var ok = rec.ok;
+  var badge = ok ? '<span class="sr-badge ok">ok'+(rec.status?(' · '+escapeHtml(String(rec.status))):'')+'</span>'
+                 : '<span class="sr-badge fail">failed</span>';
+  var dur = rec.durationMs != null ? (' · '+escapeHtml(String(rec.durationMs))+'ms') : '';
+  var who = (rec.agentName ? escapeHtml(rec.agentName) : 'system') + (rec.triageId ? ' · '+escapeHtml(rec.triageId) : '') + (rec.origin ? ' · '+escapeHtml(rec.origin) : '');
+  return '<div class="sess-rec">'+
+    '<div class="sr-top">'+
+      '<span class="sr-src">'+escapeHtml(rec.sourceLabel||rec.source||'source')+'</span>'+
+      '<span class="sr-badge kind">'+escapeHtml(rec.kind||'read')+'</span>'+ badge +
+      '<span class="sr-who">'+who+dur+'</span>'+
+      '<span class="sr-time">'+escapeHtml(tsClock(rec.ts))+'</span>'+
+    '</div>'+
+    '<div class="sr-login">🔐 '+escapeHtml(rec.login||('host '+(rec.host||'')))+'</div>'+
+    '<div class="sr-cmd">$ '+escapeHtml(rec.command||'')+'</div>'+
+    '<pre class="sr-raw">'+escapeHtml(rec.raw||'(no body)')+'</pre>'+
+    '<div class="sr-interp"><b>SME read:</b> '+escapeHtml(rec.interpretation||'')+'</div>'+
+  '</div>';
+}
+function renderSession(){
+  var body = $('sessBody'); if(!body) return;
+  var list = SESSION_RECORDS.filter(recMatches);
+  if(!list.length){
+    body.innerHTML = '<p class="sess-empty">No recorded reads for this view yet. Trigger a live read '+
+      '(open a triage, or ask an engineer a question) and the real command + raw output appears here.</p>';
+    return;
+  }
+  body.innerHTML = list.map(recCard).join('');
+  body.scrollTop = body.scrollHeight;
+}
+function openSession(filter){
+  SESSION_FILTER = filter || null;
+  var title = 'CLI session', sub = 'all recorded reads';
+  if(filter && filter.agentId){ title = agentName(filter.agentId)+' · CLI session'; sub = 'real reads by this engineer'; }
+  else if(filter && filter.front){ title = frontMeta(filter.front).name+' · CLI session'; sub = 'real reads against '+(SOURCE_LABEL[FRONT_SOURCE[filter.front]]||'the source'); }
+  $('sessTitle').textContent = title;
+  $('sessSub').textContent = sub;
+  renderSession();
+  $('sessDrawer').classList.add('on');
+}
+$('sessClose').onclick = function(){ $('sessDrawer').classList.remove('on'); };
+$('sessDrawer').onclick = function(e){ if(e.target === this) this.classList.remove('on'); };
+
+/* ---------- live sources panel (status + real retry) ---------- */
+function srcRowHtml(id, s){
+  var status = s.status || 'unknown';
+  var cls = status === 'live' ? 'live' : (status === 'not connected' ? 'notset' : 'unreachable');
+  var stat = status === 'live' ? 'live' : (status + (s.detail && typeof s.detail === 'string' ? ' — '+s.detail : ''));
+  var canRetry = status !== 'not connected';
+  return '<div class="src-row '+cls+'" id="src-'+id+'">'+
+    '<span class="src-dot"></span>'+
+    '<div class="src-txt"><div class="src-name">'+escapeHtml(s.label||id)+'</div>'+
+    '<div class="src-stat">'+escapeHtml(String(stat))+'</div></div>'+
+    (canRetry ? '<button class="mini-btn" data-srcretry="'+escapeHtml(id)+'">Retry</button>' : '')+
+    '</div>';
+}
+function loadSources(){
+  if(DEMO) return;
+  fetch('/api/sources').then(function(r){ return r.json(); }).then(function(d){
+    var host = $('srcList'); if(!host || !d || !d.sources) return;
+    var order = ['catalyst-center','aci','sdwan'];
+    host.innerHTML = order.map(function(id){ return d.sources[id] ? srcRowHtml(id, d.sources[id]) : ''; }).join('');
+  }).catch(function(){});
+}
+$('srcRefresh').onclick = loadSources;
+$('srcList').addEventListener('click', function(e){
+  var b = e.target.closest('[data-srcretry]'); if(!b) return;
+  var id = b.getAttribute('data-srcretry');
+  b.disabled = true; b.textContent = '…';
+  fetch('/api/sources/'+encodeURIComponent(id)+'/retry', {method:'POST'})
+    .then(function(r){ return r.json(); })
+    .then(function(s){
+      var row = $('src-'+id);
+      if(row){
+        var cls = s.status === 'live' ? 'live' : (s.status === 'not connected' ? 'notset' : 'unreachable');
+        row.className = 'src-row '+cls;
+        var stat = s.status === 'live'
+          ? ('live'+(s.detail && s.detail.devices!=null ? ' — '+s.detail.devices+' devices' : (s.detail && s.detail.nodes!=null ? ' — '+s.detail.nodes+' nodes' : '')))
+          : (s.status + (s.detail && typeof s.detail === 'string' ? ' — '+s.detail : ''));
+        row.querySelector('.src-stat').textContent = String(stat);
+      }
+      pushActivity('Source retry', (s.label||id)+' → '+s.status+(typeof s.detail==='string'?(' — '+s.detail):''), nowClock());
+    })
+    .catch(function(err){ pushActivity('Source retry', id+' retry failed — '+err.message, nowClock()); })
+    .finally(function(){ b.disabled = false; b.textContent = 'Retry'; });
+});
+
 /* ---------- WebSocket ---------- */
 var ws = null, wsRetry = 0;
 function setConn(state){
@@ -1229,6 +1463,15 @@ function connectWS(){
   ws.onmessage = function(ev){
     var m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
     if(!m || !m.type) return;
+    if(m.type === 'session_record' && m.data){
+      if(ingestRecord(m.data) && $('sessDrawer').classList.contains('on') && recMatches(m.data)){
+        var body = $('sessBody');
+        var empty = body.querySelector('.sess-empty'); if(empty) empty.remove();
+        body.insertAdjacentHTML('beforeend', recCard(m.data));
+        body.scrollTop = body.scrollHeight;
+      }
+      return;
+    }
     if(m.type.indexOf('triage_') === 0){ dispatchTriageEvent(m.type, m.data); return; }
     // Direct-conversation replies (message-any-agent) come back as chat_message.
     if(m.type === 'chat_message' && m.data){ renderChat(m.data); return; }
@@ -1322,6 +1565,8 @@ if(DEMO){
 } else {
   connectWS();
   restoreTriage();
+  seedSession();
+  loadSources();
 }
 </script>
 
