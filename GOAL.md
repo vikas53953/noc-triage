@@ -21,7 +21,7 @@ Engineer works. No simulation, no fabricated data or capability.
 ## Build phases (sequential — server.js + public/index.html are shared, so ONE build
 ## agent per phase, then a DIFFERENT agent reviews, then integrate, then next phase)
 
-- [ ] PHASE A — INTERACTIVE + bug fix
+- [x] PHASE A — INTERACTIVE + bug fix  (DONE — merged to master 2f87b02, reviewed MERGE)
       - Fix "stuck on bridge": agents return to idle the moment a triage closes (root cause
         in sources/triage.js runBridge finally — make it per-triage, not global roster).
       - User can message ANY agent directly and get a real live-data answer (or honest can't-answer).
@@ -70,3 +70,4 @@ Engineer works. No simulation, no fabricated data or capability.
 
 ## Status log (append as phases complete)
 - 2026-08-15 eve: goal set; console-app look merged to master (foundation); Phase A starting.
+- 2026-08-15 ~21:xx: Phase A merged (interactive: message any agent, operator posts into bridge; stuck-on-bridge fixed). Reviewed MERGE, live-verified. Phase B starting.
