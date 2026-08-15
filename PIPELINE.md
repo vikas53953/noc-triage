@@ -54,3 +54,19 @@ own front with REAL live data. The screen is the **Evidence Split Console**
 - Staffing: SEVERITY DECIDES (P1 all-hands; P2/P3 relevant fronts).
 - Live data from day one (Option A — reuse the hardened engine).
 - Known nit inherited: "triage my landlord problem" dictionary overlap — fix here.
+
+## BUILD COMPLETE — merged to master 2026-08-15 (3547c9b)
+Two halves built in parallel (isolated worktrees, disjoint files) to docs/triage-contract.md:
+- Backend: sources/triage.js (two-round bridge), server.js endpoints, live-agents nit fix.
+- UI: public/index.html Evidence Split Console (split view, evidence board, escalation strip,
+  maximize/collapse, light+dark toggle).
+Integration review ran the COMBINED app live end-to-end → MERGE. Fixed 3 seam defects
+(raw agent ids; cross-triage event bleed with a triageId guard; icon escaping). Proven live:
+P1/P2/P3 staffing correct, evidence board matches backend states, ACI genuinely down →
+fabric "suspect" with real error (honesty path), themes legible, XSS escaped, zero console/log errors.
+Stage 5 Build + Stage 6 Review = done.
+
+### Known follow-up (non-blocking, Stage 7 QA / next)
+runBridge's finally idles ALL roster agents on any bridge close — two concurrent triages,
+the first to finish flips shared agent statuses to idle while the second still runs. Cosmetic
+(agent-status sidebar only); per-triage boards stay correct via the WS triageId guard. Fix later.
