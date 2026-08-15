@@ -501,6 +501,47 @@ pre.cli{
 .sess-rec .sr-interp b{color:var(--accent)}
 .drawer-foot{padding:.55rem 1rem;border-top:1px solid var(--line);font-size:.64rem;color:var(--ink3);flex-shrink:0}
 
+/* ---------- approvals / permission gate ---------- */
+.appr-btn{position:relative}
+.appr-count{position:absolute;top:-5px;right:-5px;min-width:15px;height:15px;padding:0 3px;border-radius:8px;background:var(--warn);color:#0a0e17;font-size:.56rem;font-weight:900;display:flex;align-items:center;justify-content:center;line-height:1}
+.appr-btn.pulse{border-color:var(--warn);color:var(--warn);animation:apprpulse 1.1s ease-in-out infinite}
+@keyframes apprpulse{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.5)}50%{box-shadow:0 0 0 5px rgba(245,158,11,0)}}
+.appr-modebar{display:flex;align-items:center;gap:.8rem;padding:.7rem 1rem;border-bottom:1px solid var(--line);flex-shrink:0;flex-wrap:wrap}
+.appr-modetxt{flex:1;min-width:220px;font-size:.68rem;color:var(--ink2);line-height:1.5}
+.appr-modetxt b{color:var(--ink);display:block;font-size:.72rem;margin-bottom:.1rem}
+.appr-toggle{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;flex-shrink:0}
+.appr-mode{font:inherit;font-size:.66rem;font-weight:700;padding:.4rem .7rem;border:none;background:transparent;color:var(--ink2);cursor:pointer}
+.appr-mode.on{background:var(--accent);color:#fff}
+.appr-mode:not(.on):hover{background:var(--hover);color:var(--ink)}
+.appr-pending{margin-bottom:1rem;border:1px solid var(--warn);border-radius:11px;padding:.7rem .8rem;background:var(--warn-bg)}
+.appr-pending h4,.appr-logwrap h4{font-size:.74rem;font-weight:800;margin-bottom:.55rem;display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+.appr-hint,.appr-row-why{font-size:.6rem;color:var(--ink3);font-weight:600}
+.appr-empty{font-size:.76rem;color:var(--ink3);font-style:italic;padding:1rem .3rem;line-height:1.6}
+.appr-row{border:1px solid var(--line);border-radius:10px;padding:.6rem .7rem;margin-bottom:.55rem;background:var(--card)}
+.appr-row.pending{border-color:var(--warn)}
+.appr-row-top{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;margin-bottom:.3rem}
+.appr-who{font-size:.72rem;font-weight:800;color:var(--ink)}
+.appr-time{font-size:.6rem;color:var(--ink3);margin-left:auto}
+.appr-cmd{font-family:var(--mono);font-size:.74rem;color:var(--info);word-break:break-all;margin:.15rem 0}
+.appr-tgt{font-size:.66rem;color:var(--ink2);margin-bottom:.2rem}
+.appr-state{font-size:.58rem;font-weight:800;letter-spacing:.03em;text-transform:uppercase;padding:.12rem .42rem;border-radius:5px;border:1px solid var(--line)}
+.appr-state.auto{color:#16a34a;border-color:rgba(34,197,94,.5);background:rgba(34,197,94,.1)}
+.appr-state.approved{color:#16a34a;border-color:rgba(34,197,94,.5);background:rgba(34,197,94,.1)}
+.appr-state.denied{color:#ef4444;border-color:rgba(239,68,68,.5);background:rgba(239,68,68,.1)}
+.appr-state.pending{color:var(--warn);border-color:var(--warn);background:var(--warn-bg)}
+.appr-outcome{font-size:.66rem;color:var(--ink2);margin-top:.25rem;line-height:1.4}
+.appr-outcome.bad{color:var(--bad)}
+.appr-acts{display:flex;gap:.4rem;margin-top:.5rem;flex-wrap:wrap}
+.appr-acts .mini-btn{font-size:.66rem;padding:.34rem .6rem}
+.appr-acts .ok{border-color:rgba(34,197,94,.5);color:#16a34a}
+.appr-acts .all{border-color:var(--accent);color:var(--accent)}
+.appr-acts .no{border-color:rgba(239,68,68,.5);color:#ef4444}
+.appr-prompt{position:fixed;right:16px;bottom:16px;width:min(370px,92vw);background:var(--panel);border:1px solid var(--warn);border-radius:13px;box-shadow:var(--shadow);padding:.85rem .9rem;z-index:70}
+.appr-prompt[hidden]{display:none}
+.appr-prompt h4{font-size:.78rem;font-weight:800;margin-bottom:.35rem;display:flex;align-items:center;gap:.4rem}
+.appr-prompt .appr-cmd{font-size:.78rem}
+.appr-prompt .more{font-size:.62rem;color:var(--ink3);margin-top:.35rem}
+
 ::-webkit-scrollbar{width:7px;height:7px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
@@ -526,6 +567,7 @@ pre.cli{
   <div class="top-right">
     <span class="chip" id="connChip"><span class="dot"></span>Connecting…</span>
     <span class="clock" id="clock">--:--:--</span>
+    <button class="iconbtn appr-btn" id="apprBtn" title="Approvals — the permission gate">🛡<span class="appr-count" id="apprCount" hidden>0</span></button>
     <button class="iconbtn" id="themeBtn" title="Toggle light / dark">☾</button>
     <div class="avatar-me">VK</div>
   </div>
@@ -713,6 +755,45 @@ pre.cli{
     </div>
   </div>
 </div>
+
+<!-- ============ APPROVALS / PERMISSION GATE DRAWER ============ -->
+<div class="drawer-overlay" id="apprDrawer">
+  <div class="drawer">
+    <div class="drawer-head">
+      <h3><span>🛡</span> <span>Permission gate</span></h3>
+      <span class="sub" id="apprSub">the real approval layer — nothing runs on a device without passing through here</span>
+      <button class="iconbtn" id="apprClose">✕</button>
+    </div>
+    <div class="appr-modebar">
+      <div class="appr-modetxt">
+        <b>Mode</b>
+        <span id="apprModeDesc">Auto-approve safe reads — logged below. A real incident will not drown you in prompts.</span>
+      </div>
+      <div class="appr-toggle" id="apprToggle" role="group" aria-label="Approval mode">
+        <button class="appr-mode" data-mode="auto" id="apprModeAuto">Auto-approve reads</button>
+        <button class="appr-mode" data-mode="ask" id="apprModeAsk">Ask me for every command</button>
+      </div>
+    </div>
+    <div class="drawer-body" id="apprBody">
+      <div class="appr-pending" id="apprPending" hidden>
+        <h4>⏳ Waiting for your decision</h4>
+        <div id="apprPendingList"></div>
+      </div>
+      <div class="appr-logwrap">
+        <h4>📜 Approval log <span class="appr-hint">who wanted to run what · when · decision · outcome</span></h4>
+        <div id="apprLog"><p class="appr-empty">No reads yet. Open a triage or ask an engineer for a read and every request appears here.</p></div>
+      </div>
+    </div>
+    <div class="drawer-foot">
+      Only <b>read-only</b> commands are ever offered — the read-only guardrail still hard-blocks
+      anything that would change a device, before this gate ever applies. A denied command runs
+      nothing and is never swapped for something else.
+    </div>
+  </div>
+</div>
+
+<!-- ============ APPROVAL PROMPT (appears when a decision is needed) ============ -->
+<div class="appr-prompt" id="apprPrompt" hidden></div>
 
 <script>
 /* =========================================================
@@ -1400,6 +1481,118 @@ function openSession(filter){
 $('sessClose').onclick = function(){ $('sessDrawer').classList.remove('on'); };
 $('sessDrawer').onclick = function(e){ if(e.target === this) this.classList.remove('on'); };
 
+/* ============================================================
+   APPROVALS — the REAL permission gate surface.
+   Every intended read shows here as an approval record. In auto mode
+   reads auto-approve (logged); in ask mode a pending record waits for a
+   decision (approve once / approve all reads this triage / deny). A denied
+   command runs nothing — the agent reports it and nothing is fabricated.
+   Live from approval_new / approval_update / approval_mode WS events;
+   seeded from GET /api/approvals. Everything below is escaped.
+   ============================================================ */
+var APPR = { mode:'auto', map:{}, order:[] };
+
+function apprIngest(rec){
+  if(!rec || !rec.id) return;
+  if(!APPR.map[rec.id]) APPR.order.push(rec.id);
+  APPR.map[rec.id] = rec;
+  if(APPR.order.length > 500){ var drop = APPR.order.splice(0, APPR.order.length-500); drop.forEach(function(id){ delete APPR.map[id]; }); }
+}
+function apprPendingList(){ return APPR.order.map(function(id){ return APPR.map[id]; }).filter(function(r){ return r && r.state==='pending'; }); }
+
+function apprStateBadge(st){
+  var label = st==='auto'?'auto-approved':(st==='approved'?'approved':(st==='denied'?'denied':'pending'));
+  return '<span class="appr-state '+escapeHtml(st)+'">'+escapeHtml(label)+'</span>';
+}
+function apprRowHtml(r, withActions){
+  var who = escapeHtml(r.agentName||r.agentId||'agent') + (r.triageId?(' · '+escapeHtml(r.triageId)):'');
+  var by = r.decidedBy ? (r.decidedBy==='auto'?'auto':(r.decidedBy==='operator'?'you':(r.decidedBy==='all-reads-this-triage'?'you · all reads this triage':(r.decidedBy==='guardrail'?'guardrail':escapeHtml(r.decidedBy))))) : '';
+  var outcome = r.outcome ? '<div class="appr-outcome'+(r.outcomeOk===false?' bad':'')+'">'+ (r.outcomeOk===false?'✗ ':'✓ ') + escapeHtml(r.outcome) + (by?(' · decided by '+escapeHtml(by)):'') +'</div>' : (by?'<div class="appr-outcome">decided by '+escapeHtml(by)+'</div>':'');
+  var acts = '';
+  if(withActions && r.state==='pending'){
+    acts = '<div class="appr-acts">'+
+      '<button class="mini-btn ok" data-appr="'+escapeHtml(r.id)+'" data-dec="approve-once">✓ Approve once</button>'+
+      (r.triageId?'<button class="mini-btn all" data-appr="'+escapeHtml(r.id)+'" data-dec="approve-all">✓✓ Approve all reads this triage</button>':'')+
+      '<button class="mini-btn no" data-appr="'+escapeHtml(r.id)+'" data-dec="deny">✕ Deny</button>'+
+      '</div>';
+  }
+  return '<div class="appr-row '+escapeHtml(r.state)+'">'+
+    '<div class="appr-row-top"><span class="appr-who">'+who+'</span>'+apprStateBadge(r.state)+
+      '<span class="appr-time">'+escapeHtml(tsClock(r.decidedAt||r.ts))+'</span></div>'+
+    '<div class="appr-cmd">$ '+escapeHtml(r.command||'read')+'</div>'+
+    (r.target?'<div class="appr-tgt">→ '+escapeHtml(r.target)+'</div>':'')+
+    (r.reason?'<div class="appr-row-why">'+escapeHtml(r.reason)+'</div>':'')+
+    acts + outcome +
+  '</div>';
+}
+function renderApprovals(){
+  // mode toggle
+  $('apprModeAuto').classList.toggle('on', APPR.mode==='auto');
+  $('apprModeAsk').classList.toggle('on', APPR.mode==='ask');
+  $('apprModeDesc').textContent = APPR.mode==='auto'
+    ? 'Auto-approve safe reads — logged below. A real incident will not drown you in prompts.'
+    : 'Ask me for every command — each read pauses here until you approve or deny it.';
+  // pending
+  var pend = apprPendingList();
+  var pbox = $('apprPending'), plist = $('apprPendingList');
+  if(pend.length){ pbox.hidden = false; plist.innerHTML = pend.map(function(r){ return apprRowHtml(r, true); }).join(''); }
+  else { pbox.hidden = true; plist.innerHTML=''; }
+  // full log (newest first)
+  var log = $('apprLog');
+  var all = APPR.order.map(function(id){ return APPR.map[id]; }).filter(Boolean).slice().reverse();
+  if(!all.length){ log.innerHTML = '<p class="appr-empty">No reads yet. Open a triage or ask an engineer for a read and every request appears here.</p>'; }
+  else { log.innerHTML = all.map(function(r){ return apprRowHtml(r, false); }).join(''); }
+  // header badge + prompt
+  var btn = $('apprBtn'), cnt = $('apprCount');
+  if(pend.length){ cnt.hidden=false; cnt.textContent=String(pend.length); btn.classList.add('pulse'); }
+  else { cnt.hidden=true; btn.classList.remove('pulse'); }
+  renderApprPrompt(pend);
+}
+function renderApprPrompt(pend){
+  var box = $('apprPrompt');
+  if(!pend || !pend.length){ box.hidden=true; box.innerHTML=''; return; }
+  var r = pend[0];
+  box.hidden=false;
+  box.innerHTML = '<h4>🛡 Approve this read?</h4>'+
+    '<div class="appr-cmd">$ '+escapeHtml(r.command||'read')+'</div>'+
+    (r.target?'<div class="appr-tgt">→ '+escapeHtml(r.target)+'</div>':'')+
+    '<div class="appr-row-why">'+escapeHtml((r.agentName||r.agentId||'An engineer')+' wants to run this'+(r.reason?(' — '+r.reason):''))+'</div>'+
+    '<div class="appr-acts">'+
+      '<button class="mini-btn ok" data-appr="'+escapeHtml(r.id)+'" data-dec="approve-once">✓ Approve once</button>'+
+      (r.triageId?'<button class="mini-btn all" data-appr="'+escapeHtml(r.id)+'" data-dec="approve-all">✓✓ All reads this triage</button>':'')+
+      '<button class="mini-btn no" data-appr="'+escapeHtml(r.id)+'" data-dec="deny">✕ Deny</button>'+
+    '</div>'+
+    (pend.length>1?'<div class="more">+'+(pend.length-1)+' more waiting — open the 🛡 panel to see all</div>':'');
+}
+function apprDecide(id, dec){
+  fetch('/api/approvals/'+encodeURIComponent(id)+'/decision', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({decision:dec})
+  }).then(function(r){ return r.json(); }).then(function(){ /* WS approval_update repaints */ }).catch(function(){});
+}
+function apprSetMode(m){
+  fetch('/api/approvals/mode', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:m}) })
+    .then(function(r){ return r.json(); }).then(function(d){ if(d&&d.mode){ APPR.mode=d.mode; renderApprovals(); } }).catch(function(){});
+}
+function seedApprovals(){
+  if(DEMO) return;
+  fetch('/api/approvals?limit=500').then(function(r){ return r.json(); }).then(function(d){
+    if(!d) return;
+    if(d.mode) APPR.mode = d.mode;
+    (d.records||[]).forEach(apprIngest);
+    renderApprovals();
+  }).catch(function(){});
+}
+/* clicks: decisions (drawer + prompt) via delegation, mode toggle, open/close */
+document.addEventListener('click', function(e){
+  var db = e.target.closest && e.target.closest('[data-appr]');
+  if(db){ e.preventDefault(); apprDecide(db.getAttribute('data-appr'), db.getAttribute('data-dec')); return; }
+  var mb = e.target.closest && e.target.closest('.appr-mode');
+  if(mb){ apprSetMode(mb.getAttribute('data-mode')); return; }
+});
+$('apprBtn').onclick = function(){ renderApprovals(); $('apprDrawer').classList.add('on'); };
+$('apprClose').onclick = function(){ $('apprDrawer').classList.remove('on'); };
+$('apprDrawer').onclick = function(e){ if(e.target === this) this.classList.remove('on'); };
+
 /* ---------- live sources panel (status + real retry) ---------- */
 function srcRowHtml(id, s){
   var status = s.status || 'unknown';
@@ -1472,6 +1665,8 @@ function connectWS(){
       }
       return;
     }
+    if(m.type === 'approval_new' || m.type === 'approval_update'){ if(m.data){ apprIngest(m.data); renderApprovals(); } return; }
+    if(m.type === 'approval_mode'){ if(m.data && m.data.mode){ APPR.mode = m.data.mode; renderApprovals(); } return; }
     if(m.type.indexOf('triage_') === 0){ dispatchTriageEvent(m.type, m.data); return; }
     // Direct-conversation replies (message-any-agent) come back as chat_message.
     if(m.type === 'chat_message' && m.data){ renderChat(m.data); return; }
@@ -1566,6 +1761,7 @@ if(DEMO){
   connectWS();
   restoreTriage();
   seedSession();
+  seedApprovals();
   loadSources();
 }
 </script>

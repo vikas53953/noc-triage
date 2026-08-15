@@ -13,6 +13,7 @@ const catalyst = require('./catalyst-center');
 const aci = require('./aci');
 const sdwan = require('./sdwan');
 const session = require('./session-log');
+const approvals = require('./approvals');
 const { checkCommand, checkIntent, commandWord, READ_VERBS } = require('./guardrails');
 
 // The host app injects its broadcast/status/task-board plumbing here so this
@@ -40,18 +41,39 @@ function notConnected(agentId) {
 }
 
 // Every live answer runs through here: task board in, honest failure out.
-async function runLive(agentId, taskTitle, busyLabel, worker) {
+// gateMeta (optional) enriches the permission record for this read — the real
+// CLI command, the target, and why. Every read passes the permission gate: in
+// auto mode it auto-approves (and is logged); in ask mode it PAUSES until the
+// operator decides. A denied read never touches the wire and is reported honestly.
+async function runLive(agentId, taskTitle, busyLabel, worker, gateMeta) {
   const agent = ctx.agents[agentId];
   ctx.updateAgentStatus(agentId, 'active', busyLabel);
+  const meta = Object.assign({
+    agentId, agentName: agent.name,
+    command: taskTitle, target: busyLabel, reason: taskTitle,
+  }, gateMeta || {});
   try {
     // Inside the try: a task-board problem must not abort the live read, and
     // must not escape as an unhandled rejection.
     ctx.addTaskToBoard('inProgress', { title: taskTitle, agent: agent.name });
-    // Tag every wire call this worker makes with the agent + task, so the
-    // CLI/session view can show "who logged into what and ran which command".
-    await session.runWithContext({ agentId, agentName: agent.name, label: taskTitle }, worker);
-    ctx.appendToActivityLog(`[${new Date().toISOString()}] [${agent.name}] ${taskTitle} — live data returned\n`);
-    ctx.updateAgentStatus(agentId, 'idle', `${taskTitle} complete (live data)`);
+    // The permission gate wraps the actual work. The worker (and every wire call
+    // inside it) runs ONLY if the read is approved — so a denial makes no wire call.
+    const g = await approvals.gate(meta, () =>
+      // Tag every wire call this worker makes with the agent + task, so the
+      // CLI/session view can show "who logged into what and ran which command".
+      session.runWithContext({ agentId, agentName: agent.name, label: taskTitle }, worker));
+
+    if (g.denied) {
+      say(agentId,
+        `🛑 Read denied by the operator — ran nothing.\n${RULE}\n` +
+        `The command "${escapeForSay(meta.command)}" was not approved, so I sent nothing to any device ` +
+        `and I am not going to invent a result. Approve it in the approval panel and ask again to run it for real.`);
+      ctx.appendToActivityLog(`[${new Date().toISOString()}] [${agent.name}] ${taskTitle} DENIED by operator — ran nothing\n`);
+      ctx.updateAgentStatus(agentId, 'idle', 'Read denied — ran nothing');
+    } else {
+      ctx.appendToActivityLog(`[${new Date().toISOString()}] [${agent.name}] ${taskTitle} — live data returned\n`);
+      ctx.updateAgentStatus(agentId, 'idle', `${taskTitle} complete (live data)`);
+    }
   } catch (err) {
     say(agentId,
       `⚠️ Source unreachable.\n${RULE}\n${err.message}\n\n` +
@@ -65,6 +87,9 @@ async function runLive(agentId, taskTitle, busyLabel, worker) {
     console.error('[live] Could not tidy the task board:', err.message);
   }
 }
+
+// A tiny guard so a command label can be dropped into a chat line safely.
+function escapeForSay(s) { return String(s == null ? '' : s).slice(0, 200); }
 
 const pad = (s, n) => String(s == null ? '' : s).padEnd(n);
 
@@ -334,6 +359,13 @@ async function configKeeper(agentId, command) {
       (out && out.ok === false
         ? `⚠️ The device rejected that command. Real output above — nothing was invented, and no configuration was sent.`
         : `Real output, read live. No configuration was sent.`));
+  }, {
+    // The permission record shows the REAL read-only CLI command the agent wants
+    // to run, and cli:… re-checks it against the guardrail inside the gate.
+    command: verdict.command,
+    target: 'a reachable Catalyst Center switch (Command Runner)',
+    reason: `operator asked: "${raw.slice(0, 80)}"`,
+    cli: verdict.command,
   });
 }
 
