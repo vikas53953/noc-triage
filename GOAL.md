@@ -33,7 +33,7 @@ Engineer works. No simulation, no fabricated data or capability.
         reading logs at the CLI. This is the heart of "how an SME thinks". Watchtower law.
       - ACI (and any down source): a "retry / manage" control in the UI to re-attempt the
         connection/read from a down front, surfacing the real result.
-- [ ] PHASE C — REAL PERMISSION GATE
+- [x] PHASE C — REAL PERMISSION GATE  (DONE — merged, reviewed MERGE; deny=zero wire calls, writes never reach the gate)
       - Before an agent runs a command it ASKS; user approves once / approves all reads for
         this triage / denies. Default per spec (Vikas liked it): auto-approve safe reads with a
         visible scrollable approval log; still only read-only commands are ever offered.
@@ -72,3 +72,4 @@ Engineer works. No simulation, no fabricated data or capability.
 - 2026-08-15 eve: goal set; console-app look merged to master (foundation); Phase A starting.
 - 2026-08-15 ~21:xx: Phase A merged (interactive: message any agent, operator posts into bridge; stuck-on-bridge fixed). Reviewed MERGE, live-verified. Phase B starting.
 - 2026-08-15 ~23:xx: Phase B merged (real CLI/session log with actual command+raw output+SME interpretation; real ACI retry; username-scrub fix). Reviewed MERGE. Phase C starting.
+- 2026-08-16 ~00:xx: Phase C merged (real approval gate: auto-approve reads default + ask mode approve/deny; denied read makes zero wire calls, never faked; writes blocked before the gate). Reviewed MERGE. Phase D starting.
