@@ -1,0 +1,15 @@
+node_modules/
+npm-debug.log*
+
+# Credentials — never commit real values. .env.local is covered by .env.*
+.env
+.env.*
+!.env.example
+
+# Local working files
+scratchpad/
+# Default workspace, created on first run
+squad/
+*.log
+.DS_Store
+Thumbs.db

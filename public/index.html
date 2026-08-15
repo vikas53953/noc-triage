@@ -1,0 +1,3856 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mission Control - Network Squad Dashboard</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg-primary: #0a0e17;
+      --bg-secondary: #111827;
+      --bg-card: #1a2234;
+      --bg-hover: #243047;
+      --text-primary: #f0f4f8;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --border: #2d3a4f;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --purple: #8b5cf6;
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Header */
+    .header {
+      background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-card) 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .logo h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      border-radius: 9999px;
+      font-size: 0.875rem;
+      font-weight: 500;
+    }
+
+    .status-badge.connected {
+      background: rgba(16, 185, 129, 0.2);
+      color: var(--success);
+      border: 1px solid var(--success);
+    }
+
+    .status-badge.disconnected {
+      background: rgba(239, 68, 68, 0.2);
+      color: var(--danger);
+      border: 1px solid var(--danger);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+
+    .status-badge.connected .status-dot {
+      background: var(--success);
+    }
+
+    .status-badge.disconnected .status-dot {
+      background: var(--danger);
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .live-time {
+      color: var(--text-secondary);
+      font-size: 0.875rem;
+      font-family: 'Consolas', monospace;
+    }
+
+    /* Main Layout */
+    .main-container {
+      display: grid;
+      grid-template-columns: 300px 1fr 350px;
+      gap: 1rem;
+      padding: 1rem;
+      height: calc(100vh - 56px);
+      overflow: hidden;
+    }
+
+    /* Sidebar - Agents */
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      overflow: hidden;
+    }
+
+    .agents-scroll {
+      overflow-y: auto;
+      max-height: calc(100vh - 250px);
+      padding-right: 2px;
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 1rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .card-header h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .card-body {
+      padding: 1rem;
+    }
+
+    /* Agent Cards */
+    .agent-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.6rem 0.75rem;
+      margin-bottom: 0.5rem;
+      transition: all 0.2s;
+    }
+
+    .agent-card:last-child {
+      margin-bottom: 0;
+    }
+
+    .agent-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+
+    .agent-card.squad-lead {
+      border-color: var(--warning);
+      background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(245, 158, 11, 0.08) 100%);
+    }
+
+    .agent-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.35rem;
+    }
+
+    .agent-name {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-weight: 600;
+      font-size: 0.85rem;
+    }
+
+    .agent-icon {
+      font-size: 1.1rem;
+    }
+
+    .agent-role-tag {
+      font-size: 0.6rem;
+      padding: 0.1rem 0.35rem;
+      background: var(--warning);
+      color: #000;
+      border-radius: 4px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .agent-status {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 0.65rem;
+      padding: 0.15rem 0.4rem;
+      border-radius: 9999px;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+
+    .agent-status.active {
+      background: rgba(16, 185, 129, 0.2);
+      color: var(--success);
+    }
+
+    .agent-status.idle {
+      background: rgba(245, 158, 11, 0.2);
+      color: var(--warning);
+    }
+
+    .agent-status.offline {
+      background: rgba(239, 68, 68, 0.2);
+      color: var(--danger);
+    }
+
+    .agent-desc {
+      font-size: 0.7rem;
+      color: var(--text-secondary);
+      margin-bottom: 0.25rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .agent-action {
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      font-family: 'Consolas', monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Task Board */
+    .task-board {
+      flex: 1;
+    }
+
+    .task-columns {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 0.75rem;
+      height: calc(100% - 60px);
+    }
+
+    .task-column {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      min-height: 300px;
+    }
+
+    .column-header {
+      padding: 0.75rem;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .column-header.inbox { border-top: 3px solid var(--accent); }
+    .column-header.in-progress { border-top: 3px solid var(--warning); }
+    .column-header.review { border-top: 3px solid var(--purple); }
+    .column-header.done { border-top: 3px solid var(--success); }
+    .column-header.waiting { border-top: 3px solid var(--text-muted); }
+
+    .task-count {
+      background: var(--bg-hover);
+      padding: 0.2rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.7rem;
+    }
+
+    .column-body {
+      padding: 0.5rem;
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    .task-item {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.75rem;
+      margin-bottom: 0.5rem;
+      font-size: 0.85rem;
+      transition: all 0.2s;
+      cursor: pointer;
+    }
+
+    .task-item:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+
+    .task-item:active {
+      transform: translateY(0);
+    }
+
+    .task-agent-tag {
+      display: inline-block;
+      font-size: 0.7rem;
+      padding: 0.15rem 0.4rem;
+      background: var(--accent);
+      border-radius: 4px;
+      margin-bottom: 0.4rem;
+    }
+
+    .task-item .task-actions {
+      display: none;
+      margin-top: 0.5rem;
+      padding-top: 0.5rem;
+      border-top: 1px solid var(--border);
+      gap: 0.25rem;
+      flex-wrap: wrap;
+    }
+
+    .task-item:hover .task-actions {
+      display: flex;
+    }
+
+    .task-move-btn {
+      background: var(--bg-hover);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.65rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .task-move-btn:hover {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+
+    .add-task-btn {
+      width: 100%;
+      padding: 0.5rem;
+      background: transparent;
+      border: 2px dashed var(--border);
+      border-radius: 6px;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: all 0.2s;
+    }
+
+    .add-task-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(59, 130, 246, 0.1);
+    }
+
+    /* Task Modal */
+    .task-modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 1000;
+      display: none;
+      justify-content: center;
+      align-items: center;
+      padding: 2rem;
+    }
+
+    .task-modal-overlay.active {
+      display: flex;
+    }
+
+    .task-modal {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 100%;
+      max-width: 500px;
+      overflow: hidden;
+    }
+
+    .task-modal-header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--bg-secondary);
+    }
+
+    .task-modal-header h3 {
+      font-size: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .task-modal-close {
+      background: var(--danger);
+      color: white;
+      border: none;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 1.1rem;
+    }
+
+    .task-modal-body {
+      padding: 1.5rem;
+    }
+
+    .task-form-group {
+      margin-bottom: 1rem;
+    }
+
+    .task-form-group label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    .task-form-group input,
+    .task-form-group select,
+    .task-form-group textarea {
+      width: 100%;
+      padding: 0.6rem 0.8rem;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-size: 0.9rem;
+    }
+
+    .task-form-group textarea {
+      min-height: 80px;
+      resize: vertical;
+    }
+
+    .task-form-group input:focus,
+    .task-form-group select:focus,
+    .task-form-group textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .task-modal-footer {
+      padding: 1rem 1.5rem;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+    }
+
+    .task-modal-btn {
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+
+    .task-modal-btn.primary {
+      background: var(--accent);
+      color: white;
+    }
+
+    .task-modal-btn.primary:hover {
+      background: var(--accent-hover);
+    }
+
+    .task-modal-btn.secondary {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+
+    .task-modal-btn.danger {
+      background: var(--danger);
+      color: white;
+    }
+
+    /* Right Panel */
+    .right-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    /* Activity Feed */
+    .activity-feed {
+      flex: 1;
+      max-height: 400px;
+    }
+
+    .activity-list {
+      max-height: 320px;
+      overflow-y: auto;
+    }
+
+    .activity-item {
+      padding: 0.75rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8rem;
+      animation: slideIn 0.3s ease;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateX(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0);
+      }
+    }
+
+    .activity-item:last-child {
+      border-bottom: none;
+    }
+
+    .activity-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 0.25rem;
+    }
+
+    .activity-agent {
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    .activity-time {
+      color: var(--text-muted);
+      font-size: 0.7rem;
+      font-family: 'Consolas', monospace;
+    }
+
+    .activity-message {
+      color: var(--text-secondary);
+      word-break: break-word;
+    }
+
+    /* Files List */
+    .files-list {
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .file-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.6rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8rem;
+    }
+
+    .file-item:last-child {
+      border-bottom: none;
+    }
+
+    .file-info {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .file-icon {
+      font-size: 1rem;
+    }
+
+    .file-name {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .file-download {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 0.3rem 0.6rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.7rem;
+      transition: all 0.2s;
+    }
+
+    .file-download:hover {
+      background: var(--accent-hover);
+    }
+
+    /* Chat Panel */
+    .chat-panel {
+      height: 350px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.5rem;
+    }
+
+    .chat-message {
+      padding: 0.6rem 0.8rem;
+      margin-bottom: 0.5rem;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      animation: fadeIn 0.3s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .chat-message.outgoing {
+      background: var(--accent);
+      margin-left: 2rem;
+      border-bottom-right-radius: 2px;
+    }
+
+    .chat-message.incoming {
+      background: var(--bg-secondary);
+      margin-right: 1rem;
+      border: 1px solid var(--border);
+      border-bottom-left-radius: 2px;
+    }
+
+    /* Quote of the question a reply is answering. Shown whenever the reply
+       belongs to a different question than the line above it, so a late answer
+       can never be read as the answer to a later question. */
+    .reply-quote {
+      border-left: 3px solid var(--accent);
+      padding: 0.2rem 0 0.2rem 0.5rem;
+      margin-bottom: 0.4rem;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      font-style: italic;
+      overflow-wrap: anywhere;
+    }
+
+    .chat-input-container {
+      display: flex;
+      gap: 0.5rem;
+      padding: 0.75rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .chat-select {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.5rem;
+      color: var(--text-primary);
+      font-size: 0.8rem;
+    }
+
+    .chat-input {
+      flex: 1;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.5rem 0.75rem;
+      color: var(--text-primary);
+      font-size: 0.85rem;
+    }
+
+    .chat-input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .chat-send {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+
+    .chat-send:hover {
+      background: var(--accent-hover);
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: var(--bg-secondary);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--text-muted);
+    }
+
+    /* Empty State */
+    .empty-state {
+      text-align: center;
+      padding: 2rem;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    /* New item highlight */
+    .new-item {
+      animation: highlight 2s ease;
+    }
+
+    @keyframes highlight {
+      0% { background: rgba(59, 130, 246, 0.3); }
+      100% { background: transparent; }
+    }
+
+    /* Responsive */
+    @media (max-width: 1200px) {
+      .main-container {
+        grid-template-columns: 1fr;
+      }
+
+      .task-columns {
+        grid-template-columns: repeat(3, 1fr);
+      }
+    }
+
+    /* File Browser Modal */
+    .file-browser-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 1000;
+      display: none;
+      justify-content: center;
+      align-items: center;
+      padding: 2rem;
+    }
+
+    .file-browser-overlay.active {
+      display: flex;
+    }
+
+    .file-browser {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 100%;
+      max-width: 1000px;
+      height: 80vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .file-browser-header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--bg-secondary);
+    }
+
+    .file-browser-header h2 {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 1.1rem;
+    }
+
+    .file-browser-close {
+      background: var(--danger);
+      color: white;
+      border: none;
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 1.2rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .file-browser-path {
+      padding: 0.75rem 1.5rem;
+      background: var(--bg-primary);
+      border-bottom: 1px solid var(--border);
+      font-family: 'Consolas', monospace;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .path-segment {
+      color: var(--accent);
+      cursor: pointer;
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+    }
+
+    .path-segment:hover {
+      background: var(--bg-hover);
+    }
+
+    .path-separator {
+      color: var(--text-muted);
+    }
+
+    .file-browser-content {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    .file-list {
+      width: 300px;
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      background: var(--bg-secondary);
+    }
+
+    .file-list-item {
+      padding: 0.75rem 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      transition: all 0.15s;
+    }
+
+    .file-list-item:hover {
+      background: var(--bg-hover);
+    }
+
+    .file-list-item.active {
+      background: var(--accent);
+    }
+
+    .file-list-item.parent {
+      color: var(--warning);
+      font-weight: 600;
+    }
+
+    .file-list-icon {
+      font-size: 1.2rem;
+      width: 24px;
+      text-align: center;
+    }
+
+    .file-list-name {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .file-list-meta {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+
+    .file-preview {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .file-preview-header {
+      padding: 0.75rem 1rem;
+      background: var(--bg-primary);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .file-preview-name {
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .file-preview-actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .file-preview-btn {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 0.4rem 0.8rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+
+    .file-preview-btn:hover {
+      background: var(--accent-hover);
+    }
+
+    .file-preview-content {
+      flex: 1;
+      overflow: auto;
+      padding: 1rem;
+      font-family: 'Consolas', monospace;
+      font-size: 0.85rem;
+      white-space: pre-wrap;
+      background: var(--bg-primary);
+      line-height: 1.5;
+    }
+
+    .file-preview-empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    /* Browse button */
+    .browse-btn {
+      background: var(--purple);
+      color: white;
+      border: none;
+      padding: 0.4rem 0.8rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+
+    .browse-btn:hover {
+      background: #7c3aed;
+    }
+
+    /* Settings Button */
+    .settings-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 0.5rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 1.1rem;
+      transition: all 0.2s;
+    }
+
+    .settings-btn:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+
+    /* Settings Modal */
+    .settings-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 1000;
+      display: none;
+      justify-content: center;
+      align-items: center;
+      padding: 2rem;
+    }
+
+    .settings-overlay.active {
+      display: flex;
+    }
+
+    .settings-modal {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 100%;
+      max-width: 500px;
+      max-height: 80vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .settings-header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--bg-secondary);
+    }
+
+    .settings-header h2 {
+      font-size: 1.1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .settings-close {
+      background: var(--danger);
+      color: white;
+      border: none;
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 1.2rem;
+    }
+
+    .settings-body {
+      padding: 1.5rem;
+      overflow-y: auto;
+    }
+
+    .settings-section {
+      margin-bottom: 1.5rem;
+    }
+
+    .settings-section h3 {
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      margin-bottom: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .theme-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.75rem;
+    }
+
+    .theme-option {
+      padding: 1rem;
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.2s;
+    }
+
+    .theme-option:hover {
+      border-color: var(--accent);
+    }
+
+    .theme-option.active {
+      border-color: var(--accent);
+      background: rgba(59, 130, 246, 0.1);
+    }
+
+    .theme-preview {
+      width: 100%;
+      height: 40px;
+      border-radius: 4px;
+      margin-bottom: 0.5rem;
+      display: flex;
+      overflow: hidden;
+    }
+
+    .theme-preview span {
+      flex: 1;
+    }
+
+    .theme-name {
+      font-size: 0.8rem;
+      font-weight: 500;
+    }
+
+    .color-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.75rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .color-row:last-child {
+      border-bottom: none;
+    }
+
+    .color-label {
+      font-size: 0.85rem;
+    }
+
+    .color-input-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .color-input {
+      width: 40px;
+      height: 30px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      padding: 0;
+    }
+
+    .color-hex {
+      width: 80px;
+      padding: 0.4rem;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-primary);
+      font-family: 'Consolas', monospace;
+      font-size: 0.8rem;
+    }
+
+    .settings-footer {
+      padding: 1rem 1.5rem;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .settings-btn-reset {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+
+    .settings-btn-save {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+
+    /* @Mention highlighting */
+    .mention {
+      color: var(--accent);
+      font-weight: 600;
+      background: rgba(59, 130, 246, 0.15);
+      padding: 0.1rem 0.3rem;
+      border-radius: 3px;
+      cursor: pointer;
+    }
+
+    .mention:hover {
+      background: rgba(59, 130, 246, 0.3);
+    }
+
+    /* Mention badge on agent cards */
+    .mention-badge {
+      background: var(--danger);
+      color: white;
+      font-size: 0.6rem;
+      font-weight: 700;
+      min-width: 16px;
+      height: 16px;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 4px;
+      margin-left: 4px;
+      animation: badgePop 0.3s ease;
+    }
+
+    @keyframes badgePop {
+      0% { transform: scale(0); }
+      50% { transform: scale(1.3); }
+      100% { transform: scale(1); }
+    }
+
+    @keyframes mentionFlash {
+      0%, 100% { border-color: var(--border); }
+      25%, 75% { border-color: var(--accent); box-shadow: 0 0 12px rgba(59, 130, 246, 0.4); }
+    }
+
+    .agent-card.mention-flash {
+      animation: mentionFlash 1s ease 2;
+    }
+
+    /* Chat panel tabs */
+    .chat-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .chat-tab {
+      flex: 1;
+      padding: 0.6rem;
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      font-size: 0.8rem;
+      font-weight: 500;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+    }
+
+    .chat-tab:hover {
+      color: var(--text-primary);
+      background: var(--bg-hover);
+    }
+
+    .chat-tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    .chat-tab-content {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .chat-tab-content.active {
+      display: flex;
+    }
+
+    /* Debate panel */
+    .debate-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.5rem;
+    }
+
+    .debate-thread-item {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+      margin-bottom: 0.5rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .debate-thread-item:hover {
+      border-color: var(--accent);
+    }
+
+    .debate-thread-item.open {
+      border-left: 3px solid var(--warning);
+    }
+
+    .debate-thread-item.resolved {
+      border-left: 3px solid var(--success);
+      opacity: 0.7;
+    }
+
+    .debate-topic {
+      font-weight: 600;
+      font-size: 0.85rem;
+      margin-bottom: 0.25rem;
+    }
+
+    .debate-meta {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .debate-status-tag {
+      font-size: 0.6rem;
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .debate-status-tag.open {
+      background: rgba(245, 158, 11, 0.2);
+      color: var(--warning);
+    }
+
+    .debate-status-tag.resolved {
+      background: rgba(16, 185, 129, 0.2);
+      color: var(--success);
+    }
+
+    /* Debate thread view */
+    .debate-thread-view {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .debate-thread-view.active {
+      display: flex;
+    }
+
+    .debate-thread-header {
+      padding: 0.75rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-secondary);
+    }
+
+    .debate-thread-title {
+      font-weight: 600;
+      font-size: 0.9rem;
+      margin-bottom: 0.25rem;
+    }
+
+    .debate-participants {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+
+    .debate-thread-back {
+      background: var(--bg-hover);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .debate-thread-back:hover {
+      color: var(--text-primary);
+    }
+
+    .debate-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.5rem;
+    }
+
+    .debate-msg {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.6rem 0.8rem;
+      margin-bottom: 0.5rem;
+      animation: fadeIn 0.3s ease;
+    }
+
+    .debate-msg-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.3rem;
+    }
+
+    .debate-msg-agent {
+      font-weight: 600;
+      font-size: 0.8rem;
+      color: var(--accent);
+    }
+
+    .debate-msg-stance {
+      font-size: 0.65rem;
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+
+    .debate-msg-stance.agree {
+      background: rgba(16, 185, 129, 0.2);
+      color: var(--success);
+    }
+
+    .debate-msg-stance.refute {
+      background: rgba(239, 68, 68, 0.2);
+      color: var(--danger);
+    }
+
+    .debate-msg-stance.alternative {
+      background: rgba(245, 158, 11, 0.2);
+      color: var(--warning);
+    }
+
+    .debate-msg-stance.propose {
+      background: rgba(139, 92, 246, 0.2);
+      color: var(--purple);
+    }
+
+    .debate-msg-stance.summary {
+      background: rgba(59, 130, 246, 0.2);
+      color: var(--accent);
+    }
+
+    /* Live reading from a real source */
+    .debate-msg-stance.evidence {
+      background: rgba(16, 185, 129, 0.2);
+      color: var(--success);
+    }
+
+    /* Agent has no source, or its source could not be reached */
+    .debate-msg-stance.no-data {
+      background: rgba(148, 163, 184, 0.2);
+      color: var(--text-secondary);
+    }
+
+    .debate-msg-text {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      white-space: pre-wrap;
+    }
+
+    .debate-msg-time {
+      font-size: 0.6rem;
+      color: var(--text-muted);
+      margin-top: 0.25rem;
+      text-align: right;
+    }
+
+    /* Consensus bar */
+    .consensus-bar {
+      display: flex;
+      height: 6px;
+      border-radius: 3px;
+      overflow: hidden;
+      margin: 0.5rem 0;
+      background: var(--bg-hover);
+    }
+
+    /* Share of the bar that is live readings from a real source. */
+    .consensus-evidence {
+      background: var(--success);
+    }
+
+    /* "no data" share — deliberately neutral, never alarm red: an agent with
+       no source has not disagreed with anything, it simply has nothing. */
+    .consensus-nodata {
+      background: var(--text-secondary);
+    }
+
+    .consensus-legend {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      margin: -0.25rem 0 0.4rem;
+    }
+
+    .consensus-alt {
+      background: var(--warning);
+    }
+
+    /* Start debate button */
+    .start-debate-btn {
+      background: linear-gradient(135deg, var(--warning), var(--danger));
+      color: white;
+      border: none;
+      padding: 0.4rem 0.7rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+
+    .start-debate-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
+    }
+
+    /* Debate modal */
+    .debate-modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 1000;
+      display: none;
+      justify-content: center;
+      align-items: center;
+      padding: 2rem;
+    }
+
+    .debate-modal-overlay.active {
+      display: flex;
+    }
+
+    .debate-modal {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 100%;
+      max-width: 450px;
+      overflow: hidden;
+    }
+
+    .debate-modal-header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--bg-secondary);
+    }
+
+    .debate-modal-body {
+      padding: 1.5rem;
+    }
+
+    .debate-modal-body input {
+      width: 100%;
+      padding: 0.6rem 0.8rem;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-size: 0.9rem;
+    }
+
+    .debate-modal-body input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .debate-modal-body label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    .debate-modal-footer {
+      padding: 1rem 1.5rem;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+    }
+
+    /* ============ NEW HEADER LAYOUT ============ */
+    .header {
+      padding: 0 1.5rem;
+      height: 56px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .header-left { display: flex; align-items: center; gap: 1.25rem; }
+    .header-right { display: flex; align-items: center; gap: 0.75rem; }
+
+    .header-stats { display: flex; align-items: center; gap: 0.5rem; }
+    .stat-chip {
+      display: flex; align-items: center; gap: 0.4rem;
+      font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em;
+      color: var(--text-secondary); text-transform: uppercase;
+    }
+    .stat-chip .stat-val { color: var(--text-primary); font-size: 0.85rem; }
+    .stat-sep { color: var(--border); font-size: 0.9rem; }
+
+    .nav-link {
+      background: transparent; border: none; color: var(--text-secondary);
+      padding: 0.35rem 0.75rem; border-radius: 6px; font-size: 0.82rem;
+      font-weight: 500; cursor: pointer; transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .nav-link:hover { background: var(--bg-hover); color: var(--text-primary); }
+    .nav-link.active { background: var(--bg-hover); color: var(--accent); }
+
+    /* Pause button */
+    .pause-btn {
+      padding: 0.3rem 0.85rem; border-radius: 6px; border: 1px solid var(--warning);
+      background: rgba(245,158,11,0.12); color: var(--warning);
+      font-size: 0.75rem; font-weight: 700; cursor: pointer;
+      letter-spacing: 0.04em; transition: all 0.2s; white-space: nowrap;
+    }
+    .pause-btn:hover { background: rgba(245,158,11,0.22); }
+    .pause-btn.paused {
+      border-color: var(--success); background: rgba(16,185,129,0.15);
+      color: var(--success);
+    }
+    .paused-banner {
+      display: none; position: fixed; top: 56px; left: 0; right: 0; z-index: 90;
+      background: rgba(245,158,11,0.18); border-bottom: 2px solid var(--warning);
+      text-align: center; padding: 0.35rem; font-size: 0.8rem; font-weight: 700;
+      color: var(--warning); letter-spacing: 0.08em;
+    }
+    .paused-banner.visible { display: block; }
+
+    /* Profile */
+    .profile-area {
+      display: flex; align-items: center; gap: 0.45rem;
+      cursor: pointer; position: relative; user-select: none;
+      padding: 0.3rem 0.5rem; border-radius: 8px; transition: background 0.15s;
+    }
+    .profile-area:hover { background: var(--bg-hover); }
+    .profile-avatar {
+      width: 30px; height: 30px; border-radius: 50%;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.7rem; font-weight: 700; color: white; flex-shrink: 0;
+    }
+    .profile-name { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
+    .profile-caret { font-size: 0.6rem; color: var(--text-muted); }
+    .profile-dropdown {
+      position: absolute; top: calc(100% + 6px); right: 0;
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 8px; min-width: 160px; z-index: 200;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4); display: none;
+      overflow: hidden;
+    }
+    .profile-dropdown.open { display: block; }
+    .profile-dropdown-item {
+      padding: 0.6rem 1rem; font-size: 0.82rem; cursor: pointer;
+      display: flex; align-items: center; gap: 0.5rem;
+      transition: background 0.15s; color: var(--text-primary);
+    }
+    .profile-dropdown-item:hover { background: var(--bg-hover); }
+
+    /* ============ FILTER PILLS BAR ============ */
+    .filter-pills-bar {
+      background: transparent; border-bottom: 1px solid var(--border);
+      padding: 0.5rem 1rem; display: flex; align-items: center; gap: 0.4rem;
+      overflow-x: auto; flex-shrink: 0;
+    }
+    .filter-pill {
+      display: flex; align-items: center; gap: 0.35rem;
+      padding: 0.3rem 0.75rem; border-radius: 9999px; border: 1px solid var(--border);
+      background: transparent; color: var(--text-secondary);
+      font-size: 0.78rem; font-weight: 500; cursor: pointer;
+      transition: all 0.15s; white-space: nowrap;
+    }
+    .filter-pill:hover { border-color: var(--accent); color: var(--text-primary); }
+    .filter-pill.active {
+      background: var(--accent); border-color: var(--accent);
+      color: white; font-weight: 600;
+    }
+    .filter-pill .pill-count {
+      background: rgba(255,255,255,0.2); border-radius: 9999px;
+      padding: 0.05rem 0.4rem; font-size: 0.7rem; font-weight: 700;
+    }
+    .filter-pill.active .pill-count { background: rgba(255,255,255,0.3); }
+
+    /* ============ PRIORITY BADGES ============ */
+    .priority-badge {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 0.62rem; font-weight: 700; padding: 0.12rem 0.4rem;
+      border-radius: 4px; text-transform: uppercase; letter-spacing: 0.05em;
+      margin-bottom: 0.35rem;
+    }
+    .priority-HIGH   { background: rgba(239,68,68,0.18);  color: #ef4444; border: 1px solid rgba(239,68,68,0.35); }
+    .priority-URGENT { background: rgba(249,115,22,0.18); color: #f97316; border: 1px solid rgba(249,115,22,0.35); }
+    .priority-MEDIUM { background: rgba(245,158,11,0.18); color: #f59e0b; border: 1px solid rgba(245,158,11,0.35); }
+    .priority-LOW    { background: rgba(16,185,129,0.18); color: #10b981; border: 1px solid rgba(16,185,129,0.35); }
+
+    /* ============ IMPROVED TASK CARDS ============ */
+    .task-card-top {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      margin-bottom: 0.25rem;
+    }
+    .task-agent-avatar {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--bg-hover); border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.75rem; flex-shrink: 0;
+    }
+    .task-title { font-size: 0.85rem; font-weight: 500; margin-bottom: 0.3rem; line-height: 1.4; }
+    .task-desc-preview {
+      font-size: 0.73rem; color: var(--text-muted); margin-bottom: 0.4rem;
+      line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .task-footer-row {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-top: 0.35rem;
+    }
+    .task-time { font-size: 0.65rem; color: var(--text-muted); font-family: 'Consolas', monospace; }
+
+    /* ============ NEW TASK BUTTON ============ */
+    .new-task-btn {
+      background: #16a34a; color: white; border: none;
+      padding: 0.4rem 0.9rem; border-radius: 6px; font-size: 0.8rem;
+      font-weight: 600; cursor: pointer; transition: all 0.2s;
+      display: flex; align-items: center; gap: 0.3rem;
+    }
+    .new-task-btn:hover { background: #15803d; transform: translateY(-1px); box-shadow: 0 3px 10px rgba(22,163,74,0.35); }
+
+    /* ============ ACTIVITY TABS ============ */
+    .activity-tabs {
+      display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    }
+    .activity-tab {
+      flex: 1; padding: 0.5rem 0.25rem; background: transparent; border: none;
+      color: var(--text-secondary); font-size: 0.78rem; font-weight: 500;
+      cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.2s;
+    }
+    .activity-tab:hover { color: var(--text-primary); background: var(--bg-hover); }
+    .activity-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* Agent filter chips in activity feed */
+    .agent-filter-bar {
+      display: flex; gap: 0.3rem; padding: 0.4rem 0.5rem;
+      overflow-x: auto; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    }
+    .agent-filter-btn {
+      padding: 0.2rem 0.5rem; border-radius: 9999px; border: 1px solid var(--border);
+      background: transparent; color: var(--text-muted); font-size: 0.68rem;
+      font-weight: 500; cursor: pointer; transition: all 0.15s; white-space: nowrap;
+    }
+    .agent-filter-btn:hover { border-color: var(--accent); color: var(--text-primary); }
+    .agent-filter-btn.active { background: var(--accent); border-color: var(--accent); color: white; }
+
+    /* Colored agent names in activity */
+    .activity-agent { font-weight: 600; }
+
+    /* main-container offset for paused banner */
+    body.is-paused .main-container { height: calc(100vh - 56px - 38px); }
+  </style>
+</head>
+<body>
+  <!-- Paused banner -->
+  <div class="paused-banner" id="pausedBanner">⏸ SYSTEM PAUSED — Agent heartbeats suspended</div>
+
+  <header class="header">
+    <!-- Left: Logo -->
+    <div class="header-left">
+      <div class="logo">
+        <h1 style="font-size:1.15rem;">🎯 Mission Control</h1>
+        <span style="color:var(--text-muted);font-size:0.75rem;white-space:nowrap;">Network Squad Dashboard</span>
+      </div>
+    </div>
+
+    <!-- Right: time + connection + profile -->
+    <div class="header-right">
+      <span class="live-time" id="liveTime">--:--:--</span>
+      <!-- Pause is a real control: it suspends agent heartbeats server-side.
+           If the server refuses it, the button says so instead of pretending. -->
+      <button class="pause-btn" id="pauseBtn" onclick="togglePause()" title="Suspend agent heartbeats">⏸ PAUSE</button>
+      <div class="status-badge disconnected" id="connectionStatus">
+        <span class="status-dot"></span>
+        <span id="connectionText">Connecting...</span>
+      </div>
+      <div class="profile-area" onclick="toggleProfileDropdown(event)">
+        <div class="profile-avatar">VK</div>
+        <span class="profile-name">Vikas</span>
+        <span class="profile-caret">▾</span>
+        <div class="profile-dropdown" id="profileDropdown">
+          <div class="profile-dropdown-item" onclick="openSettings()">⚙️ Settings</div>
+          <div class="profile-dropdown-item" onclick="resetTheme()">🎨 Reset Theme</div>
+          <div class="profile-dropdown-item" style="color:var(--danger);">🚪 Sign Out</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-container">
+    <!-- Left Sidebar - Agents -->
+    <aside class="sidebar">
+      <div class="card" style="flex: 1; overflow: hidden; display: flex; flex-direction: column;">
+        <div class="card-header">
+          <h2>🎖️ Network Squad</h2>
+          <span id="agentCount" style="color: var(--text-muted); font-size: 0.75rem;">0 online</span>
+        </div>
+        <div class="card-body agents-scroll" id="agentsList">
+          <div class="empty-state">Loading agents...</div>
+        </div>
+      </div>
+
+      <div class="card" style="flex: 1;">
+        <div class="card-header">
+          <h2>📁 Recent Files</h2>
+          <button class="browse-btn" onclick="openFileBrowser()">
+            📂 Browse
+          </button>
+        </div>
+        <div class="card-body files-list" id="filesList">
+          <div class="empty-state">No files yet</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Center - Task Board -->
+    <section class="task-board card">
+      <div class="card-header">
+        <h2>📋 Task Board</h2>
+        <button class="new-task-btn" onclick="openAddTaskModal('inbox')">+ New Task</button>
+      </div>
+      <!-- Filter Pills — aligned with task board -->
+      <div class="filter-pills-bar">
+        <button class="filter-pill active" data-filter="all" onclick="filterTasks('all')">All <span class="pill-count" id="pill-all">0</span></button>
+        <button class="filter-pill" data-filter="inbox" onclick="filterTasks('inbox')">📥 Inbox <span class="pill-count" id="pill-inbox">0</span></button>
+        <button class="filter-pill" data-filter="assigned" onclick="filterTasks('assigned')">👤 Assigned <span class="pill-count" id="pill-assigned">0</span></button>
+        <button class="filter-pill" data-filter="active" onclick="filterTasks('active')">🔄 Active <span class="pill-count" id="pill-active">0</span></button>
+        <button class="filter-pill" data-filter="review" onclick="filterTasks('review')">👁️ Review <span class="pill-count" id="pill-review">0</span></button>
+        <button class="filter-pill" data-filter="waiting" onclick="filterTasks('waiting')">⏳ Waiting <span class="pill-count" id="pill-waiting">0</span></button>
+        <button class="filter-pill" data-filter="blocked" onclick="filterTasks('blocked')">🚫 Blocked <span class="pill-count" id="pill-blocked">0</span></button>
+        <button class="filter-pill" data-filter="done" onclick="filterTasks('done')">✅ Done <span class="pill-count" id="pill-done">0</span></button>
+      </div>
+      <div class="card-body">
+        <div class="task-columns">
+          <div class="task-column">
+            <div class="column-header inbox">
+              📥 Inbox
+              <span class="task-count" id="inboxCount">0</span>
+            </div>
+            <div class="column-body" id="inboxTasks"></div>
+          </div>
+          <div class="task-column">
+            <div class="column-header in-progress">
+              🔄 In Progress
+              <span class="task-count" id="inProgressCount">0</span>
+            </div>
+            <div class="column-body" id="inProgressTasks"></div>
+          </div>
+          <div class="task-column">
+            <div class="column-header review">
+              👁️ Review
+              <span class="task-count" id="reviewCount">0</span>
+            </div>
+            <div class="column-body" id="reviewTasks"></div>
+          </div>
+          <div class="task-column">
+            <div class="column-header done">
+              ✅ Done
+              <span class="task-count" id="doneCount">0</span>
+            </div>
+            <div class="column-body" id="doneTasks"></div>
+          </div>
+          <div class="task-column">
+            <div class="column-header waiting">
+              ⏳ Waiting
+              <span class="task-count" id="waitingCount">0</span>
+            </div>
+            <div class="column-body" id="waitingTasks"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Panel -->
+    <aside class="right-panel">
+      <div class="card activity-feed">
+        <div class="card-header">
+          <h2>📡 Live Activity</h2>
+          <span style="color: var(--success); font-size: 0.7rem;">● STREAMING</span>
+        </div>
+        <div class="activity-tabs">
+          <button class="activity-tab active" data-atab="all" onclick="switchActivityTab('all')">All</button>
+          <button class="activity-tab" data-atab="tasks" onclick="switchActivityTab('tasks')">Tasks</button>
+          <button class="activity-tab" data-atab="comments" onclick="switchActivityTab('comments')">Comments</button>
+          <button class="activity-tab" data-atab="decisions" onclick="switchActivityTab('decisions')">Decisions</button>
+        </div>
+        <div class="agent-filter-bar" id="activityAgentFilter">
+          <button class="agent-filter-btn active" data-agent="all" onclick="setActivityAgentFilter('all')">All Agents</button>
+          <button class="agent-filter-btn" data-agent="jarvis" onclick="setActivityAgentFilter('jarvis')">🎖️ Jarvis</button>
+          <button class="agent-filter-btn" data-agent="netops" onclick="setActivityAgentFilter('netops')">🌐 NetOps</button>
+          <button class="agent-filter-btn" data-agent="sentinel" onclick="setActivityAgentFilter('sentinel')">🛡️ Sentinel</button>
+          <button class="agent-filter-btn" data-agent="firewall-pro" onclick="setActivityAgentFilter('firewall-pro')">🔥 FW-Pro</button>
+          <button class="agent-filter-btn" data-agent="incident-handler" onclick="setActivityAgentFilter('incident-handler')">🚨 Incident</button>
+        </div>
+        <div class="activity-list" id="activityList">
+          <div class="empty-state">Waiting for activity...</div>
+        </div>
+      </div>
+
+      <div class="card chat-panel" style="height: 420px;">
+        <div class="chat-tabs">
+          <button class="chat-tab active" data-tab="commands" onclick="switchChatTab('commands')">💬 Commands</button>
+          <button class="chat-tab" data-tab="debates" onclick="switchChatTab('debates')">⚔️ Debates <span id="debateCountBadge" style="display:none" class="mention-badge">0</span></button>
+        </div>
+
+        <!-- Commands tab -->
+        <div class="chat-tab-content active" id="commandsTab">
+          <div class="chat-messages" id="chatMessages"></div>
+          <div class="chat-input-container">
+            <select class="chat-select" id="agentSelect">
+              <option value="jarvis">🎖️ Jarvis</option>
+            </select>
+            <input type="text" class="chat-input" id="commandInput" placeholder="Send command or @Agent message...">
+            <button class="chat-send" id="sendCommand">Send</button>
+          </div>
+        </div>
+
+        <!-- Debates tab -->
+        <div class="chat-tab-content" id="debatesTab">
+          <div style="padding: 0.5rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 0.8rem; color: var(--text-secondary);">Debate Threads</span>
+            <button class="start-debate-btn" onclick="openDebateModal()">⚔️ Start Debate</button>
+          </div>
+          <!-- Debate list view -->
+          <div class="debate-list" id="debateList">
+            <div class="empty-state">No debates yet. Start one!</div>
+          </div>
+          <!-- Debate thread view (hidden by default) -->
+          <div class="debate-thread-view" id="debateThreadView">
+            <div class="debate-thread-header">
+              <button class="debate-thread-back" onclick="showDebateList()">← Back to list</button>
+              <div class="debate-thread-title" id="debateThreadTitle">Topic</div>
+              <div class="debate-participants" id="debateThreadParticipants">Participants</div>
+              <div class="consensus-bar" id="consensusBar">
+                <div class="consensus-evidence" id="consensusEvidence" style="width: 0%"></div>
+                <div class="consensus-nodata" id="consensusNoData" style="width: 0%"></div>
+                <div class="consensus-alt" id="consensusAlt" style="width: 0%"></div>
+              </div>
+              <div class="consensus-legend" id="consensusLegend">Nothing read yet</div>
+            </div>
+            <div class="debate-messages" id="debateMessages"></div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Settings Modal -->
+  <div class="settings-overlay" id="settingsOverlay">
+    <div class="settings-modal">
+      <div class="settings-header">
+        <h2>⚙️ Settings</h2>
+        <button class="settings-close" onclick="closeSettings()">×</button>
+      </div>
+      <div class="settings-body">
+        <div class="settings-section">
+          <h3>Theme Presets</h3>
+          <div class="theme-grid">
+            <div class="theme-option active" data-theme="dark" onclick="applyTheme('dark')">
+              <div class="theme-preview">
+                <span style="background: #0a0e17;"></span>
+                <span style="background: #1a2234;"></span>
+                <span style="background: #3b82f6;"></span>
+              </div>
+              <div class="theme-name">Dark (Default)</div>
+            </div>
+            <div class="theme-option" data-theme="midnight" onclick="applyTheme('midnight')">
+              <div class="theme-preview">
+                <span style="background: #0f0f1a;"></span>
+                <span style="background: #1a1a2e;"></span>
+                <span style="background: #e94560;"></span>
+              </div>
+              <div class="theme-name">Midnight Red</div>
+            </div>
+            <div class="theme-option" data-theme="ocean" onclick="applyTheme('ocean')">
+              <div class="theme-preview">
+                <span style="background: #0a192f;"></span>
+                <span style="background: #112240;"></span>
+                <span style="background: #64ffda;"></span>
+              </div>
+              <div class="theme-name">Ocean</div>
+            </div>
+            <div class="theme-option" data-theme="forest" onclick="applyTheme('forest')">
+              <div class="theme-preview">
+                <span style="background: #0d1117;"></span>
+                <span style="background: #161b22;"></span>
+                <span style="background: #2ea043;"></span>
+              </div>
+              <div class="theme-name">Forest</div>
+            </div>
+            <div class="theme-option" data-theme="purple" onclick="applyTheme('purple')">
+              <div class="theme-preview">
+                <span style="background: #13111c;"></span>
+                <span style="background: #1e1b2e;"></span>
+                <span style="background: #a855f7;"></span>
+              </div>
+              <div class="theme-name">Purple Haze</div>
+            </div>
+            <div class="theme-option" data-theme="light" onclick="applyTheme('light')">
+              <div class="theme-preview">
+                <span style="background: #f8fafc;"></span>
+                <span style="background: #e2e8f0;"></span>
+                <span style="background: #2563eb;"></span>
+              </div>
+              <div class="theme-name">Light</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Custom Colors</h3>
+          <div class="color-row">
+            <span class="color-label">Background</span>
+            <div class="color-input-wrapper">
+              <input type="color" class="color-input" id="colorBgPrimary" value="#0a0e17">
+              <input type="text" class="color-hex" id="hexBgPrimary" value="#0a0e17">
+            </div>
+          </div>
+          <div class="color-row">
+            <span class="color-label">Cards</span>
+            <div class="color-input-wrapper">
+              <input type="color" class="color-input" id="colorBgCard" value="#1a2234">
+              <input type="text" class="color-hex" id="hexBgCard" value="#1a2234">
+            </div>
+          </div>
+          <div class="color-row">
+            <span class="color-label">Accent</span>
+            <div class="color-input-wrapper">
+              <input type="color" class="color-input" id="colorAccent" value="#3b82f6">
+              <input type="text" class="color-hex" id="hexAccent" value="#3b82f6">
+            </div>
+          </div>
+          <div class="color-row">
+            <span class="color-label">Success</span>
+            <div class="color-input-wrapper">
+              <input type="color" class="color-input" id="colorSuccess" value="#10b981">
+              <input type="text" class="color-hex" id="hexSuccess" value="#10b981">
+            </div>
+          </div>
+          <div class="color-row">
+            <span class="color-label">Warning</span>
+            <div class="color-input-wrapper">
+              <input type="color" class="color-input" id="colorWarning" value="#f59e0b">
+              <input type="text" class="color-hex" id="hexWarning" value="#f59e0b">
+            </div>
+          </div>
+          <div class="color-row">
+            <span class="color-label">Danger</span>
+            <div class="color-input-wrapper">
+              <input type="color" class="color-input" id="colorDanger" value="#ef4444">
+              <input type="text" class="color-hex" id="hexDanger" value="#ef4444">
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="settings-footer">
+        <button class="settings-btn-reset" onclick="resetTheme()">Reset to Default</button>
+        <button class="settings-btn-save" onclick="saveSettings()">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Task Modal -->
+  <div class="task-modal-overlay" id="taskModalOverlay">
+    <div class="task-modal">
+      <div class="task-modal-header">
+        <h3 id="taskModalTitle">📝 New Task</h3>
+        <button class="task-modal-close" onclick="closeTaskModal()">×</button>
+      </div>
+      <div class="task-modal-body">
+        <div class="task-form-group">
+          <label>Task Title</label>
+          <input type="text" id="taskTitleInput" placeholder="What needs to be done?">
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;">
+          <div class="task-form-group">
+            <label>Priority</label>
+            <select id="taskPrioritySelect">
+              <option value="MEDIUM">🟡 Medium</option>
+              <option value="HIGH">🔴 High</option>
+              <option value="URGENT">🟠 Urgent</option>
+              <option value="LOW">🟢 Low</option>
+            </select>
+          </div>
+          <div class="task-form-group">
+            <label>Assign to Agent</label>
+            <select id="taskAgentSelect">
+              <option value="">-- No Agent --</option>
+            </select>
+          </div>
+        </div>
+        <div class="task-form-group">
+          <label>Description</label>
+          <input type="text" id="taskDescInput" placeholder="Short description...">
+        </div>
+        <div class="task-form-group">
+          <label>Column</label>
+          <select id="taskColumnSelect">
+            <option value="inbox">📥 Inbox</option>
+            <option value="inProgress">🔄 In Progress</option>
+            <option value="review">👁️ Review</option>
+            <option value="done">✅ Done</option>
+            <option value="waiting">⏳ Waiting</option>
+          </select>
+        </div>
+        <div class="task-form-group">
+          <label>Notes (optional)</label>
+          <textarea id="taskNotesInput" placeholder="Additional details..."></textarea>
+        </div>
+      </div>
+      <div class="task-modal-footer">
+        <button class="task-modal-btn secondary" onclick="closeTaskModal()">Cancel</button>
+        <button class="task-modal-btn danger" id="deleteTaskBtn" onclick="deleteCurrentTask()" style="display:none;">Delete</button>
+        <button class="task-modal-btn primary" onclick="saveTask()">Save Task</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- File Browser Modal -->
+  <div class="file-browser-overlay" id="fileBrowserOverlay">
+    <div class="file-browser">
+      <div class="file-browser-header">
+        <h2>📂 Agent Workspace Browser</h2>
+        <button class="file-browser-close" onclick="closeFileBrowser()">×</button>
+      </div>
+      <div class="file-browser-path" id="browserPath">
+        <span>Loading...</span>
+      </div>
+      <div class="file-browser-content">
+        <div class="file-list" id="fileListPanel">
+          <div class="empty-state">Loading...</div>
+        </div>
+        <div class="file-preview">
+          <div class="file-preview-header" id="previewHeader" style="display: none;">
+            <span class="file-preview-name" id="previewName">Select a file</span>
+            <div class="file-preview-actions">
+              <button class="file-preview-btn" id="downloadBtn" onclick="downloadCurrentFile()">
+                ⬇️ Download
+              </button>
+            </div>
+          </div>
+          <div class="file-preview-content" id="previewContent">
+            <div class="file-preview-empty">
+              👈 Select a file to preview
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Debate Modal -->
+  <div class="debate-modal-overlay" id="debateModalOverlay">
+    <div class="debate-modal">
+      <div class="debate-modal-header">
+        <h3 style="font-size: 1rem;">⚔️ Start New Debate</h3>
+        <button class="task-modal-close" onclick="closeDebateModal()">×</button>
+      </div>
+      <div class="debate-modal-body">
+        <label>Debate Topic</label>
+        <input type="text" id="debateTopicInput" placeholder="e.g., Should we upgrade FortiOS to 7.4?">
+        <div style="margin-top: 0.75rem; font-size: 0.75rem; color: var(--text-muted);">
+          Jarvis will moderate. Relevant agents will be auto-invited based on the topic.
+        </div>
+      </div>
+      <div class="debate-modal-footer">
+        <button class="task-modal-btn secondary" onclick="closeDebateModal()">Cancel</button>
+        <button class="task-modal-btn primary" onclick="submitDebate()">Start Debate</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // WebSocket connection
+    let ws = null;
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 10;
+    const reconnectDelay = 3000;
+
+    // State
+    let agents = [];
+    let tasks = { inbox: [], inProgress: [], review: [], done: [], waiting: [] };
+    let files = [];
+    let activities = [];
+    let debates = [];
+    let mentionCounts = {};
+    let viewingDebateId = null;
+    let agentMessages = {}; // per-agent message history
+
+    // New state
+    let isPaused = false;
+    let activeFilter = 'all';
+    let activityTab = 'all';
+    let activityAgentFilter = 'all';
+
+    // DOM Elements
+    const connectionStatus = document.getElementById('connectionStatus');
+    const connectionText = document.getElementById('connectionText');
+    const liveTime = document.getElementById('liveTime');
+    const agentsList = document.getElementById('agentsList');
+    const agentCount = document.getElementById('agentCount');
+    const filesList = document.getElementById('filesList');
+    const activityList = document.getElementById('activityList');
+    const chatMessages = document.getElementById('chatMessages');
+    const commandInput = document.getElementById('commandInput');
+    const sendCommand = document.getElementById('sendCommand');
+    const agentSelect = document.getElementById('agentSelect');
+
+    // Connect to WebSocket
+    function connect() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${window.location.host}`);
+
+      ws.onopen = () => {
+        console.log('[WS] Connected');
+        reconnectAttempts = 0;
+        updateConnectionStatus(true);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          handleMessage(message);
+        } catch (e) {
+          console.error('[WS] Parse error:', e);
+        }
+      };
+
+      ws.onclose = () => {
+        console.log('[WS] Disconnected');
+        updateConnectionStatus(false);
+        attemptReconnect();
+      };
+
+      ws.onerror = (error) => {
+        console.error('[WS] Error:', error);
+      };
+    }
+
+    function attemptReconnect() {
+      if (reconnectAttempts < maxReconnectAttempts) {
+        reconnectAttempts++;
+        console.log(`[WS] Reconnecting... (${reconnectAttempts}/${maxReconnectAttempts})`);
+        setTimeout(connect, reconnectDelay);
+      }
+    }
+
+    function updateConnectionStatus(connected) {
+      if (connected) {
+        connectionStatus.className = 'status-badge connected';
+        connectionText.textContent = 'Connected';
+      } else {
+        connectionStatus.className = 'status-badge disconnected';
+        connectionText.textContent = 'Disconnected';
+      }
+    }
+
+    // Handle incoming messages
+    function handleMessage(message) {
+      const { type, data, timestamp } = message;
+
+      switch (type) {
+        case 'init':
+          agents = data.agents || [];
+          tasks = data.tasks || tasks;
+          files = data.files || [];
+          activities = data.activity || [];
+          debates = data.debates || [];
+          mentionCounts = data.mentionCounts || {};
+          isPaused = data.paused || false;
+          renderAll();
+          renderDebateList();
+          applyPauseState();
+          updateHeaderStats();
+          break;
+
+        case 'pause_state':
+          isPaused = data.paused;
+          applyPauseState();
+          break;
+
+        case 'agents_updated':
+          if (data && data.agents) {
+            agents = data.agents;
+            mentionCounts = data.mentionCounts || mentionCounts;
+          } else {
+            agents = data;
+          }
+          renderAgents();
+          break;
+
+        case 'agent_status':
+          const idx = agents.findIndex(a => a.id === data.id);
+          if (idx >= 0) {
+            agents[idx] = data;
+          } else {
+            agents.push(data);
+          }
+          renderAgents();
+          break;
+
+        case 'tasks_updated':
+          tasks = data;
+          renderTasks();
+          break;
+
+        case 'files_updated':
+          files = data;
+          renderFiles();
+          break;
+
+        case 'file_added':
+          addChatMessage(`📁 New file: ${data.name}`, 'incoming', 'System', '📁');
+          break;
+
+        case 'activity_new':
+          activities.unshift(data);
+          if (activities.length > 50) activities.pop();
+          renderActivity(data, true);
+          break;
+
+        case 'system_error':
+          // The server hit a problem (a file it could not write, a job that
+          // failed). Say so here instead of dying quietly in a terminal.
+          addChatMessage(`⚠️ ${data.message}`, 'incoming', 'System', '⚠️', timestamp);
+          break;
+
+        case 'command_sent':
+          // Handled by chat_message now
+          break;
+
+        case 'chat_message':
+          if (data.type === 'outgoing') {
+            addChatMessage(data.text, 'outgoing', null, null, timestamp, null, data);
+          } else {
+            addChatMessage(data.text, 'incoming', data.agentName, data.agentIcon, timestamp, data.agent, data);
+          }
+          break;
+
+        case 'mention':
+          mentionCounts = data.mentionCounts || mentionCounts;
+          flashAgentCard(data.to);
+          renderAgents();
+          addChatMessage(
+            `📨 ${data.fromIcon} ${data.fromName} → ${data.toIcon} ${data.toName}: ${data.message}`,
+            'incoming', data.fromName, data.fromIcon, timestamp, data.from
+          );
+          break;
+
+        case 'debate_new':
+          debates.push(data);
+          renderDebateList();
+          updateDebateCountBadge();
+          // Auto-switch to debates tab
+          switchChatTab('debates');
+          // Auto-open the new debate
+          viewDebateThread(data.id);
+          break;
+
+        case 'debate_message':
+          // Update the thread in local state
+          const debate = debates.find(d => d.id === data.debateId);
+          if (debate) {
+            debate.messages.push(data.message);
+            debate.updated = data.message.timestamp;
+          }
+          // If viewing this debate, render the new message
+          if (viewingDebateId === data.debateId) {
+            appendDebateMessage(data.message);
+            updateConsensusBar(data.debateId);
+          }
+          break;
+
+        case 'debate_resolved':
+          const resolvedIdx = debates.findIndex(d => d.id === data.debateId);
+          if (resolvedIdx >= 0) {
+            debates[resolvedIdx] = data.thread;
+          }
+          renderDebateList();
+          if (viewingDebateId === data.debateId) {
+            updateConsensusBar(data.debateId);
+          }
+          break;
+      }
+    }
+
+    // Render functions
+    function renderAll() {
+      renderAgents();
+      renderTasks();
+      renderFiles();
+      renderActivities();
+    }
+
+    function renderAgents() {
+      if (agents.length === 0) {
+        agentsList.innerHTML = '<div class="empty-state">No agents registered</div>';
+        agentCount.textContent = '0 online';
+        updateHeaderStats();
+        return;
+      }
+
+      const online = agents.filter(a => a.status !== 'offline').length;
+      agentCount.textContent = `${online}/${agents.length} online`;
+      updateHeaderStats();
+
+      agentsList.innerHTML = agents.map(agent => {
+        const statusClass = agent.status || 'idle';
+        const statusEmoji = statusClass === 'active' ? '🟢' : statusClass === 'idle' ? '🟡' : '🔴';
+        const isLead = agent.role === 'squad-lead';
+        const mCount = mentionCounts[agent.id] || 0;
+        const badgeHtml = mCount > 0 ? `<span class="mention-badge">${mCount}</span>` : '';
+
+        return `
+          <div class="agent-card ${isLead ? 'squad-lead' : ''}" id="agent-card-${escapeHtml(agent.id)}" data-agent-id="${escapeHtml(agent.id)}" onclick="openAgentChat(this.dataset.agentId)" style="cursor:pointer;">
+            <div class="agent-header">
+              <span class="agent-name">
+                <span class="agent-icon">${escapeHtml(agent.icon || '🤖')}</span>
+                ${escapeHtml(agent.name)}
+                ${isLead ? '<span class="agent-role-tag">LEAD</span>' : ''}
+                ${badgeHtml}
+              </span>
+              <span class="agent-status ${escapeHtml(statusClass)}">
+                ${statusEmoji} ${escapeHtml(statusClass)}
+              </span>
+            </div>
+            <div class="agent-desc" title="${escapeHtml(agent.description || '')}">${escapeHtml(agent.description || 'No description')}</div>
+            <div class="agent-action" title="${escapeHtml(agent.lastAction || '')}">${escapeHtml(agent.lastAction || 'No recent activity')}</div>
+          </div>
+        `;
+      }).join('');
+
+      // Update command center agent select
+      agentSelect.innerHTML = agents.map(a =>
+        h`<option value="${a.id}">${(a.icon || '🤖') + ' ' + a.name}</option>`
+      ).join('');
+
+      // Update task modal agent select
+      const taskAgentEl = document.getElementById('taskAgentSelect');
+      if (taskAgentEl) {
+        taskAgentEl.innerHTML = '<option value="">-- No Agent --</option>' +
+          agents.map(a => h`<option value="${a.name}">${(a.icon || '🤖') + ' ' + a.name}</option>`).join('');
+      }
+    }
+
+    function getPriorityIcon(priority) {
+      const icons = { HIGH: '🔴', URGENT: '🟠', MEDIUM: '🟡', LOW: '🟢' };
+      return icons[priority] || '🟡';
+    }
+
+    function timeAgo(isoString) {
+      if (!isoString) return '';
+      const diff = Date.now() - new Date(isoString).getTime();
+      const mins = Math.floor(diff / 60000);
+      if (mins < 1) return 'just now';
+      if (mins < 60) return `${mins}m ago`;
+      const hours = Math.floor(mins / 60);
+      if (hours < 24) return `${hours}h ago`;
+      return `${Math.floor(hours / 24)}d ago`;
+    }
+
+    function getAgentIcon(agentName) {
+      const a = agents.find(ag => ag.name === agentName);
+      return a ? a.icon : '🤖';
+    }
+
+    function renderTasks() {
+      const columns = ['inbox', 'inProgress', 'review', 'done', 'waiting'];
+      const columnIds = {
+        inbox: 'inboxTasks',
+        inProgress: 'inProgressTasks',
+        review: 'reviewTasks',
+        done: 'doneTasks',
+        waiting: 'waitingTasks'
+      };
+      const countIds = {
+        inbox: 'inboxCount',
+        inProgress: 'inProgressCount',
+        review: 'reviewCount',
+        done: 'doneCount',
+        waiting: 'waitingCount'
+      };
+      const columnLabels = {
+        inbox: '📥 Inbox',
+        inProgress: '🔄 Progress',
+        review: '👁️ Review',
+        done: '✅ Done',
+        waiting: '⏳ Waiting'
+      };
+
+      // Update filter pill counts
+      const allCount = columns.reduce((n, c) => n + (tasks[c] || []).length, 0);
+      const assignedCount = columns.reduce((n, c) => n + (tasks[c] || []).filter(t => t.agent).length, 0);
+      document.getElementById('pill-all').textContent = allCount;
+      document.getElementById('pill-inbox').textContent = (tasks.inbox || []).length;
+      document.getElementById('pill-assigned').textContent = assignedCount;
+      document.getElementById('pill-active').textContent = (tasks.inProgress || []).length;
+      document.getElementById('pill-review').textContent = (tasks.review || []).length;
+      document.getElementById('pill-waiting').textContent = (tasks.waiting || []).length;
+      document.getElementById('pill-blocked').textContent = 0;
+      document.getElementById('pill-done').textContent = (tasks.done || []).length;
+
+      updateHeaderStats();
+
+      // Determine column visibility for current filter
+      const filterColMap = {
+        all: null,
+        inbox: 'inbox',
+        active: 'inProgress',
+        review: 'review',
+        waiting: 'waiting',
+        blocked: 'waiting',
+        done: 'done',
+        assigned: null
+      };
+      const showOnlyCol = filterColMap[activeFilter];
+
+      columns.forEach(col => {
+        const container = document.getElementById(columnIds[col]);
+        const countEl = document.getElementById(countIds[col]);
+        const colEl = container ? container.closest('.task-column') : null;
+
+        let taskList = (tasks[col] || []).slice();
+
+        // Apply filter
+        if (activeFilter === 'assigned') {
+          taskList = taskList.filter(t => t.agent);
+        }
+        if (showOnlyCol && col !== showOnlyCol) {
+          if (colEl) colEl.style.display = 'none';
+          return;
+        }
+        if (colEl) colEl.style.display = '';
+
+        countEl.textContent = taskList.length;
+        const otherColumns = columns.filter(c => c !== col);
+
+        let html = '';
+        if (taskList.length === 0) {
+          html += '<div class="empty-state" style="padding: 1rem;">No tasks</div>';
+        } else {
+          taskList.forEach((task, idx) => {
+            const priority = task.priority || 'MEDIUM';
+            const agentIcon = task.agent ? getAgentIcon(task.agent) : '';
+            const realIdx = (tasks[col] || []).indexOf(task);
+            const taskData = encodeURIComponent(JSON.stringify({...task, column: col, index: realIdx}));
+            html += `
+              <div class="task-item" data-task="${escapeHtml(taskData)}" onclick="openEditTaskModal(this.dataset.task)">
+                <div class="task-card-top">
+                  <span class="priority-badge priority-${escapeHtml(priority)}">${getPriorityIcon(priority)} ${escapeHtml(priority)}</span>
+                  ${task.agent ? h`<span class="task-agent-avatar" title="${task.agent}">${agentIcon}</span>` : ''}
+                </div>
+                <div class="task-title">${escapeHtml(task.title)}</div>
+                ${task.description ? `<div class="task-desc-preview">${escapeHtml(task.description)}</div>` : ''}
+                <div class="task-footer-row">
+                  ${task.agent ? h`<span class="task-agent-tag">${task.agent}</span>` : '<span></span>'}
+                  <span class="task-time">${task.createdAt ? timeAgo(task.createdAt) : ''}</span>
+                </div>
+                <div class="task-actions" onclick="event.stopPropagation()">
+                  ${otherColumns.map(targetCol => `
+                    <button class="task-move-btn" onclick="moveTask('${col}', ${realIdx}, '${targetCol}')" title="Move to ${columnLabels[targetCol]}">
+                      → ${columnLabels[targetCol]}
+                    </button>
+                  `).join('')}
+                </div>
+              </div>
+            `;
+          });
+        }
+
+        container.innerHTML = html;
+      });
+    }
+
+    function renderFiles() {
+      if (files.length === 0) {
+        filesList.innerHTML = '<div class="empty-state">No files yet</div>';
+        return;
+      }
+
+      filesList.innerHTML = files.slice(0, 10).map(file => {
+        const icon = getFileIcon(file.type);
+        return `
+          <div class="file-item">
+            <div class="file-info">
+              <span class="file-icon">${icon}</span>
+              <span class="file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+            </div>
+            <button class="file-download" data-name="${escapeHtml(file.name)}" onclick="downloadFile(this.dataset.name)">
+              Download
+            </button>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderActivities() {
+      if (activities.length === 0) {
+        activityList.innerHTML = '<div class="empty-state">Waiting for activity...</div>';
+        return;
+      }
+      renderActivitiesFiltered();
+    }
+
+    function renderActivity(activity, isNew = false) {
+      // Note: activity_new handler already calls activities.unshift() before calling here
+      renderActivitiesFiltered();
+    }
+
+    function createActivityHTML(activity, isNew = false) {
+      const color = getAgentColor(activity.agent);
+      const category = classifyActivity(activity);
+      const categoryIcon = category === 'decisions' ? '⚖️' : category === 'comments' ? '💬' : '📋';
+      return `
+        <div class="activity-item ${isNew ? 'new-item' : ''}">
+          <div class="activity-header">
+            <span class="activity-agent" style="color:${escapeHtml(color)};">${categoryIcon} ${escapeHtml(activity.agent)}</span>
+            <span class="activity-time">${escapeHtml(formatTime(activity.timestamp))}</span>
+          </div>
+          <div class="activity-message">${escapeHtml(activity.message)}</div>
+        </div>
+      `;
+    }
+
+    // Helper functions
+    function formatTime(isoString) {
+      if (!isoString) return '--:--:--';
+      try {
+        const date = new Date(isoString);
+        return date.toLocaleTimeString('en-US', { hour12: false });
+      } catch {
+        return isoString;
+      }
+    }
+
+    function getFileIcon(type) {
+      const icons = {
+        md: '📝',
+        json: '📋',
+        txt: '📄',
+        log: '📜',
+        csv: '📊',
+        pdf: '📕',
+        html: '🌐'
+      };
+      return icons[type] || '📁';
+    }
+
+    function downloadFile(filename) {
+      window.open(`/api/files/download/${encodeURIComponent(filename)}`, '_blank');
+    }
+
+    // Highlight @mentions in text (returns HTML string)
+    function highlightMentions(text) {
+      const escaped = escapeHtml(text);
+      return escaped.replace(/@([A-Za-z][\w-]*)/g, '<span class="mention">@$1</span>');
+    }
+
+    // Which question the last rendered chat line belonged to. A reply whose
+    // question differs from the line above it gets the question quoted in its
+    // header — so a slow answer that lands under a later question can never be
+    // read as the answer to that later question.
+    let lastRenderedRequestId = null;
+
+    function addChatMessage(text, type, agentName = null, agentIcon = null, timestamp = null, agentId = null, meta = null) {
+      const ts = timestamp ? new Date(timestamp) : new Date();
+      const timeStr = ts.toLocaleTimeString('en-US', { hour12: false });
+
+      // Store in per-agent history
+      if (agentId) {
+        if (!agentMessages[agentId]) agentMessages[agentId] = [];
+        agentMessages[agentId].push({ text, type, agentName, agentIcon, timestamp: ts.toISOString(), timeStr });
+        // If agent chat modal is open for this agent, append live
+        const modal = document.getElementById('agentChatModal');
+        if (modal && modal.dataset.agentId === agentId) {
+          appendAgentChatLine({ text, type, agentName, agentIcon, timeStr });
+        }
+      }
+
+      const div = document.createElement('div');
+      div.className = `chat-message ${type}`;
+
+      const requestId = meta && meta.requestId ? meta.requestId : null;
+      if (requestId) div.dataset.requestId = requestId;
+
+      // Slack-style quote of the question this reply answers.
+      const askedQuestion = meta && meta.inReplyTo ? meta.inReplyTo : null;
+      if (type === 'incoming' && askedQuestion && requestId && requestId !== lastRenderedRequestId) {
+        const quote = document.createElement('div');
+        quote.className = 'reply-quote';
+        const who = meta.inReplyToAgent ? ` to ${meta.inReplyToAgent}` : '';
+        quote.textContent = `↩ answering your question${who}: "${askedQuestion.length > 120 ? askedQuestion.slice(0, 120) + '…' : askedQuestion}"`;
+        div.appendChild(quote);
+      }
+      lastRenderedRequestId = requestId;
+
+      if (type === 'incoming' && agentName) {
+        const header = document.createElement('div');
+        header.style.cssText = 'font-weight: 600; margin-bottom: 4px; color: var(--accent);';
+        header.textContent = `${agentIcon || '🤖'} ${agentName}`;
+        div.appendChild(header);
+      }
+
+      const content = document.createElement('div');
+      content.style.whiteSpace = 'pre-wrap';
+      content.innerHTML = highlightMentions(text);
+      div.appendChild(content);
+
+      const time = document.createElement('div');
+      time.style.cssText = 'font-size: 0.65rem; color: var(--text-muted); margin-top: 4px; text-align: right;';
+      time.textContent = timeStr;
+      div.appendChild(time);
+
+      chatMessages.appendChild(div);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    // Send command
+    function sendAgentCommand() {
+      const agent = agentSelect.value;
+      const command = commandInput.value.trim();
+
+      if (!command) return;
+
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'command',
+          data: { agent, command }
+        }));
+      } else {
+        // Fallback to REST API
+        fetch('/api/command', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent, command })
+        });
+      }
+
+      commandInput.value = '';
+    }
+
+    // Event listeners
+    sendCommand.addEventListener('click', sendAgentCommand);
+    commandInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') sendAgentCommand();
+    });
+
+    // Live clock
+    function updateClock() {
+      liveTime.textContent = new Date().toLocaleTimeString('en-US', { hour12: false });
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // ============ TASK MANAGEMENT ============
+    let editingTask = null;
+
+    const taskModalOverlay = document.getElementById('taskModalOverlay');
+    const taskModalTitle = document.getElementById('taskModalTitle');
+    const taskTitleInput = document.getElementById('taskTitleInput');
+    const taskAgentSelect = document.getElementById('taskAgentSelect');
+    const taskColumnSelect = document.getElementById('taskColumnSelect');
+    const taskNotesInput = document.getElementById('taskNotesInput');
+    const deleteTaskBtn = document.getElementById('deleteTaskBtn');
+
+    function openAddTaskModal(column) {
+      editingTask = null;
+      taskModalTitle.textContent = '+ New Task';
+      taskTitleInput.value = '';
+      document.getElementById('taskPrioritySelect').value = 'MEDIUM';
+      document.getElementById('taskDescInput').value = '';
+      taskAgentSelect.value = '';
+      taskColumnSelect.value = column || 'inbox';
+      taskNotesInput.value = '';
+      deleteTaskBtn.style.display = 'none';
+      taskModalOverlay.classList.add('active');
+      taskTitleInput.focus();
+    }
+
+    function openEditTaskModal(encodedTask) {
+      const task = JSON.parse(decodeURIComponent(encodedTask));
+      editingTask = task;
+      taskModalTitle.textContent = '✏️ Edit Task';
+      taskTitleInput.value = task.title || '';
+      document.getElementById('taskPrioritySelect').value = task.priority || 'MEDIUM';
+      document.getElementById('taskDescInput').value = task.description || '';
+      taskAgentSelect.value = task.agent || '';
+      taskColumnSelect.value = task.column || 'inbox';
+      taskNotesInput.value = task.notes || '';
+      deleteTaskBtn.style.display = 'inline-block';
+      taskModalOverlay.classList.add('active');
+      taskTitleInput.focus();
+    }
+
+    function closeTaskModal() {
+      taskModalOverlay.classList.remove('active');
+      editingTask = null;
+    }
+
+    taskModalOverlay.addEventListener('click', (e) => {
+      if (e.target === taskModalOverlay) closeTaskModal();
+    });
+
+    async function saveTask() {
+      const title = taskTitleInput.value.trim();
+      if (!title) {
+        alert('Please enter a task title');
+        return;
+      }
+
+      const agent = taskAgentSelect.value;
+      const column = taskColumnSelect.value;
+      const notes = taskNotesInput.value.trim();
+      const priority = document.getElementById('taskPrioritySelect').value || 'MEDIUM';
+      const description = document.getElementById('taskDescInput').value.trim();
+
+      if (editingTask) {
+        // Remove from old column
+        const oldColumn = editingTask.column;
+        const oldIndex = editingTask.index;
+        tasks[oldColumn].splice(oldIndex, 1);
+      }
+
+      // Add to new column
+      tasks[column].push({
+        id: `task-${Date.now()}`,
+        title,
+        agent: agent || null,
+        notes,
+        priority,
+        description,
+        createdAt: editingTask ? (editingTask.createdAt || new Date().toISOString()) : new Date().toISOString(),
+        completed: column === 'done'
+      });
+
+      await saveTasksToFile();
+      closeTaskModal();
+      renderTasks();
+    }
+
+    async function deleteCurrentTask() {
+      if (!editingTask) return;
+      if (!confirm('Delete this task?')) return;
+
+      const column = editingTask.column;
+      const index = editingTask.index;
+      tasks[column].splice(index, 1);
+
+      await saveTasksToFile();
+      closeTaskModal();
+      renderTasks();
+    }
+
+    async function moveTask(fromColumn, index, toColumn) {
+      const task = tasks[fromColumn][index];
+      tasks[fromColumn].splice(index, 1);
+      task.completed = toColumn === 'done';
+      tasks[toColumn].push(task);
+
+      await saveTasksToFile();
+      renderTasks();
+
+      // Log the move
+      const agentName = task.agent || 'Unassigned';
+      addChatMessage(`📋 Task moved: "${task.title}" → ${toColumn}`, 'incoming', 'System', '📋');
+    }
+
+    async function saveTasksToFile() {
+      try {
+        await fetch('/api/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(tasks)
+        });
+      } catch (e) {
+        console.error('Failed to save tasks:', e);
+      }
+    }
+
+    // ============ FILE BROWSER ============
+    let currentBrowsePath = '';
+    let currentFilePath = '';
+
+    const fileBrowserOverlay = document.getElementById('fileBrowserOverlay');
+    const browserPath = document.getElementById('browserPath');
+    const fileListPanel = document.getElementById('fileListPanel');
+    const previewHeader = document.getElementById('previewHeader');
+    const previewName = document.getElementById('previewName');
+    const previewContent = document.getElementById('previewContent');
+
+    function openFileBrowser() {
+      fileBrowserOverlay.classList.add('active');
+      browseTo(''); // Start at root
+    }
+
+    function closeFileBrowser() {
+      fileBrowserOverlay.classList.remove('active');
+    }
+
+    // Close on overlay click
+    fileBrowserOverlay.addEventListener('click', (e) => {
+      if (e.target === fileBrowserOverlay) {
+        closeFileBrowser();
+      }
+    });
+
+    // Close on Escape key
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && fileBrowserOverlay.classList.contains('active')) {
+        closeFileBrowser();
+      }
+    });
+
+    async function browseTo(pathParam) {
+      try {
+        const url = pathParam ? `/api/browse?path=${encodeURIComponent(pathParam)}` : '/api/browse';
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.error) {
+          fileListPanel.innerHTML = h`<div class="empty-state">Error: ${data.error}</div>`;
+          return;
+        }
+
+        currentBrowsePath = data.path;
+        renderBreadcrumb(data);
+        renderFileList(data);
+
+        // Clear preview
+        previewHeader.style.display = 'none';
+        previewContent.innerHTML = '<div class="file-preview-empty">👈 Select a file to preview</div>';
+      } catch (e) {
+        fileListPanel.innerHTML = `<div class="empty-state">Error loading files</div>`;
+      }
+    }
+
+    function renderBreadcrumb(data) {
+      const root = data.root || data.path;
+      const relativePath = data.path.replace(root, '').replace(/^[\\/]/, '');
+      const segments = relativePath ? relativePath.split(/[\\/]/) : [];
+
+      let html = `<span class="path-segment" data-path="" onclick="browseTo(this.dataset.path)">🏠 agents</span>`;
+
+      let cumulativePath = root;
+      segments.forEach((segment, idx) => {
+        cumulativePath = cumulativePath + '\\' + segment;
+        // Paths and names go in a data attribute, not inside a quoted onclick
+        // string — a file named with a quote can no longer break out and run.
+        html += `<span class="path-separator">/</span>`;
+        html += h`<span class="path-segment" data-path="${cumulativePath}" onclick="browseTo(this.dataset.path)">${segment}</span>`;
+      });
+
+      browserPath.innerHTML = html;
+    }
+
+    function renderFileList(data) {
+      let html = '';
+
+      // Add parent directory link
+      if (data.parent) {
+        html += h`
+          <div class="file-list-item parent" data-path="${data.parent}" onclick="browseTo(this.dataset.path)">
+            <span class="file-list-icon">⬆️</span>
+            <span class="file-list-name">..</span>
+            <span class="file-list-meta">Parent folder</span>
+          </div>
+        `;
+      }
+
+      if (data.items && data.items.length > 0) {
+        data.items.forEach(item => {
+          const icon = item.isDirectory ? '📁' : getFileIconForBrowser(item.name);
+          const size = item.isDirectory ? '' : formatFileSize(item.size);
+          const action = item.isDirectory ? 'browseTo' : 'previewFile';
+
+          html += `
+            <div class="file-list-item" data-path="${escapeHtml(item.path)}" onclick="${action}(this.dataset.path, event)">
+              <span class="file-list-icon">${icon}</span>
+              <span class="file-list-name">${escapeHtml(item.name)}</span>
+              <span class="file-list-meta">${escapeHtml(size)}</span>
+            </div>
+          `;
+        });
+      } else if (!data.parent) {
+        html = '<div class="empty-state">Empty folder</div>';
+      }
+
+      fileListPanel.innerHTML = html || '<div class="empty-state">Empty folder</div>';
+    }
+
+    async function previewFile(filePath, evt) {
+      try {
+        currentFilePath = filePath;
+
+        // Highlight selected file
+        const clicked = (evt || window.event)?.currentTarget;
+        document.querySelectorAll('.file-list-item').forEach(el => el.classList.remove('active'));
+        if (clicked) clicked.classList.add('active');
+
+        const response = await fetch(`/api/browse?path=${encodeURIComponent(filePath)}`);
+        const data = await response.json();
+
+        if (data.error) {
+          previewContent.innerHTML = h`<div class="file-preview-empty">Error: ${data.error}</div>`;
+          return;
+        }
+
+        previewHeader.style.display = 'flex';
+        previewName.textContent = `${getFileIconForBrowser(data.name)} ${data.name}`;
+
+        if (data.binary) {
+          previewContent.innerHTML = `
+            <div class="file-preview-empty">
+              📦 Binary file (${formatFileSize(data.size)})<br><br>
+              Click Download to save this file.
+            </div>
+          `;
+        } else {
+          // Escape HTML and display content
+          const escaped = escapeHtml(data.content);
+          previewContent.innerHTML = escaped;
+        }
+      } catch (e) {
+        previewContent.innerHTML = `<div class="file-preview-empty">Error loading file</div>`;
+      }
+    }
+
+    function downloadCurrentFile() {
+      if (currentFilePath) {
+        window.open(`/api/browse/download?path=${encodeURIComponent(currentFilePath)}`, '_blank');
+      }
+    }
+
+    function getFileIconForBrowser(filename) {
+      const ext = filename.split('.').pop().toLowerCase();
+      const icons = {
+        md: '📝',
+        json: '📋',
+        txt: '📄',
+        log: '📜',
+        csv: '📊',
+        pdf: '📕',
+        html: '🌐',
+        js: '🟨',
+        py: '🐍',
+        yaml: '⚙️',
+        yml: '⚙️',
+        sh: '🔧',
+        bat: '🔧',
+        cfg: '⚙️',
+        conf: '⚙️',
+        ini: '⚙️'
+      };
+      return icons[ext] || '📄';
+    }
+
+    function formatFileSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    // ============ ESCAPING — one helper, used at every HTML sink ============
+    // Anything that came from the server (agent names, activity lines, task
+    // titles, file names, error text) is treated as text, never as markup.
+    // Quotes are escaped too, so the same helper is safe inside an attribute.
+    const HTML_ESCAPES = {
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;'
+    };
+
+    function escapeHtml(text) {
+      if (text === null || text === undefined) return '';
+      return String(text).replace(/[&<>"'`]/g, (c) => HTML_ESCAPES[c]);
+    }
+
+    // Tagged template: h`<div>${untrusted}</div>` escapes every ${...} slot.
+    // Use this for new markup so the next panel is safe by construction.
+    function h(strings, ...values) {
+      return strings.reduce(
+        (out, str, i) => out + str + (i < values.length ? escapeHtml(values[i]) : ''),
+        ''
+      );
+    }
+
+    // ============ SETTINGS & THEMES ============
+    const themes = {
+      dark: {
+        '--bg-primary': '#0a0e17',
+        '--bg-secondary': '#111827',
+        '--bg-card': '#1a2234',
+        '--bg-hover': '#243047',
+        '--text-primary': '#f0f4f8',
+        '--text-secondary': '#94a3b8',
+        '--text-muted': '#64748b',
+        '--border': '#2d3a4f',
+        '--accent': '#3b82f6',
+        '--accent-hover': '#2563eb',
+        '--success': '#10b981',
+        '--warning': '#f59e0b',
+        '--danger': '#ef4444',
+        '--purple': '#8b5cf6'
+      },
+      midnight: {
+        '--bg-primary': '#0f0f1a',
+        '--bg-secondary': '#1a1a2e',
+        '--bg-card': '#16213e',
+        '--bg-hover': '#1f3460',
+        '--text-primary': '#eaeaea',
+        '--text-secondary': '#a0a0a0',
+        '--text-muted': '#666666',
+        '--border': '#2a2a4a',
+        '--accent': '#e94560',
+        '--accent-hover': '#c73e54',
+        '--success': '#00d9a0',
+        '--warning': '#ffc107',
+        '--danger': '#ff6b6b',
+        '--purple': '#9c27b0'
+      },
+      ocean: {
+        '--bg-primary': '#0a192f',
+        '--bg-secondary': '#112240',
+        '--bg-card': '#1d3a5c',
+        '--bg-hover': '#234876',
+        '--text-primary': '#ccd6f6',
+        '--text-secondary': '#8892b0',
+        '--text-muted': '#5a6a8a',
+        '--border': '#233554',
+        '--accent': '#64ffda',
+        '--accent-hover': '#4cd9b8',
+        '--success': '#64ffda',
+        '--warning': '#ffd166',
+        '--danger': '#ff6b6b',
+        '--purple': '#bd93f9'
+      },
+      forest: {
+        '--bg-primary': '#0d1117',
+        '--bg-secondary': '#161b22',
+        '--bg-card': '#21262d',
+        '--bg-hover': '#30363d',
+        '--text-primary': '#c9d1d9',
+        '--text-secondary': '#8b949e',
+        '--text-muted': '#6e7681',
+        '--border': '#30363d',
+        '--accent': '#2ea043',
+        '--accent-hover': '#238636',
+        '--success': '#2ea043',
+        '--warning': '#d29922',
+        '--danger': '#f85149',
+        '--purple': '#a371f7'
+      },
+      purple: {
+        '--bg-primary': '#13111c',
+        '--bg-secondary': '#1e1b2e',
+        '--bg-card': '#2a2640',
+        '--bg-hover': '#3d3760',
+        '--text-primary': '#e2e0f0',
+        '--text-secondary': '#a09cb5',
+        '--text-muted': '#6b6780',
+        '--border': '#3d3760',
+        '--accent': '#a855f7',
+        '--accent-hover': '#9333ea',
+        '--success': '#22c55e',
+        '--warning': '#eab308',
+        '--danger': '#ef4444',
+        '--purple': '#a855f7'
+      },
+      light: {
+        '--bg-primary': '#f8fafc',
+        '--bg-secondary': '#e2e8f0',
+        '--bg-card': '#ffffff',
+        '--bg-hover': '#f1f5f9',
+        '--text-primary': '#1e293b',
+        '--text-secondary': '#475569',
+        '--text-muted': '#94a3b8',
+        '--border': '#cbd5e1',
+        '--accent': '#2563eb',
+        '--accent-hover': '#1d4ed8',
+        '--success': '#16a34a',
+        '--warning': '#ca8a04',
+        '--danger': '#dc2626',
+        '--purple': '#7c3aed'
+      }
+    };
+
+    let currentTheme = 'dark';
+
+    function openSettings() {
+      document.getElementById('settingsOverlay').classList.add('active');
+      loadCurrentColors();
+    }
+
+    function closeSettings() {
+      document.getElementById('settingsOverlay').classList.remove('active');
+    }
+
+    document.getElementById('settingsOverlay').addEventListener('click', (e) => {
+      if (e.target.id === 'settingsOverlay') closeSettings();
+    });
+
+    function applyTheme(themeName) {
+      const theme = themes[themeName];
+      if (!theme) return;
+
+      currentTheme = themeName;
+
+      // Apply CSS variables
+      Object.entries(theme).forEach(([prop, value]) => {
+        document.documentElement.style.setProperty(prop, value);
+      });
+
+      // Update active state
+      document.querySelectorAll('.theme-option').forEach(el => {
+        el.classList.toggle('active', el.dataset.theme === themeName);
+      });
+
+      // Update color inputs
+      loadCurrentColors();
+    }
+
+    function loadCurrentColors() {
+      const style = getComputedStyle(document.documentElement);
+
+      const colorMap = {
+        'colorBgPrimary': '--bg-primary',
+        'colorBgCard': '--bg-card',
+        'colorAccent': '--accent',
+        'colorSuccess': '--success',
+        'colorWarning': '--warning',
+        'colorDanger': '--danger'
+      };
+
+      Object.entries(colorMap).forEach(([inputId, cssVar]) => {
+        const value = style.getPropertyValue(cssVar).trim();
+        const colorInput = document.getElementById(inputId);
+        const hexInput = document.getElementById('hex' + inputId.replace('color', ''));
+        if (colorInput && hexInput) {
+          colorInput.value = value;
+          hexInput.value = value;
+        }
+      });
+    }
+
+    // Sync color input with hex input
+    document.querySelectorAll('.color-input').forEach(input => {
+      input.addEventListener('input', (e) => {
+        const hexInput = e.target.nextElementSibling;
+        hexInput.value = e.target.value;
+        applyCustomColor(e.target.id, e.target.value);
+      });
+    });
+
+    document.querySelectorAll('.color-hex').forEach(input => {
+      input.addEventListener('input', (e) => {
+        const colorInput = e.target.previousElementSibling;
+        if (/^#[0-9A-Fa-f]{6}$/.test(e.target.value)) {
+          colorInput.value = e.target.value;
+          applyCustomColor(colorInput.id, e.target.value);
+        }
+      });
+    });
+
+    function applyCustomColor(inputId, value) {
+      const cssVarMap = {
+        'colorBgPrimary': '--bg-primary',
+        'colorBgCard': '--bg-card',
+        'colorAccent': '--accent',
+        'colorSuccess': '--success',
+        'colorWarning': '--warning',
+        'colorDanger': '--danger'
+      };
+
+      const cssVar = cssVarMap[inputId];
+      if (cssVar) {
+        document.documentElement.style.setProperty(cssVar, value);
+
+        // Also update related vars
+        if (cssVar === '--bg-primary') {
+          document.documentElement.style.setProperty('--bg-secondary', adjustColor(value, 20));
+        }
+        if (cssVar === '--bg-card') {
+          document.documentElement.style.setProperty('--bg-hover', adjustColor(value, 20));
+        }
+        if (cssVar === '--accent') {
+          document.documentElement.style.setProperty('--accent-hover', adjustColor(value, -20));
+        }
+      }
+
+      // Deselect theme presets
+      document.querySelectorAll('.theme-option').forEach(el => el.classList.remove('active'));
+    }
+
+    function adjustColor(hex, amount) {
+      const num = parseInt(hex.replace('#', ''), 16);
+      const r = Math.min(255, Math.max(0, (num >> 16) + amount));
+      const g = Math.min(255, Math.max(0, ((num >> 8) & 0x00FF) + amount));
+      const b = Math.min(255, Math.max(0, (num & 0x0000FF) + amount));
+      return '#' + (0x1000000 + (r << 16) + (g << 8) + b).toString(16).slice(1);
+    }
+
+    function resetTheme() {
+      applyTheme('dark');
+      localStorage.removeItem('missionControlTheme');
+      localStorage.removeItem('missionControlColors');
+    }
+
+    function saveSettings() {
+      // Save current CSS variables
+      const style = getComputedStyle(document.documentElement);
+      const colors = {};
+      ['--bg-primary', '--bg-secondary', '--bg-card', '--bg-hover', '--text-primary',
+       '--text-secondary', '--text-muted', '--border', '--accent', '--accent-hover',
+       '--success', '--warning', '--danger', '--purple'].forEach(prop => {
+        colors[prop] = style.getPropertyValue(prop).trim();
+      });
+
+      localStorage.setItem('missionControlTheme', currentTheme);
+      localStorage.setItem('missionControlColors', JSON.stringify(colors));
+      closeSettings();
+
+      addChatMessage('✅ Settings saved!', 'incoming', 'System', '⚙️');
+    }
+
+    // Load saved settings on startup
+    function loadSavedSettings() {
+      const savedTheme = localStorage.getItem('missionControlTheme');
+      const savedColors = localStorage.getItem('missionControlColors');
+
+      if (savedColors) {
+        const colors = JSON.parse(savedColors);
+        Object.entries(colors).forEach(([prop, value]) => {
+          document.documentElement.style.setProperty(prop, value);
+        });
+      } else if (savedTheme && themes[savedTheme]) {
+        applyTheme(savedTheme);
+      }
+    }
+
+    // ============ @MENTION SYSTEM ============
+    function flashAgentCard(agentId) {
+      const card = document.getElementById(`agent-card-${agentId}`);
+      if (card) {
+        card.classList.remove('mention-flash');
+        // Trigger reflow
+        void card.offsetWidth;
+        card.classList.add('mention-flash');
+        setTimeout(() => card.classList.remove('mention-flash'), 2000);
+      }
+    }
+
+    // ============ DEBATE SYSTEM ============
+    function switchChatTab(tabName) {
+      document.querySelectorAll('.chat-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabName));
+      document.getElementById('commandsTab').classList.toggle('active', tabName === 'commands');
+      document.getElementById('debatesTab').classList.toggle('active', tabName === 'debates');
+    }
+
+    function renderDebateList() {
+      const debateList = document.getElementById('debateList');
+      const threadView = document.getElementById('debateThreadView');
+
+      if (debates.length === 0) {
+        debateList.innerHTML = '<div class="empty-state">No debates yet. Start one!</div>';
+        debateList.style.display = 'block';
+        threadView.classList.remove('active');
+        return;
+      }
+
+      // Sort: open first, then by newest
+      const sorted = [...debates].sort((a, b) => {
+        if (a.status === 'open' && b.status !== 'open') return -1;
+        if (a.status !== 'open' && b.status === 'open') return 1;
+        return new Date(b.updated) - new Date(a.updated);
+      });
+
+      debateList.innerHTML = sorted.map(d => {
+        const participantIcons = d.participants.slice(0, 5).map(id => {
+          const a = agents.find(ag => ag.id === id);
+          return a ? a.icon : '🤖';
+        }).join(' ');
+        const msgCount = d.messages ? d.messages.length : 0;
+
+        return `
+          <div class="debate-thread-item ${escapeHtml(d.status)}" onclick="viewDebateThread(${Number(d.id)})">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div class="debate-topic">⚔️ ${escapeHtml(d.topic)}</div>
+              <span class="debate-status-tag ${escapeHtml(d.status)}">${escapeHtml(d.status)}</span>
+            </div>
+            <div class="debate-meta">
+              <span>${escapeHtml(participantIcons)} ${Number(d.participants.length)} agents · ${Number(msgCount)} msgs</span>
+              <span>${escapeHtml(formatTime(d.updated))}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function viewDebateThread(debateId) {
+      viewingDebateId = debateId;
+      const debate = debates.find(d => d.id === debateId);
+      if (!debate) return;
+
+      const debateList = document.getElementById('debateList');
+      const threadView = document.getElementById('debateThreadView');
+      const startDebateRow = debateList.previousElementSibling; // the header row
+
+      debateList.style.display = 'none';
+      threadView.classList.add('active');
+
+      document.getElementById('debateThreadTitle').textContent = `⚔️ ${debate.topic}`;
+
+      const participantNames = debate.participants.map(id => {
+        const a = agents.find(ag => ag.id === id);
+        return a ? `${a.icon} ${a.name}` : id;
+      }).join(', ');
+      document.getElementById('debateThreadParticipants').textContent = participantNames;
+
+      // Render messages
+      const messagesEl = document.getElementById('debateMessages');
+      messagesEl.innerHTML = debate.messages.map(m => createDebateMessageHTML(m)).join('');
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+
+      updateConsensusBar(debateId);
+    }
+
+    function showDebateList() {
+      viewingDebateId = null;
+      const debateList = document.getElementById('debateList');
+      const threadView = document.getElementById('debateThreadView');
+
+      debateList.style.display = 'block';
+      threadView.classList.remove('active');
+      renderDebateList();
+    }
+
+    function createDebateMessageHTML(msg) {
+      const stanceLabels = {
+        agree: '🟢 AGREE',
+        refute: '🔴 REFUTE',
+        alternative: '🟡 ALTERNATIVE',
+        propose: '💡 PROPOSE',
+        summary: '📊 SUMMARY',
+        evidence: '📡 LIVE DATA',
+        'no-data': '🔌 NO DATA'
+      };
+
+      return `
+        <div class="debate-msg">
+          <div class="debate-msg-header">
+            <span class="debate-msg-agent">${escapeHtml((msg.agentIcon || '🤖') + ' ' + (msg.agentName || ''))}</span>
+            <span class="debate-msg-stance ${escapeHtml(msg.stance)}">${escapeHtml(stanceLabels[msg.stance] || msg.stance)}</span>
+          </div>
+          <div class="debate-msg-text">${highlightMentions(msg.text)}</div>
+          <div class="debate-msg-time">${escapeHtml(formatTime(msg.timestamp))}</div>
+        </div>
+      `;
+    }
+
+    function appendDebateMessage(msg) {
+      const messagesEl = document.getElementById('debateMessages');
+      messagesEl.insertAdjacentHTML('beforeend', createDebateMessageHTML(msg));
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    // This bar counts SOURCES READ, not opinions. An agent with no source has
+    // not disagreed with anything — calling that "refute" manufactured a
+    // consensus nobody expressed, which is exactly what this build removes.
+    function updateConsensusBar(debateId) {
+      const debate = debates.find(d => d.id === debateId);
+      if (!debate) return;
+
+      const count = s => debate.messages.filter(m => m.stance === s).length;
+      const evidence = count('evidence');                 // live readings came back
+      const noData = count('no-data');                    // no source, or unreachable
+      // Notes a person typed in. The opening 'propose' and the closing
+      // 'summary' are not readings, so they are not counted at all.
+      const alts = count('alternative') + count('agree') + count('refute');
+      const total = evidence + noData + alts;
+
+      const bar = document.getElementById('consensusEvidence');
+      const grey = document.getElementById('consensusNoData');
+      const amber = document.getElementById('consensusAlt');
+      const legend = document.getElementById('consensusLegend');
+      if (!bar || !grey || !amber) return;
+
+      if (total === 0) {
+        bar.style.width = '0%';
+        grey.style.width = '0%';
+        amber.style.width = '0%';
+        if (legend) legend.textContent = 'Nothing read yet';
+        return;
+      }
+
+      bar.style.width = `${(evidence / total) * 100}%`;
+      grey.style.width = `${(noData / total) * 100}%`;
+      amber.style.width = `${(alts / total) * 100}%`;
+
+      if (legend) {
+        const parts = [`${evidence} source${evidence === 1 ? '' : 's'} read`];
+        parts.push(`${noData} no data`);
+        if (alts) parts.push(`${alts} typed-in note${alts === 1 ? '' : 's'}`);
+        legend.textContent = `${parts.join(' · ')} — this counts readings, not votes.`;
+      }
+    }
+
+    function updateDebateCountBadge() {
+      const openCount = debates.filter(d => d.status === 'open').length;
+      const badge = document.getElementById('debateCountBadge');
+      if (openCount > 0) {
+        badge.textContent = openCount;
+        badge.style.display = 'inline-flex';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+
+    // Debate modal
+    function openDebateModal() {
+      document.getElementById('debateModalOverlay').classList.add('active');
+      document.getElementById('debateTopicInput').value = '';
+      document.getElementById('debateTopicInput').focus();
+    }
+
+    function closeDebateModal() {
+      document.getElementById('debateModalOverlay').classList.remove('active');
+    }
+
+    document.getElementById('debateModalOverlay').addEventListener('click', (e) => {
+      if (e.target.id === 'debateModalOverlay') closeDebateModal();
+    });
+
+    document.getElementById('debateTopicInput').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') submitDebate();
+    });
+
+    function submitDebate() {
+      const topic = document.getElementById('debateTopicInput').value.trim();
+      if (!topic) return;
+
+      const agent = agentSelect.value || 'jarvis';
+
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'command',
+          data: { agent, command: `debate ${topic}` }
+        }));
+      } else {
+        fetch('/api/command', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent, command: `debate ${topic}` })
+        });
+      }
+
+      closeDebateModal();
+    }
+
+    // ============ AGENT CHAT MODAL ============
+    function openAgentChat(agentId) {
+      const agent = agents.find(a => a.id === agentId);
+      if (!agent) return;
+
+      const modal = document.getElementById('agentChatModal');
+      const title = document.getElementById('agentChatTitle');
+      const log = document.getElementById('agentChatLog');
+      const statusEl = document.getElementById('agentChatStatus');
+      const input = document.getElementById('agentChatInput');
+
+      modal.dataset.agentId = agentId;
+      title.textContent = `${agent.icon || '🤖'} ${agent.name} — Live Chat Log`;
+
+      const statusEmoji = agent.status === 'active' ? '🟢' : agent.status === 'idle' ? '🟡' : '🔴';
+      statusEl.textContent = `${statusEmoji} ${agent.status} | ${agent.description || ''}`;
+
+      // Render existing message history for this agent
+      log.innerHTML = '';
+      const msgs = agentMessages[agentId] || [];
+      if (msgs.length === 0) {
+        log.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:2rem;">No messages yet. Send a command to this agent.</div>';
+      } else {
+        msgs.forEach(m => appendAgentChatLine(m));
+      }
+      log.scrollTop = log.scrollHeight;
+
+      // Pre-select agent in command dropdown
+      if (input) input.placeholder = `Send command to ${agent.name}...`;
+
+      modal.style.display = 'flex';
+    }
+
+    function closeAgentChat() {
+      const modal = document.getElementById('agentChatModal');
+      modal.style.display = 'none';
+      modal.dataset.agentId = '';
+    }
+
+    function appendAgentChatLine(msg) {
+      const log = document.getElementById('agentChatLog');
+      if (!log) return;
+
+      const empty = log.querySelector('.empty-agent-msg');
+      if (empty) empty.remove();
+
+      const div = document.createElement('div');
+      div.style.cssText = `
+        padding: 0.5rem 0.75rem;
+        margin-bottom: 0.4rem;
+        border-radius: 6px;
+        font-size: 0.82rem;
+        background: ${msg.type === 'outgoing' ? 'rgba(59,130,246,0.12)' : 'rgba(255,255,255,0.04)'};
+        border-left: 3px solid ${msg.type === 'outgoing' ? 'var(--accent)' : 'var(--success)'};
+        white-space: pre-wrap;
+        word-break: break-word;
+      `;
+
+      const meta = document.createElement('div');
+      meta.style.cssText = 'font-size:0.7rem;color:var(--text-muted);margin-bottom:3px;display:flex;justify-content:space-between;';
+      const who = msg.type === 'outgoing' ? '▶ You' : `${msg.agentIcon || '🤖'} ${msg.agentName || 'Agent'}`;
+      meta.innerHTML = h`<span>${who}</span><span>${msg.timeStr}</span>`;
+
+      const content = document.createElement('div');
+      content.innerHTML = highlightMentions(msg.text);
+
+      div.appendChild(meta);
+      div.appendChild(content);
+      log.appendChild(div);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function sendAgentChatCommand() {
+      const modal = document.getElementById('agentChatModal');
+      const agentId = modal.dataset.agentId;
+      const input = document.getElementById('agentChatInput');
+      const command = input.value.trim();
+      if (!command || !agentId) return;
+
+      // Set the main agent select and send
+      agentSelect.value = agentId;
+      commandInput.value = command;
+      sendAgentCommand();
+      input.value = '';
+    }
+
+    document.getElementById('agentChatInput')?.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') sendAgentChatCommand();
+    });
+
+    // ============ HEADER STATS ============
+    function updateHeaderStats() {
+      const active = agents.filter(a => a.status === 'active').length;
+      const queue = (tasks.inbox || []).length + (tasks.inProgress || []).length;
+      const el1 = document.getElementById('activeAgentsCount');
+      const el2 = document.getElementById('tasksQueueCount');
+      if (el1) el1.textContent = active;
+      if (el2) el2.textContent = queue;
+    }
+
+    // ============ PAUSE / RESUME ============
+    function togglePause() {
+      const btn = document.getElementById('pauseBtn');
+      const wantPaused = !isPaused;
+      const endpoint = wantPaused ? '/api/pause' : '/api/resume';
+      if (btn) { btn.disabled = true; btn.textContent = wantPaused ? '⏸ pausing…' : '▶ resuming…'; }
+      fetch(endpoint, { method: 'POST' })
+        .then(r => {
+          if (!r.ok) throw new Error(`server said ${r.status}`);
+          return r.json();
+        })
+        .then(d => {
+          if (!d || typeof d.paused !== 'boolean') throw new Error('server did not report a pause state');
+          isPaused = d.paused;
+          if (btn) btn.disabled = false;
+          applyPauseState();
+        })
+        .catch(err => {
+          // Honest about its own failure: the button never shows a state the
+          // server did not confirm.
+          if (btn) btn.disabled = false;
+          applyPauseState();
+          addChatMessage(
+            `⚠️ ${wantPaused ? 'Pause' : 'Resume'} did not go through — ${err.message}. ` +
+            `The system is still ${isPaused ? 'PAUSED' : 'RUNNING'}. Nothing was changed.`,
+            'incoming', 'Mission Control', '🎯', new Date().toISOString(), null
+          );
+        });
+    }
+
+    function applyPauseState() {
+      const btn = document.getElementById('pauseBtn');
+      const banner = document.getElementById('pausedBanner');
+      if (btn) {
+        btn.textContent = isPaused ? '▶ RESUME' : '⏸ PAUSE';
+        btn.classList.toggle('paused', !!isPaused);
+        btn.title = isPaused
+          ? 'Agent heartbeats are suspended — click to resume'
+          : 'Suspend agent heartbeats';
+      }
+      if (banner) banner.classList.toggle('visible', !!isPaused);
+      document.body.classList.toggle('is-paused', !!isPaused);
+    }
+
+    // ============ FILTER PILLS ============
+    function filterTasks(filter) {
+      activeFilter = filter;
+      document.querySelectorAll('.filter-pill').forEach(el => {
+        el.classList.toggle('active', el.dataset.filter === filter);
+      });
+      renderTasks();
+    }
+
+    // ============ HEADER NAV ============
+    function setActiveNav(btn) {
+      document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
+      btn.classList.add('active');
+    }
+
+    // ============ PROFILE DROPDOWN ============
+    function toggleProfileDropdown(event) {
+      event && event.stopPropagation();
+      document.getElementById('profileDropdown').classList.toggle('open');
+    }
+    document.addEventListener('click', () => {
+      document.getElementById('profileDropdown').classList.remove('open');
+    });
+
+    // ============ ACTIVITY TABS ============
+    function switchActivityTab(tab) {
+      activityTab = tab;
+      document.querySelectorAll('.activity-tab').forEach(el => {
+        el.classList.toggle('active', el.dataset.atab === tab);
+      });
+      renderActivitiesFiltered();
+    }
+
+    function setActivityAgentFilter(agent) {
+      activityAgentFilter = agent;
+      document.querySelectorAll('.agent-filter-btn').forEach(el => {
+        el.classList.toggle('active', el.dataset.agent === agent);
+      });
+      renderActivitiesFiltered();
+    }
+
+    function classifyActivity(activity) {
+      const msg = (activity.message || '').toLowerCase();
+      const agent = (activity.agent || '').toLowerCase();
+      if (msg.includes('debate') || msg.includes('escalat') || msg.includes('standup') || msg.includes('triage')) return 'decisions';
+      if (msg.includes('command') || msg.includes('received') || msg.includes('responded') || msg.includes('mention')) return 'comments';
+      return 'tasks';
+    }
+
+    function getAgentColor(agentName) {
+      const colors = {
+        'Jarvis': '#f59e0b', 'NetOps': '#3b82f6', 'Sentinel': '#10b981',
+        'Firewall-Pro': '#ef4444', 'LoadBal-Pro': '#8b5cf6',
+        'Router-Expert': '#06b6d4', 'Monitor-Eye': '#f97316',
+        'Config-Keeper': '#84cc16', 'Incident-Handler': '#e11d48',
+        'Doc-Writer': '#a78bfa', 'System': '#94a3b8', 'Dashboard': '#64748b'
+      };
+      return colors[agentName] || '#94a3b8';
+    }
+
+    function renderActivitiesFiltered() {
+      const list = activityList;
+      let filtered = activities.slice();
+
+      // Agent filter
+      if (activityAgentFilter !== 'all') {
+        filtered = filtered.filter(a => {
+          const name = (a.agent || '').toLowerCase();
+          return name.includes(activityAgentFilter.toLowerCase());
+        });
+      }
+
+      // Tab filter
+      if (activityTab !== 'all') {
+        filtered = filtered.filter(a => classifyActivity(a) === activityTab);
+      }
+
+      if (filtered.length === 0) {
+        list.innerHTML = '<div class="empty-state">No activity matching filter</div>';
+        return;
+      }
+      list.innerHTML = filtered.map(a => createActivityHTML(a)).join('');
+    }
+
+    // Initialize
+    loadSavedSettings();
+    connect();
+  </script>
+
+  <!-- Agent Chat Modal -->
+  <div id="agentChatModal" style="
+    position:fixed; inset:0; z-index:500;
+    background:rgba(0,0,0,0.7); align-items:center; justify-content:center;
+    display:none;
+  " onclick="if(event.target===this)closeAgentChat()">
+    <div style="
+      background:var(--bg-card); border:1px solid var(--border); border-radius:12px;
+      width:760px; max-width:95vw; height:82vh; display:flex; flex-direction:column;
+      box-shadow:0 25px 60px rgba(0,0,0,0.5);
+    ">
+      <!-- Header -->
+      <div style="padding:1rem 1.25rem; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:flex-start; flex-shrink:0;">
+        <div>
+          <div id="agentChatTitle" style="font-size:1.1rem; font-weight:700; color:var(--text-primary);"></div>
+          <div id="agentChatStatus" style="font-size:0.78rem; color:var(--text-secondary); margin-top:3px;"></div>
+        </div>
+        <button onclick="closeAgentChat()" style="background:none;border:none;color:var(--text-secondary);font-size:1.4rem;cursor:pointer;line-height:1;">×</button>
+      </div>
+      <!-- Log -->
+      <div id="agentChatLog" style="flex:1; overflow-y:auto; padding:0.75rem; font-family:monospace;"></div>
+      <!-- Input -->
+      <div style="padding:0.75rem; border-top:1px solid var(--border); display:flex; gap:0.5rem; flex-shrink:0;">
+        <input id="agentChatInput" type="text" placeholder="Send command to agent..."
+          style="flex:1; background:var(--bg-secondary); border:1px solid var(--border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-size:0.85rem;">
+        <button onclick="sendAgentChatCommand()"
+          style="background:var(--accent);color:white;border:none;padding:0.5rem 1rem;border-radius:6px;cursor:pointer;font-weight:500;">
+          Send
+        </button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
