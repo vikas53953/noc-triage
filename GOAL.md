@@ -27,7 +27,7 @@ Engineer works. No simulation, no fabricated data or capability.
       - User can message ANY agent directly and get a real live-data answer (or honest can't-answer).
       - User can POST into an open triage bridge (add context / direct an engineer); it appears
         in the bridge and the flow reacts.
-- [ ] PHASE B — ENGINEER SEES EVERYTHING (the CLI/logs view) + ACI retry
+- [x] PHASE B — ENGINEER SEES EVERYTHING (the CLI/logs view) + ACI retry  (DONE — merged, reviewed MERGE; secret-scrub fix for usernames)
       - A real CLI/session view: show the actual login + each command run + its RAW device
         output (the real reads), per agent, plus the agent's interpretation alongside — like
         reading logs at the CLI. This is the heart of "how an SME thinks". Watchtower law.
@@ -71,3 +71,4 @@ Engineer works. No simulation, no fabricated data or capability.
 ## Status log (append as phases complete)
 - 2026-08-15 eve: goal set; console-app look merged to master (foundation); Phase A starting.
 - 2026-08-15 ~21:xx: Phase A merged (interactive: message any agent, operator posts into bridge; stuck-on-bridge fixed). Reviewed MERGE, live-verified. Phase B starting.
+- 2026-08-15 ~23:xx: Phase B merged (real CLI/session log with actual command+raw output+SME interpretation; real ACI retry; username-scrub fix). Reviewed MERGE. Phase C starting.
