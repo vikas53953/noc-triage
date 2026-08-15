@@ -37,7 +37,7 @@ Engineer works. No simulation, no fabricated data or capability.
       - Before an agent runs a command it ASKS; user approves once / approves all reads for
         this triage / denies. Default per spec (Vikas liked it): auto-approve safe reads with a
         visible scrollable approval log; still only read-only commands are ever offered.
-- [ ] PHASE D — ARTIFACTS + DOCUMENTATION folders
+- [x] PHASE D — ARTIFACTS + DOCUMENTATION folders  (DONE — merged, reviewed MERGE; docs trace to real record, path-safe, secrets scrubbed)
       - Per-triage ARTIFACTS: full timeline, every command + raw output, evidence-board history,
         verdict — browsable after the fact.
       - Per-triage DOCUMENTATION auto-written: an SLT/leadership plain-words summary AND an
@@ -73,3 +73,4 @@ Engineer works. No simulation, no fabricated data or capability.
 - 2026-08-15 ~21:xx: Phase A merged (interactive: message any agent, operator posts into bridge; stuck-on-bridge fixed). Reviewed MERGE, live-verified. Phase B starting.
 - 2026-08-15 ~23:xx: Phase B merged (real CLI/session log with actual command+raw output+SME interpretation; real ACI retry; username-scrub fix). Reviewed MERGE. Phase C starting.
 - 2026-08-16 ~00:xx: Phase C merged (real approval gate: auto-approve reads default + ask mode approve/deny; denied read makes zero wire calls, never faked; writes blocked before the gate). Reviewed MERGE. Phase D starting.
+- 2026-08-16 ~00:xx: Phase D merged (per-triage artifacts + SLT/engineer docs from the real record; path-safe; secrets absent). Reviewed MERGE. Phase E (Jarvis real Claude) starting.
