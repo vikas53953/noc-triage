@@ -20,6 +20,7 @@ const catalyst = require('./catalyst-center');
 const aci = require('./aci');
 const sdwan = require('./sdwan');
 const session = require('./session-log');
+const approvals = require('./approvals');
 
 // The host app injects broadcast + status plumbing here so this module stays
 // free of server internals — the same seam live-agents.js uses.
@@ -189,6 +190,32 @@ const READERS = {
   incidents: readIncidents,
 };
 
+// Plain-words source label per front, for the approval record's "target".
+const FRONT_SOURCE = {
+  campus: catalyst.label,
+  fabric: aci.label,
+  wan: sdwan.label,
+  incidents: `${catalyst.label} + ${aci.label}`,
+};
+
+// Run one front's live read THROUGH the permission gate, tagged for the CLI log.
+// In auto mode it auto-approves and logs; in ask mode it PAUSES for a decision.
+// A denied read touches no wire and returns an honest "denied" evidence card —
+// never a fabricated clean result. Returns { state, detail, source, ... }.
+async function gatedFrontRead({ front, agentId, agentName, triageId, label, reason }) {
+  const source = FRONT_SOURCE[front] || null;
+  const g = await approvals.gate(
+    { agentId, agentName, command: `read ${front} front`, target: source, triageId, front, reason },
+    () => session.runWithContext(
+      { triageId, agentId, agentName, front, label },
+      () => READERS[front]()));
+  if (g.denied) {
+    return { state: 'suspect', source, denied: true,
+      detail: 'Operator denied this read — nothing was run, and nothing was invented.' };
+  }
+  return g.result;
+}
+
 // ── Posting: a triage_message (narration) + the matching triage_evidence ────
 function post(triage, { agent, tier, round, text }) {
   const info = agentInfo(agent);
@@ -278,9 +305,11 @@ async function runL1(triage, staffedTiers) {
   // Basic sweep: a real reading for EVERY live front so no card is blank even
   // at P3, where no SME (L3) is staffed to go deeper on fabric/wan.
   for (const front of LIVE_FRONTS) {
-    const r = await session.runWithContext(
-      { triageId: triage.id, agentId: 'monitor-eye', agentName: agentInfo('monitor-eye').name, front, label: `Triage ${triage.id} — L1 sweep` },
-      () => READERS[front]());
+    const r = await gatedFrontRead({
+      front, agentId: 'monitor-eye', agentName: agentInfo('monitor-eye').name,
+      triageId: triage.id, label: `Triage ${triage.id} — L1 sweep`,
+      reason: `L1 basic sweep of the ${front} front`,
+    });
     postEvidence(triage, front, r);
     post(triage, {
       agent, tier: 'L1', round: 1,
@@ -483,11 +512,25 @@ function buildNextChecks(triage, ev, degraded, suspect) {
 async function withAgent(agentId, triage, worker) {
   setStatus(agentId, 'active', `Triage ${triage.id}`);
   try {
-    // Tag every wire call this turn makes with the triage + agent, so the
-    // CLI/session view can replay exactly what each engineer read on the bridge.
-    await session.runWithContext(
-      { triageId: triage.id, agentId, agentName: agentInfo(agentId).name, label: `Triage ${triage.id}` },
-      () => worker(agentId));
+    // The whole turn's live reads pass the permission gate. In auto mode this
+    // auto-approves and logs; in ask mode it PAUSES for a decision. A denied turn
+    // runs no read (no wire call) and posts an honest "denied" bridge note — the
+    // engineer never fabricates a finding.
+    const g = await approvals.gate(
+      { agentId, agentName: agentInfo(agentId).name,
+        command: `${agentInfo(agentId).name} bridge read`, target: 'live fronts',
+        triageId: triage.id, reason: `bridge investigation turn on triage ${triage.id}` },
+      () => session.runWithContext(
+        // Tag every wire call this turn makes with the triage + agent, so the
+        // CLI/session view can replay exactly what each engineer read on the bridge.
+        { triageId: triage.id, agentId, agentName: agentInfo(agentId).name, label: `Triage ${triage.id}` },
+        () => worker(agentId)));
+    if (g.denied) {
+      post(triage, {
+        agent: agentId, tier: (triage.staffed.find((s) => s.agent === agentId) || {}).tier || 'L2', round: 1,
+        text: '🛑 Operator denied this read — I ran nothing and will not invent a finding. Approve it in the approval panel to let me read for real.',
+      });
+    }
   } catch (err) {
     log(`[Triage ${triage.id}] ${agentId} turn error — ${err.message}`);
   }
@@ -658,9 +701,11 @@ async function retryFront(triageId, front) {
   }
   // Which engineer owns this front (for the session-log tag + the bridge note).
   const owner = { campus: 'netops', fabric: 'router-expert', wan: 'router-expert', incidents: 'incident-handler' }[front] || 'monitor-eye';
-  const r = await session.runWithContext(
-    { triageId: t.id, agentId: owner, agentName: agentInfo(owner).name, front, label: `Manual retry — ${front}` },
-    () => READERS[front]());
+  const r = await gatedFrontRead({
+    front, agentId: owner, agentName: agentInfo(owner).name,
+    triageId: t.id, label: `Manual retry — ${front}`,
+    reason: `operator asked to re-read the ${front} front`,
+  });
   postEvidence(t, front, r);
   post(t, {
     agent: owner, tier: 'OPS', round: t.progress && t.progress.L4 === 'done' ? 2 : 1,

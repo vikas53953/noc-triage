@@ -17,6 +17,7 @@ const catalyst = require('./sources/catalyst-center');
 const aci = require('./sources/aci');
 const sdwan = require('./sources/sdwan');
 const session = require('./sources/session-log');
+const approvals = require('./sources/approvals');
 const { checkIntent } = require('./sources/guardrails');
 
 // One module owns where the workspace is and how any caller-supplied path is
@@ -245,6 +246,10 @@ function broadcast(type, data) {
 // CLI/session view. Rate-limited endpoints below still serve the same records
 // for reconnect/restore.
 session.setBroadcast((rec) => broadcast('session_record', rec));
+
+// The permission gate (Phase C) broadcasts approval requests + decisions so the
+// approval surface updates live: approval_new, approval_update, approval_mode.
+approvals.setBroadcast((type, data) => broadcast(type, data));
 
 // Surface a problem on the dashboard instead of dying quietly (or loudly).
 // The detail stays in the server log; the browser gets plain words.
@@ -2019,6 +2024,40 @@ app.get('/api/session', (req, res) => {
 app.get('/api/session/:agent', (req, res) => {
   const lim = Math.min(Number((req.query || {}).limit) || 300, 600);
   res.json({ agent: req.params.agent, records: session.query({ agentId: req.params.agent, limit: lim }), readOnly: true });
+});
+
+// ── Permission gate / approvals (Phase C) ───────────────────────────────────
+// The REAL gate: every live/triage read passes approvals.gate. In auto mode
+// reads auto-approve and are logged; in ask mode they PAUSE for a decision. A
+// denied command runs nothing and is never silently swapped. These endpoints
+// list/log the records, report+set the mode, and take a decision. Rate-limited
+// via the shared /api/ budget (GET on the read budget, POST on the write budget).
+app.get('/api/approvals', (req, res) => {
+  const { triageId, limit } = req.query || {};
+  const lim = Math.min(Number(limit) || 200, 500);
+  res.json({ mode: approvals.getMode(), records: approvals.list({ triageId, limit: lim }), readOnly: true });
+});
+
+// The persistent approval log — who wanted to run what, when, the decision, the outcome.
+app.get('/api/approvals/log', (req, res) => {
+  const lim = Math.min(Number((req.query || {}).limit) || 500, 500);
+  res.json({ mode: approvals.getMode(), records: approvals.list({ limit: lim }) });
+});
+
+// Switch the mode: "auto" (auto-approve safe reads) or "ask" (prompt for each).
+app.post('/api/approvals/mode', (req, res) => {
+  const mode = approvals.setMode((req.body || {}).mode);
+  res.json({ ok: true, mode });
+});
+
+// Decide a pending request: approve-once / approve-all (all reads this triage) / deny.
+app.post('/api/approvals/:id/decision', (req, res) => {
+  const out = approvals.decide(req.params.id, (req.body || {}).decision);
+  if (out.error) {
+    const code = out.error === 'not_pending' ? 409 : 400;
+    return res.status(code).json({ error: out.reason || 'Could not record that decision.' });
+  }
+  res.json(out);
 });
 
 // ── Retry a down source on demand (Phase B) ─────────────────────────────────
