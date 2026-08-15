@@ -45,12 +45,15 @@ Engineer works. No simulation, no fabricated data or capability.
 - [ ] PHASE E — JARVIS AGENTIC DELEGATION (gated on Vikas's API-key answer)
       - Talk to Jarvis in plain words; Jarvis reasons about WHO to delegate to, hands each
         agent its piece, gathers findings, answers. Real reasoning.
-      - DECISION PENDING (asked Vikas as he left): real Claude API (needs his Anthropic key) vs
-        rule-based router. FALLBACK if no answer by the time Phase E starts: build the delegation
-        with a clean provider interface; if an Anthropic key is found on the machine (env /
-        Credential Manager) wire real Claude; else implement a transparent rule-based router
-        clearly labelled, with the Claude interface ready to activate when he provides the key.
-        NEVER present a rule-router as if it were real reasoning.
+      - DECISION (Vikas, 2026-08-15 as he left): REAL CLAUDE API. No rule-router.
+      - KEY STATUS: no Anthropic key found on the machine (checked env, both .env.local files,
+        Windows Credential Manager, claude settings — presence only, value never logged).
+        So: BUILD the genuine Anthropic integration (Jarvis reasons/delegates via a real Claude
+        call), reading ANTHROPIC_API_KEY from .env.local; use the `claude-api` skill for correct
+        model id + SDK; key never in code/logs. It can be built + code-reviewed but NOT run live
+        until Vikas adds the key. When the key is ABSENT, the UI shows an honest "Jarvis needs
+        your API key to think" state — NEVER a rule-router pretending to be reasoning. Activating
+        the key turns real Jarvis on. Flag this prominently on the morning page.
       - LLM integration: read the `claude-api` skill BEFORE writing any Claude call. Key in OS
         keychain / gitignored .env.local, never in code or logs.
 - [ ] FINAL — integration review of the whole thing live + a visual "what I built overnight"
