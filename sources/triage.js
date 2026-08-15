@@ -21,6 +21,7 @@ const aci = require('./aci');
 const sdwan = require('./sdwan');
 const session = require('./session-log');
 const approvals = require('./approvals');
+const artifacts = require('./artifacts');
 
 // The host app injects broadcast + status plumbing here so this module stays
 // free of server internals — the same seam live-agents.js uses.
@@ -230,7 +231,18 @@ function post(triage, { agent, tier, round, text }) {
 function postEvidence(triage, front, { state, detail, source }) {
   const card = emit('triage_evidence', triage.id, { front, state, detail, source: source || null });
   triage.evidence[front] = { front, state, detail, source: source || null, ts: card.ts };
+  // Keep the FULL transition history (each real read), not just the latest state,
+  // so the persisted artifacts can replay every front's transitions with the real
+  // detail/error. This is append-only and never overwrites a prior transition.
+  recordEvidenceHistory(triage, front, state, detail, source, card.ts);
   return card;
+}
+
+// Append one evidence transition to the per-triage history. The real detail/error
+// is kept verbatim — a suspect read is recorded as suspect, never rewritten clean.
+function recordEvidenceHistory(triage, front, state, detail, source, ts) {
+  if (!triage.evidenceHistory) triage.evidenceHistory = [];
+  triage.evidenceHistory.push({ front, state, detail, source: source || null, ts: ts || now() });
 }
 
 function progress(triage, tier, status) {
@@ -287,6 +299,22 @@ async function runBridge(triage) {
     bridgeAgentsOf(triage).forEach((id) => {
       if (!agentHeldByOpenBridge(id, triage.id)) setStatus(id, 'idle', 'Bridge concluded');
     });
+
+    // Persist the COMPLETE real record + auto-written docs, exactly once, the
+    // moment the bridge closes. This is the raw "what actually happened" — the
+    // timeline, every command + raw output, the evidence transition history, the
+    // operator posts and the verdict — plus an SLT and an engineer document
+    // derived only from that real record. A write failure is logged, never fatal.
+    if (!triage.persisted) {
+      triage.persisted = true;
+      try {
+        const out = artifacts.writeForTriage(triage);
+        if (out) log(`[Triage ${triage.id}] artifacts + docs written (${(out.files || []).join(', ')}) to ${out.dir}`);
+        else log(`[Triage ${triage.id}] artifact write returned nothing — path refused or empty record`);
+      } catch (e) {
+        log(`[Triage ${triage.id}] artifact write failed — ${e.message}`);
+      }
+    }
   }
 }
 
@@ -582,6 +610,7 @@ function startTriage(severity, description) {
     fronts: FRONTS,
     progress: { L1: 'pending', L2: 'pending', L3: 'pending', L4: 'pending' },
     evidence: {},
+    evidenceHistory: [],
     messages: [],
     verdict: null,
   };
@@ -590,9 +619,11 @@ function startTriage(severity, description) {
   // Board renders in front order; every live front starts "waiting", every
   // blind front starts "blind" (hatched grey, no data source).
   FRONTS.forEach((front) => {
-    triage.evidence[front] = BLIND_FRONTS.includes(front)
+    const initial = BLIND_FRONTS.includes(front)
       ? { front, state: 'blind', detail: blindReason(front), source: null, ts: now() }
       : { front, state: 'waiting', detail: 'awaiting first read', source: null, ts: now() };
+    triage.evidence[front] = initial;
+    recordEvidenceHistory(triage, front, initial.state, initial.detail, initial.source, initial.ts);
   });
 
   // triage_opened carries the whole board so the UI can render it at once.

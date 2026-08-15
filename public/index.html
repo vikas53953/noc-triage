@@ -542,6 +542,50 @@ pre.cli{
 .appr-prompt .appr-cmd{font-size:.78rem}
 .appr-prompt .more{font-size:.62rem;color:var(--ink3);margin-top:.35rem}
 
+/* ---------- history / records drawer (Phase D) ---------- */
+.rec-card{border:1px solid var(--line-soft);border-radius:11px;padding:.7rem .8rem;margin-bottom:.7rem;background:var(--card);cursor:pointer}
+.rec-card:hover{border-color:var(--accent)}
+.rec-card-top{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.35rem}
+.rec-card-title{font-size:.8rem;font-weight:800;color:var(--ink);flex:1;min-width:160px}
+.rec-card-time{font-size:.62rem;color:var(--ink3);margin-left:auto;font-variant-numeric:tabular-nums}
+.rec-card-meta{font-size:.66rem;color:var(--ink2);line-height:1.5}
+.rec-card-verdict{font-size:.68rem;color:var(--ink2);margin-top:.35rem;line-height:1.5;border-top:1px dashed var(--line-soft);padding-top:.35rem}
+.rec-fchips{display:flex;gap:.3rem;flex-wrap:wrap;margin-top:.4rem}
+.rec-fchip{font-size:.56rem;font-weight:800;letter-spacing:.03em;text-transform:uppercase;padding:.12rem .4rem;border-radius:5px;border:1px solid var(--line)}
+.rec-fchip.clean{color:#16a34a;border-color:rgba(34,197,94,.5);background:rgba(34,197,94,.1)}
+.rec-fchip.degraded{color:var(--warn);border-color:var(--warn);background:var(--warn-bg)}
+.rec-fchip.suspect{color:#ef4444;border-color:rgba(239,68,68,.5);background:rgba(239,68,68,.1)}
+.rec-fchip.blind{color:var(--ink3)}
+.rec-fchip.waiting{color:var(--ink3)}
+.rec-detail-head{margin-bottom:.7rem}
+.rec-detail-head h4{font-size:.92rem;font-weight:800;margin-bottom:.3rem}
+.rec-detail-head .rd-meta{font-size:.68rem;color:var(--ink2);line-height:1.6}
+.rec-tabs{display:flex;gap:.35rem;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:.55rem;margin-bottom:.8rem}
+.rec-tab{font:inherit;font-size:.66rem;font-weight:700;padding:.35rem .6rem;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--ink2);cursor:pointer}
+.rec-tab.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.rec-tab:not(.on):hover{background:var(--hover);color:var(--ink)}
+.rec-tl{list-style:none;margin:0;padding:0}
+.rec-tl li{position:relative;padding:.4rem .2rem .5rem 1.1rem;border-left:2px solid var(--line);margin-left:.3rem}
+.rec-tl li::before{content:'';position:absolute;left:-5px;top:.65rem;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.rec-tl .tl-t{font-size:.6rem;color:var(--ink3);font-variant-numeric:tabular-nums}
+.rec-tl .tl-tag{font-size:.56rem;font-weight:800;text-transform:uppercase;letter-spacing:.03em;color:var(--ink3);margin-left:.4rem}
+.rec-tl .tl-txt{font-size:.74rem;color:var(--ink);line-height:1.5;margin-top:.15rem}
+.rec-tl li.k-evidence::before{background:var(--warn)}
+.rec-tl li.k-verdict::before{background:#8b5cf6}
+.rec-tl li.k-operator::before{background:#06b6d4}
+.rec-md{font-size:.78rem;line-height:1.65;color:var(--ink)}
+.rec-md h3{font-size:.95rem;font-weight:800;margin:.9rem 0 .4rem}
+.rec-md h4{font-size:.82rem;font-weight:800;margin:.8rem 0 .3rem;color:var(--accent)}
+.rec-md ul{margin:.3rem 0 .6rem 1.1rem}
+.rec-md li{margin:.15rem 0}
+.rec-md p{margin:.4rem 0}
+.rec-md pre{font-family:var(--mono);font-size:.68rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;background:#0b1020;color:#c9d5e6;padding:.6rem .7rem;border-radius:8px;border:1px solid rgba(255,255,255,.06);overflow:auto;max-height:320px}
+.rec-md table{border-collapse:collapse;width:100%;font-size:.66rem;margin:.4rem 0;display:block;overflow-x:auto}
+.rec-md th,.rec-md td{border:1px solid var(--line-soft);padding:.28rem .45rem;text-align:left}
+.rec-md th{background:var(--panel);font-weight:800}
+.rec-md hr{border:none;border-top:1px solid var(--line);margin:.8rem 0}
+.rec-empty{font-size:.76rem;color:var(--ink3);font-style:italic;padding:1rem .3rem;line-height:1.6}
+
 ::-webkit-scrollbar{width:7px;height:7px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
@@ -568,6 +612,7 @@ pre.cli{
     <span class="chip" id="connChip"><span class="dot"></span>Connecting…</span>
     <span class="clock" id="clock">--:--:--</span>
     <button class="iconbtn appr-btn" id="apprBtn" title="Approvals — the permission gate">🛡<span class="appr-count" id="apprCount" hidden>0</span></button>
+    <button class="iconbtn" id="histBtn" title="History / Records — past triages, artifacts &amp; documents">📚</button>
     <button class="iconbtn" id="themeBtn" title="Toggle light / dark">☾</button>
     <div class="avatar-me">VK</div>
   </div>
@@ -788,6 +833,42 @@ pre.cli{
       Only <b>read-only</b> commands are ever offered — the read-only guardrail still hard-blocks
       anything that would change a device, before this gate ever applies. A denied command runs
       nothing and is never swapped for something else.
+    </div>
+  </div>
+</div>
+
+<!-- ============ HISTORY / RECORDS DRAWER (Phase D) ============ -->
+<div class="drawer-overlay" id="recDrawer">
+  <div class="drawer">
+    <div class="drawer-head">
+      <h3><span>📚</span> <span id="recTitle">History / Records</span></h3>
+      <span class="sub" id="recSub">past triages — the real artifacts &amp; the auto-written documents</span>
+      <button class="iconbtn" id="recBack" title="Back to the list" style="display:none">↩ Back</button>
+      <button class="iconbtn" id="recClose">✕</button>
+    </div>
+    <div class="drawer-body" id="recBody">
+      <!-- list view -->
+      <div id="recListView">
+        <div id="recList"><p class="sess-empty">Loading past triages…</p></div>
+      </div>
+      <!-- detail view -->
+      <div id="recDetailView" style="display:none">
+        <div class="rec-detail-head" id="recDetailHead"></div>
+        <div class="rec-tabs" id="recTabs">
+          <button class="rec-tab on" data-rectab="timeline">Timeline</button>
+          <button class="rec-tab" data-rectab="commands">CLI / commands</button>
+          <button class="rec-tab" data-rectab="evidence">Evidence history</button>
+          <button class="rec-tab" data-rectab="verdict">Verdict</button>
+          <button class="rec-tab" data-rectab="slt">📄 Leadership doc</button>
+          <button class="rec-tab" data-rectab="engineer">🛠 Engineer doc</button>
+        </div>
+        <div id="recContent"></div>
+      </div>
+    </div>
+    <div class="drawer-foot">
+      Everything here is the <b>real</b> incident record — the actual commands, raw output and errors, and two
+      documents written automatically from that record. Nothing is invented; a failed or blind read is kept as-is.
+      Read-only.
     </div>
   </div>
 </div>
@@ -1592,6 +1673,207 @@ document.addEventListener('click', function(e){
 $('apprBtn').onclick = function(){ renderApprovals(); $('apprDrawer').classList.add('on'); };
 $('apprClose').onclick = function(){ $('apprDrawer').classList.remove('on'); };
 $('apprDrawer').onclick = function(e){ if(e.target === this) this.classList.remove('on'); };
+
+/* ============================================================
+   HISTORY / RECORDS — browse past triages, their ARTIFACTS and
+   the two auto-written DOCUMENTS (SLT + engineer). Read-only.
+   Everything below is escaped; docs render through a tiny, safe
+   markdown renderer that escapes BEFORE it formats. Records come
+   from GET /api/records ; one record from GET /api/records/:id ;
+   a doc from GET /api/records/:id/doc/:which — all rate-limited
+   and path-safe (safeJoin) on the server.
+   ============================================================ */
+var REC_CURRENT = null;      // the loaded record object
+var REC_DOC_CACHE = {};      // id+which -> content
+var REC_TAB = 'timeline';
+
+/* Minimal, SAFE markdown → html. The input is ALREADY html-escaped, so these
+   transforms only wrap our own delimiters (#, ##, -, **, |, ```). No raw user
+   html can survive escapeHtml, so nothing here can inject markup. */
+function mdToHtml(src){
+  var esc = escapeHtml(src||'');
+  var lines = esc.split('\n');
+  var out = [], i = 0;
+  function inline(s){ return s.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/`([^`]+)`/g,'<code>$1</code>'); }
+  while(i < lines.length){
+    var ln = lines[i];
+    if(/^```/.test(ln)){                       // fenced code block
+      var buf = []; i++;
+      while(i < lines.length && !/^```/.test(lines[i])){ buf.push(lines[i]); i++; }
+      i++; out.push('<pre>'+buf.join('\n')+'</pre>'); continue;
+    }
+    if(/^\|/.test(ln)){                          // table
+      var rows = [];
+      while(i < lines.length && /^\|/.test(lines[i])){ rows.push(lines[i]); i++; }
+      var htmlRows = rows.filter(function(r){ return !/^\|[\s:\-\|]+\|?\s*$/.test(r); }).map(function(r,ri){
+        var cells = r.replace(/^\|/,'').replace(/\|\s*$/,'').split('|').map(function(c){ return c.trim(); });
+        var tag = ri===0 ? 'th' : 'td';
+        return '<tr>'+cells.map(function(c){ return '<'+tag+'>'+inline(c)+'</'+tag+'>'; }).join('')+'</tr>';
+      }).join('');
+      out.push('<table>'+htmlRows+'</table>'); continue;
+    }
+    if(/^### /.test(ln)){ out.push('<h4>'+inline(ln.slice(4))+'</h4>'); i++; continue; }
+    if(/^## /.test(ln)){ out.push('<h4>'+inline(ln.slice(3))+'</h4>'); i++; continue; }
+    if(/^# /.test(ln)){ out.push('<h3>'+inline(ln.slice(2))+'</h3>'); i++; continue; }
+    if(/^---\s*$/.test(ln)){ out.push('<hr>'); i++; continue; }
+    if(/^- /.test(ln)){                          // list
+      var items = [];
+      while(i < lines.length && /^- /.test(lines[i])){ items.push('<li>'+inline(lines[i].slice(2))+'</li>'); i++; }
+      out.push('<ul>'+items.join('')+'</ul>'); continue;
+    }
+    if(/^\s*\*/.test(ln) && /\*\s*$/.test(ln) && !/\*\*/.test(ln)){ out.push('<p><i>'+inline(ln.replace(/^\s*\*|\*\s*$/g,''))+'</i></p>'); i++; continue; }
+    if(ln.trim()===''){ i++; continue; }
+    out.push('<p>'+inline(ln)+'</p>'); i++;
+  }
+  return out.join('');
+}
+
+function recStateChips(fronts){
+  return '<div class="rec-fchips">'+(fronts||[]).map(function(f){
+    return '<span class="rec-fchip '+escapeHtml(f.state||'')+'">'+escapeHtml(f.front)+'</span>';
+  }).join('')+'</div>';
+}
+function recCardHtml(r){
+  return '<div class="rec-card" data-recid="'+escapeHtml(r.id)+'">'+
+    '<div class="rec-card-top">'+
+      '<span class="badge sev-'+escapeHtml(r.severity)+'">'+escapeHtml(r.severity)+'</span>'+
+      '<span class="rec-card-title">'+escapeHtml(r.title||r.id)+'</span>'+
+      '<span class="rec-card-time">'+escapeHtml(tsClock(r.openedAt))+'</span>'+
+    '</div>'+
+    '<div class="rec-card-meta">'+escapeHtml(r.status||'')+' · '+escapeHtml(String(r.commandCount||0))+' live check(s) · '+escapeHtml(r.durationHuman||'')+'</div>'+
+    recStateChips(r.fronts)+
+    (r.verdict ? '<div class="rec-card-verdict">'+escapeHtml(r.verdict)+'</div>' : '')+
+  '</div>';
+}
+function loadRecords(){
+  var host = $('recList');
+  host.innerHTML = '<p class="sess-empty">Loading past triages…</p>';
+  fetch('/api/records').then(function(r){ return r.json(); }).then(function(d){
+    var list = (d && d.records) || [];
+    if(!list.length){ host.innerHTML = '<p class="sess-empty">No triage records yet. Run a triage to completion and its full artifacts + documents are written here automatically.</p>'; return; }
+    host.innerHTML = list.map(recCardHtml).join('');
+  }).catch(function(){ host.innerHTML = '<p class="sess-empty">Could not load records.</p>'; });
+}
+function showRecList(){
+  REC_CURRENT = null;
+  $('recListView').style.display = '';
+  $('recDetailView').style.display = 'none';
+  $('recBack').style.display = 'none';
+  $('recTitle').textContent = 'History / Records';
+}
+function openRecordDetail(id){
+  fetch('/api/records/'+encodeURIComponent(id)).then(function(r){
+    if(!r.ok) throw new Error('not found'); return r.json();
+  }).then(function(rec){
+    REC_CURRENT = rec;
+    $('recListView').style.display = 'none';
+    $('recDetailView').style.display = '';
+    $('recBack').style.display = '';
+    $('recTitle').textContent = (rec.severity||'')+' · '+(rec.title||rec.id);
+    var head = '<h4><span class="badge sev-'+escapeHtml(rec.severity)+'">'+escapeHtml(rec.severity)+'</span> '+escapeHtml(rec.title||rec.id)+'</h4>'+
+      '<div class="rd-meta">'+escapeHtml(rec.id)+' · '+escapeHtml(rec.status||'')+' · opened '+escapeHtml(tsClock(rec.openedAt))+
+      (rec.closedAt?(' · closed '+escapeHtml(tsClock(rec.closedAt))):'')+' · '+escapeHtml(rec.durationHuman||'')+
+      ' · '+escapeHtml(String((rec.commandLog||[]).length))+' live check(s)</div>';
+    $('recDetailHead').innerHTML = head;
+    setRecTab('timeline');
+  }).catch(function(){
+    $('recContent').innerHTML = '<p class="rec-empty">Could not open that record.</p>';
+  });
+}
+function setRecTab(tab){
+  REC_TAB = tab;
+  [].forEach.call(document.querySelectorAll('.rec-tab'), function(b){ b.classList.toggle('on', b.getAttribute('data-rectab')===tab); });
+  renderRecTab();
+}
+function renderRecTab(){
+  var rec = REC_CURRENT, box = $('recContent'); if(!rec || !box) return;
+  if(REC_TAB === 'timeline'){ box.innerHTML = renderTimeline(rec); return; }
+  if(REC_TAB === 'commands'){ box.innerHTML = renderCommandLog(rec); return; }
+  if(REC_TAB === 'evidence'){ box.innerHTML = renderEvidenceHistory(rec); return; }
+  if(REC_TAB === 'verdict'){ box.innerHTML = renderRecVerdict(rec); return; }
+  if(REC_TAB === 'slt' || REC_TAB === 'engineer'){ renderRecDoc(rec.id, REC_TAB, box); return; }
+}
+function renderTimeline(rec){
+  var tl = rec.timeline || [];
+  if(!tl.length) return '<p class="rec-empty">No timeline recorded.</p>';
+  return '<ul class="rec-tl">'+tl.map(function(ev){
+    var tag = ev.kind==='message' ? (ev.tier||'') : ev.kind;
+    return '<li class="k-'+escapeHtml(ev.kind||'')+'">'+
+      '<span class="tl-t">'+escapeHtml(tsClock(ev.ts))+'</span>'+
+      '<span class="tl-tag">'+escapeHtml(tag)+(ev.agent?(' · '+escapeHtml(ev.agent)):'')+'</span>'+
+      '<div class="tl-txt">'+escapeHtml(ev.text||'')+'</div>'+
+    '</li>';
+  }).join('')+'</ul>';
+}
+function renderCommandLog(rec){
+  var log = rec.commandLog || [];
+  if(!log.length) return '<p class="rec-empty">No wire calls were recorded for this triage.</p>';
+  return log.map(function(r){
+    var badge = r.ok ? '<span class="sr-badge ok">ok'+(r.status?(' · '+escapeHtml(String(r.status))):'')+'</span>' : '<span class="sr-badge fail">failed</span>';
+    return '<div class="sess-rec">'+
+      '<div class="sr-top">'+
+        '<span class="sr-src">'+escapeHtml(r.source||'source')+'</span>'+
+        '<span class="sr-badge kind">'+escapeHtml(r.kind||'read')+'</span>'+badge+
+        '<span class="sr-who">'+escapeHtml(r.agent||'system')+(r.front?(' · '+escapeHtml(r.front)):'')+(r.durationMs!=null?(' · '+escapeHtml(String(r.durationMs))+'ms'):'')+'</span>'+
+        '<span class="sr-time">'+escapeHtml(tsClock(r.ts))+'</span>'+
+      '</div>'+
+      '<div class="sr-login">🔐 '+escapeHtml(r.login||('host '+(r.host||'')))+'</div>'+
+      '<div class="sr-cmd">$ '+escapeHtml(r.command||'')+'</div>'+
+      '<pre class="sr-raw">'+escapeHtml(r.raw||'(no body)')+'</pre>'+
+      '<div class="sr-interp"><b>SME read:</b> '+escapeHtml(r.interpretation||'')+'</div>'+
+    '</div>';
+  }).join('');
+}
+function renderEvidenceHistory(rec){
+  var h = rec.evidenceHistory || [];
+  if(!h.length) return '<p class="rec-empty">No evidence transitions recorded.</p>';
+  return '<ul class="rec-tl">'+h.map(function(e){
+    return '<li class="k-evidence">'+
+      '<span class="tl-t">'+escapeHtml(tsClock(e.ts))+'</span>'+
+      '<span class="tl-tag">'+escapeHtml(e.front)+' · '+escapeHtml(e.state)+'</span>'+
+      '<div class="tl-txt">'+escapeHtml(e.detail||'')+(e.source?(' <i>['+escapeHtml(e.source)+']</i>'):'')+'</div>'+
+    '</li>';
+  }).join('')+'</ul>';
+}
+function renderRecVerdict(rec){
+  var v = rec.verdict;
+  if(!v) return '<p class="rec-empty">No L4 verdict was recorded for this triage — the docs summarise from the real evidence instead.</p>';
+  var checks = (v.nextChecks||[]).map(function(c){ return '<li>'+escapeHtml(c)+'</li>'; }).join('');
+  var blinds = (v.blindSpots||[]).map(function(b){ return '<li>'+escapeHtml(b.front)+' — '+escapeHtml(b.reason)+'</li>'; }).join('');
+  return '<div class="rec-md">'+
+    '<h4>Verdict</h4><p>'+escapeHtml(v.verdict||'')+'</p>'+
+    (v.impact?'<h4>Impact</h4><p>'+escapeHtml(v.impact)+'</p>':'')+
+    (checks?'<h4>Next checks</h4><ul>'+checks+'</ul>':'')+
+    (blinds?'<h4>Blind spots</h4><ul>'+blinds+'</ul>':'')+
+  '</div>';
+}
+function renderRecDoc(id, which, box){
+  var key = id+':'+which;
+  box.innerHTML = '<p class="rec-empty">Loading document…</p>';
+  if(REC_DOC_CACHE[key]){ box.innerHTML = '<div class="rec-md">'+mdToHtml(REC_DOC_CACHE[key])+'</div>'; return; }
+  fetch('/api/records/'+encodeURIComponent(id)+'/doc/'+encodeURIComponent(which)).then(function(r){
+    if(!r.ok) throw new Error('doc'); return r.json();
+  }).then(function(d){
+    REC_DOC_CACHE[key] = d.content || '';
+    // Guard against a slow fetch resolving after the user switched tabs.
+    if(REC_TAB === which && REC_CURRENT && REC_CURRENT.id === id){
+      box.innerHTML = '<div class="rec-md">'+mdToHtml(d.content||'')+'</div>';
+    }
+  }).catch(function(){ box.innerHTML = '<p class="rec-empty">Could not load that document.</p>'; });
+}
+/* wiring */
+$('histBtn').onclick = function(){ showRecList(); loadRecords(); $('recDrawer').classList.add('on'); };
+$('recClose').onclick = function(){ $('recDrawer').classList.remove('on'); };
+$('recBack').onclick = showRecList;
+$('recDrawer').onclick = function(e){ if(e.target === this) this.classList.remove('on'); };
+$('recList').addEventListener('click', function(e){
+  var card = e.target.closest('[data-recid]'); if(!card) return;
+  openRecordDetail(card.getAttribute('data-recid'));
+});
+$('recTabs').addEventListener('click', function(e){
+  var b = e.target.closest('[data-rectab]'); if(!b) return;
+  setRecTab(b.getAttribute('data-rectab'));
+});
 
 /* ---------- live sources panel (status + real retry) ---------- */
 function srcRowHtml(id, s){
