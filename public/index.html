@@ -1781,6 +1781,278 @@
 
     /* main-container offset for paused banner */
     body.is-paused .main-container { height: calc(100vh - 56px - 38px); }
+
+    /* ============================================================
+       EVIDENCE SPLIT CONSOLE — the triage bridge UI.
+       Built on the dashboard's own theme variables so it works in
+       every theme (dark, light, midnight, ocean, forest, purple).
+       State tints use color-mix so they follow the active theme.
+       ============================================================ */
+
+    /* --- header controls --- */
+    .open-triage-btn {
+      background: var(--danger); color: #fff; border: none;
+      padding: 0.5rem 0.9rem; border-radius: 8px; font-weight: 700;
+      font-size: 0.82rem; cursor: pointer; white-space: nowrap;
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      box-shadow: 0 4px 14px color-mix(in srgb, var(--danger) 35%, transparent);
+      transition: transform .12s ease, filter .12s ease;
+    }
+    .open-triage-btn:hover { transform: translateY(-1px); filter: brightness(1.08); }
+
+    .theme-toggle {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      background: var(--bg-secondary); border: 1px solid var(--border);
+      color: var(--text-secondary); border-radius: 999px;
+      padding: 0.32rem 0.5rem; cursor: pointer; font-size: 0.9rem;
+      transition: border-color .12s ease, color .12s ease;
+    }
+    .theme-toggle:hover { border-color: var(--accent); color: var(--text-primary); }
+    .theme-toggle .tt-track {
+      width: 30px; height: 16px; border-radius: 999px; position: relative;
+      background: var(--bg-hover); border: 1px solid var(--border);
+    }
+    .theme-toggle .tt-knob {
+      position: absolute; top: 1px; left: 1px; width: 12px; height: 12px;
+      border-radius: 50%; background: var(--accent); transition: left .18s ease;
+    }
+    body.theme-is-light .theme-toggle .tt-knob { left: 15px; }
+
+    /* --- Live Activity collapse --- */
+    .icon-toggle-btn {
+      background: transparent; border: 1px solid var(--border); color: var(--text-secondary);
+      width: 26px; height: 26px; border-radius: 6px; cursor: pointer; font-size: 0.8rem;
+      display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+      transition: .12s;
+    }
+    .icon-toggle-btn:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--accent); }
+    .right-panel .activity-feed.collapsed .activity-tabs,
+    .right-panel .activity-feed.collapsed .agent-filter-bar,
+    .right-panel .activity-feed.collapsed .activity-list { display: none; }
+    .right-panel .activity-feed.collapsed { flex: 0 0 auto; }
+
+    /* --- severity modal --- */
+    .triage-overlay {
+      position: fixed; inset: 0; background: rgba(2,6,15,.72);
+      -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+      z-index: 900; display: none; align-items: center; justify-content: center; padding: 1.5rem;
+    }
+    .triage-overlay.on { display: flex; }
+    .triage-modal {
+      width: 100%; max-width: 540px; background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 14px; box-shadow: 0 25px 60px rgba(0,0,0,.5); overflow: hidden;
+    }
+    .triage-modal-head {
+      padding: .9rem 1.1rem; border-bottom: 1px solid var(--border); background: var(--bg-secondary);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .triage-modal-head h3 { font-size: 1rem; font-weight: 700; color: var(--text-primary); }
+    .triage-modal-body { padding: 1.1rem; }
+    .triage-field { margin-bottom: 1rem; }
+    .triage-field > label { display: block; font-size: .78rem; color: var(--text-secondary); margin-bottom: .5rem; font-weight: 600; }
+    .sev-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: .55rem; }
+    .sev-opt {
+      border: 2px solid var(--border); border-radius: 10px; padding: .7rem .6rem;
+      background: var(--bg-secondary); cursor: pointer; text-align: left; color: var(--text-primary); transition: .12s;
+    }
+    .sev-opt b { display: block; font-size: .9rem; font-weight: 800; margin-bottom: .2rem; }
+    .sev-opt span { font-size: .66rem; color: var(--text-muted); line-height: 1.4; display: block; }
+    .sev-opt:hover { transform: translateY(-1px); }
+    .sev-opt[data-sev="P1"] b { color: var(--danger); }
+    .sev-opt[data-sev="P2"] b { color: var(--warning); }
+    .sev-opt[data-sev="P3"] b { color: var(--accent); }
+    .sev-opt[data-sev="P1"].sel { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+    .sev-opt[data-sev="P2"].sel { border-color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, transparent); }
+    .sev-opt[data-sev="P3"].sel { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+    .triage-field textarea {
+      width: 100%; min-height: 90px; resize: vertical; background: var(--bg-secondary);
+      border: 1px solid var(--border); border-radius: 9px; padding: .6rem .75rem;
+      color: var(--text-primary); font-size: .85rem; font-family: inherit; line-height: 1.5;
+    }
+    .triage-field textarea:focus { outline: none; border-color: var(--accent); }
+    .triage-hint { font-size: .68rem; color: var(--text-muted); margin-top: .4rem; }
+    .triage-modal-foot {
+      padding: .8rem 1.1rem; border-top: 1px solid var(--border); display: flex;
+      justify-content: space-between; align-items: center; gap: .6rem; background: var(--bg-secondary);
+    }
+    .triage-modal-foot .right { display: flex; gap: .5rem; }
+    .tbtn { border: none; border-radius: 9px; padding: .55rem 1rem; font-size: .83rem; font-weight: 700; cursor: pointer; transition: .12s; }
+    .tbtn-danger { background: var(--danger); color: #fff; }
+    .tbtn-danger:hover { filter: brightness(1.08); }
+    .tbtn-ghost { background: transparent; color: var(--text-secondary); border: 1px solid var(--border); }
+    .tbtn-ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
+    .triage-error { color: var(--danger); font-size: .72rem; margin: 0; display: none; }
+
+    /* --- console shell (covers the main area during a triage) --- */
+    .triage-console {
+      position: fixed; left: 0; right: 0; top: 56px; bottom: 0;
+      background: var(--bg-primary); z-index: 400; display: none; flex-direction: column;
+    }
+    body.is-paused .triage-console { top: calc(56px + 38px); }
+    .triage-console.on { display: flex; }
+    .triage-console.maxed { top: 0; z-index: 950; }
+
+    .tc-head {
+      height: 48px; padding: 0 1rem; display: flex; align-items: center; justify-content: space-between;
+      gap: 1rem; background: linear-gradient(135deg, var(--bg-secondary), var(--bg-card));
+      border-bottom: 1px solid var(--border); flex-shrink: 0;
+    }
+    .tc-title { display: flex; align-items: center; gap: .6rem; min-width: 0; }
+    .tc-title h2 { font-size: .95rem; font-weight: 800; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tc-sevtag {
+      font-size: .62rem; font-weight: 800; letter-spacing: .07em; padding: .16rem .45rem; border-radius: 5px;
+      text-transform: uppercase; border: 1px solid transparent;
+    }
+    .tc-head-actions { display: flex; gap: .4rem; align-items: center; }
+
+    /* --- escalation strip --- */
+    .esc-strip {
+      display: flex; align-items: stretch; gap: 0; padding: .55rem .8rem;
+      border-bottom: 1px solid var(--border); background: var(--bg-secondary); flex-shrink: 0; overflow-x: auto;
+    }
+    .esc-step { display: flex; align-items: center; gap: .5rem; flex: 1; min-width: 150px; }
+    .esc-body { display: flex; align-items: center; gap: .5rem; flex: 1; }
+    .esc-mark {
+      width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center;
+      justify-content: center; font-size: .64rem; font-weight: 800; border: 2px solid var(--border);
+      color: var(--text-muted); background: var(--bg-card);
+    }
+    .esc-txt b { display: block; font-size: .74rem; font-weight: 700; line-height: 1.25; color: var(--text-primary); }
+    .esc-txt span { font-size: .62rem; color: var(--text-muted); }
+    .esc-link { flex: 1; height: 2px; background: var(--border); min-width: 14px; border-radius: 2px; }
+    .esc-step[data-s="active"] .esc-mark {
+      border-color: var(--accent); color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 16%, transparent); animation: escring 1.6s infinite;
+    }
+    .esc-step[data-s="active"] .esc-txt b { color: var(--accent); }
+    @keyframes escring { 0%,100%{ box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); } 50%{ box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 0%, transparent); } }
+    .esc-step[data-s="done"] .esc-mark { border-color: var(--success); color: #fff; background: var(--success); }
+    .esc-step[data-s="done"] .esc-txt b { color: var(--success); }
+    .esc-step[data-s="done"] .esc-link { background: var(--success); }
+
+    /* --- split --- */
+    .tc-split { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.05fr); flex: 1; min-height: 0; }
+    .tc-bridge { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); background: var(--bg-card); }
+    .tc-bridge-head, .tc-board-head {
+      padding: .5rem .8rem; border-bottom: 1px solid var(--border); flex-shrink: 0;
+      display: flex; align-items: center; justify-content: space-between; gap: .5rem; background: var(--bg-secondary);
+    }
+    .mini-title { font-size: .66rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); }
+    .mini-pill {
+      font-size: .58rem; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+      padding: .12rem .4rem; border-radius: 4px; background: var(--bg-hover); color: var(--text-muted); flex-shrink: 0;
+    }
+    .tc-stream { flex: 1; overflow-y: auto; padding: .35rem 0 .8rem; }
+
+    .round-sep {
+      display: flex; align-items: center; gap: .6rem; padding: .5rem .8rem .3rem; margin-top: .2rem;
+    }
+    .round-sep span {
+      font-size: .6rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .round-sep::before, .round-sep::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+    .tmsg { display: flex; gap: .6rem; padding: .5rem .8rem; animation: trise .28s ease; }
+    .tmsg:hover { background: var(--bg-hover); }
+    @keyframes trise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    .tmsg-ico {
+      width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; font-size: 1rem;
+      display: flex; align-items: center; justify-content: center; background: var(--bg-secondary); border: 1px solid var(--border);
+    }
+    .tmsg-main { min-width: 0; flex: 1; }
+    .tmsg-top { display: flex; align-items: center; gap: .35rem; flex-wrap: wrap; margin-bottom: .18rem; }
+    .tmsg-who { font-size: .82rem; font-weight: 700; color: var(--text-primary); }
+    .tmsg-time { font-size: .63rem; color: var(--text-muted); font-family: 'Consolas', ui-monospace, monospace; }
+    .tmsg-text { font-size: .82rem; line-height: 1.55; color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; }
+    .tbadge {
+      font-size: .56rem; font-weight: 800; letter-spacing: .06em; padding: .11rem .34rem;
+      border-radius: 4px; text-transform: uppercase; border: 1px solid transparent;
+    }
+    .tier-L1 { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 42%, transparent); }
+    .tier-L2 { background: color-mix(in srgb, var(--purple) 15%, transparent); color: var(--purple); border-color: color-mix(in srgb, var(--purple) 42%, transparent); }
+    .tier-L3 { background: color-mix(in srgb, var(--warning) 15%, transparent); color: var(--warning); border-color: color-mix(in srgb, var(--warning) 42%, transparent); }
+    .tier-L4 { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); border-color: color-mix(in srgb, var(--success) 42%, transparent); }
+    .sev-P1 { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, transparent); }
+    .sev-P2 { background: color-mix(in srgb, var(--warning) 14%, transparent); color: var(--warning); border-color: color-mix(in srgb, var(--warning) 50%, transparent); }
+    .sev-P3 { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+
+    /* --- evidence board --- */
+    .tc-board { display: flex; flex-direction: column; min-height: 0; background: var(--bg-secondary); }
+    .tc-verdict {
+      margin: .6rem .7rem 0; border-radius: 10px; padding: .6rem .75rem; border: 1px solid var(--border);
+      background: var(--bg-card); display: flex; align-items: center; gap: .6rem; flex-shrink: 0;
+    }
+    .tc-verdict .vdot { width: 10px; height: 10px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
+    .tc-verdict b { font-size: .82rem; display: block; color: var(--text-primary); }
+    .tc-verdict span { font-size: .68rem; color: var(--text-muted); }
+    .tc-verdict.red { border-color: color-mix(in srgb, var(--danger) 45%, transparent); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+    .tc-verdict.red .vdot { background: var(--danger); animation: tcpulse 1.6s infinite; }
+    .tc-verdict.amber { border-color: color-mix(in srgb, var(--warning) 45%, transparent); background: color-mix(in srgb, var(--warning) 13%, transparent); }
+    .tc-verdict.amber .vdot { background: var(--warning); }
+    @keyframes tcpulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+    .board-grid {
+      flex: 1; overflow-y: auto; padding: .7rem; display: grid; gap: .6rem;
+      grid-template-columns: repeat(auto-fill, minmax(215px,1fr)); align-content: start;
+    }
+    .ev-card {
+      border: 1px solid var(--border); border-radius: 11px; background: var(--bg-card); overflow: hidden;
+      transition: border-color .3s, box-shadow .3s, transform .2s;
+    }
+    .ev-chead { display: flex; align-items: center; gap: .45rem; padding: .55rem .65rem; border-bottom: 1px solid var(--border); }
+    .ev-ico { font-size: .95rem; }
+    .ev-chead h4 { font-size: .76rem; font-weight: 700; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); }
+    .ev-pill {
+      font-size: .55rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+      padding: .11rem .34rem; border-radius: 4px; background: var(--bg-hover); color: var(--text-muted); flex-shrink: 0;
+    }
+    .ev-cbody { padding: .5rem .65rem; min-height: 52px; }
+    .ev-empty { font-size: .7rem; color: var(--text-muted); font-style: italic; padding: .35rem 0; }
+    .ev-detail { font-size: .76rem; color: var(--text-primary); line-height: 1.5; word-break: break-word; }
+    .ev-cfoot {
+      padding: .35rem .65rem; border-top: 1px solid var(--border); font-size: .6rem; color: var(--text-muted);
+      display: flex; justify-content: space-between; gap: .4rem;
+    }
+    .ev-card[data-state="waiting"] { border-style: dashed; opacity: .8; }
+    .ev-card[data-state="clean"] { border-color: color-mix(in srgb, var(--success) 50%, transparent); box-shadow: inset 3px 0 0 var(--success); }
+    .ev-card[data-state="clean"] .ev-pill { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
+    .ev-card[data-state="degraded"] { border-color: color-mix(in srgb, var(--warning) 50%, transparent); box-shadow: inset 3px 0 0 var(--warning); }
+    .ev-card[data-state="degraded"] .ev-pill { background: color-mix(in srgb, var(--warning) 15%, transparent); color: var(--warning); }
+    .ev-card[data-state="suspect"] { border-color: color-mix(in srgb, var(--danger) 55%, transparent); box-shadow: inset 3px 0 0 var(--danger); }
+    .ev-card[data-state="suspect"] .ev-pill { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); }
+    .ev-card[data-state="blind"] {
+      border-style: dashed; opacity: .62;
+      background: repeating-linear-gradient(135deg, transparent, transparent 7px, color-mix(in srgb, var(--text-muted) 12%, transparent) 7px, color-mix(in srgb, var(--text-muted) 12%, transparent) 14px), var(--bg-card);
+    }
+    .ev-card.flash { animation: evflash .9s ease; }
+    @keyframes evflash { 0%{transform:scale(1)} 25%{transform:scale(1.025); box-shadow:0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent)} 100%{transform:scale(1)} }
+
+    /* --- L4 verdict card --- */
+    .verdict-card {
+      margin: .6rem .7rem; border: 1px solid color-mix(in srgb, var(--success) 45%, transparent);
+      border-radius: 10px; overflow: hidden; background: color-mix(in srgb, var(--success) 10%, transparent); flex-shrink: 0;
+    }
+    .verdict-card .vc-head {
+      padding: .5rem .7rem; font-size: .68rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase;
+      color: var(--success); border-bottom: 1px solid color-mix(in srgb, var(--success) 20%, transparent);
+    }
+    .vc-row { display: flex; gap: .55rem; padding: .45rem .7rem; border-bottom: 1px solid color-mix(in srgb, var(--success) 15%, transparent); font-size: .78rem; }
+    .vc-row:last-child { border-bottom: none; }
+    .vc-row i {
+      font-style: normal; font-size: .6rem; font-weight: 800; letter-spacing: .06em; color: var(--success);
+      text-transform: uppercase; width: 92px; flex-shrink: 0; padding-top: .14rem;
+    }
+    .vc-row.blind i { color: var(--text-muted); }
+    .vc-row span { color: var(--text-primary); line-height: 1.5; word-break: break-word; }
+    .vc-row ol { margin: 0; padding-left: 1.1rem; color: var(--text-primary); line-height: 1.55; }
+
+    .tc-empty-hint { padding: 1.4rem; text-align: center; color: var(--text-muted); font-size: .8rem; }
+
+    @media (max-width: 1100px) {
+      .tc-split { grid-template-columns: 1fr; }
+      .tc-bridge { border-right: none; border-bottom: 1px solid var(--border); max-height: 42vh; }
+    }
   </style>
 </head>
 <body>
@@ -1798,6 +2070,11 @@
 
     <!-- Right: time + connection + profile -->
     <div class="header-right">
+      <button class="open-triage-btn" onclick="openTriageModal()" title="Open a triage bridge">🚨 Open Triage</button>
+      <button class="theme-toggle" id="themeToggle" onclick="toggleLightDark()" title="Switch light / dark">
+        <span id="themeToggleIcon">🌙</span>
+        <span class="tt-track"><span class="tt-knob"></span></span>
+      </button>
       <span class="live-time" id="liveTime">--:--:--</span>
       <!-- Pause is a real control: it suspends agent heartbeats server-side.
            If the server refuses it, the button says so instead of pretending. -->
@@ -1905,10 +2182,13 @@
 
     <!-- Right Panel -->
     <aside class="right-panel">
-      <div class="card activity-feed">
+      <div class="card activity-feed" id="activityFeedCard">
         <div class="card-header">
           <h2>📡 Live Activity</h2>
-          <span style="color: var(--success); font-size: 0.7rem;">● STREAMING</span>
+          <div style="display:flex;align-items:center;gap:0.5rem;">
+            <span style="color: var(--success); font-size: 0.7rem;">● STREAMING</span>
+            <button class="icon-toggle-btn" id="activityCollapseBtn" onclick="toggleActivityCollapse()" title="Collapse">▲</button>
+          </div>
         </div>
         <div class="activity-tabs">
           <button class="activity-tab active" data-atab="all" onclick="switchActivityTab('all')">All</button>
@@ -1976,6 +2256,78 @@
       </div>
     </aside>
   </main>
+
+  <!-- ============ EVIDENCE SPLIT CONSOLE ============ -->
+  <div class="triage-console" id="triageConsole">
+    <div class="tc-head">
+      <div class="tc-title">
+        <h2 id="tcTitle">🚨 Triage</h2>
+        <span class="tc-sevtag tbadge" id="tcSevTag" style="display:none"></span>
+      </div>
+      <div class="tc-head-actions">
+        <button class="icon-toggle-btn" id="tcMaxBtn" onclick="toggleTriageMax()" title="Maximize">⛶</button>
+        <button class="icon-toggle-btn" id="tcCloseBtn" onclick="closeTriageConsole()" title="Close triage view">✕</button>
+      </div>
+    </div>
+    <div class="esc-strip" id="escStrip"></div>
+    <div class="tc-split">
+      <div class="tc-bridge">
+        <div class="tc-bridge-head">
+          <span class="mini-title">Bridge · narration</span>
+          <span class="mini-pill" id="tcMsgCount">0 posts</span>
+        </div>
+        <div class="tc-stream" id="tcStream"></div>
+      </div>
+      <div class="tc-board">
+        <div class="tc-board-head">
+          <span class="mini-title">⬤ Evidence board · network state</span>
+          <span class="mini-pill" id="tcBoardState">live</span>
+        </div>
+        <div class="tc-verdict" id="tcVerdict">
+          <span class="vdot"></span>
+          <div>
+            <b id="tcVerdictTitle">Waiting for the first sweep…</b>
+            <span id="tcVerdictSub">Cards fill in as each engineer reports.</span>
+          </div>
+        </div>
+        <div id="tcVerdictCardHost"></div>
+        <div class="board-grid" id="tcBoard"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ SEVERITY MODAL ============ -->
+  <div class="triage-overlay" id="triageModalOverlay">
+    <div class="triage-modal">
+      <div class="triage-modal-head">
+        <h3>🚨 Open a triage</h3>
+        <button class="icon-toggle-btn" onclick="closeTriageModal()">✕</button>
+      </div>
+      <div class="triage-modal-body">
+        <div class="triage-field">
+          <label>How bad is it?</label>
+          <div class="sev-grid" id="sevGrid">
+            <button type="button" class="sev-opt sel" data-sev="P1" onclick="selectSeverity('P1')"><b>P1</b><span>Users are down. Drop everything.</span></button>
+            <button type="button" class="sev-opt" data-sev="P2" onclick="selectSeverity('P2')"><b>P2</b><span>Something is degraded but usable.</span></button>
+            <button type="button" class="sev-opt" data-sev="P3" onclick="selectSeverity('P3')"><b>P3</b><span>Odd, worth a look, not urgent.</span></button>
+          </div>
+        </div>
+        <div class="triage-field">
+          <label>What are you seeing? Plain words are fine.</label>
+          <textarea id="triageDescription" placeholder="e.g. Apps in DC-1 are crawling since about 2pm. Campus users complain, but the office Wi-Fi looks fine to me."></textarea>
+          <p class="triage-hint">No ticket numbers, no jargon needed — the squad translates it.</p>
+        </div>
+        <p class="triage-error" id="triageError"></p>
+      </div>
+      <div class="triage-modal-foot">
+        <span class="triage-hint" style="margin:0">The squad works it live in tiers.</span>
+        <div class="right">
+          <button class="tbtn tbtn-ghost" onclick="closeTriageModal()">Cancel</button>
+          <button class="tbtn tbtn-danger" id="startTriageBtn" onclick="startTriage()">Start triage →</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- Settings Modal -->
   <div class="settings-overlay" id="settingsOverlay">
@@ -2413,6 +2765,20 @@
             updateConsensusBar(data.debateId);
           }
           break;
+
+        // ---- Evidence Split Console (triage) events ----
+        // Contract events are flat: { type, triageId, ... }. Some servers may
+        // wrap the payload in `data`; pick whichever object carries triageId.
+        case 'triage_opened':
+        case 'triage_progress':
+        case 'triage_message':
+        case 'triage_evidence':
+        case 'triage_verdict':
+        case 'triage_closed': {
+          const payload = (message.data && message.data.triageId) ? message.data : message;
+          handleTriageEvent(type, payload);
+          break;
+        }
       }
     }
 
@@ -3814,9 +4180,505 @@
       list.innerHTML = filtered.map(a => createActivityHTML(a)).join('');
     }
 
+    // ============================================================
+    // EVIDENCE SPLIT CONSOLE — triage bridge front end.
+    // Renders the contract's WS events. Every piece of server/agent
+    // text goes through escapeHtml before it touches the DOM.
+    // ============================================================
+
+    // Front → icon / display name / source label (UI-only cosmetics;
+    // the real source string still comes from each triage_evidence).
+    const FRONT_META = {
+      campus:       { ico: '🏢', name: 'Campus access',   src: 'Catalyst Center' },
+      fabric:       { ico: '🕸',  name: 'DC fabric (ACI)', src: 'ACI (APIC)' },
+      wan:          { ico: '🌐', name: 'WAN / edge',      src: 'SD-WAN vManage' },
+      incidents:    { ico: '🎫', name: 'Open incidents',  src: 'Catalyst + ACI' },
+      firewall:     { ico: '🧱', name: 'Firewall',        src: 'not connected' },
+      loadbalancer: { ico: '⚖️', name: 'Load balancer',   src: 'not connected' },
+      loadbal:      { ico: '⚖️', name: 'Load balancer',   src: 'not connected' },
+      security:     { ico: '🔐', name: 'Security',        src: 'not connected' }
+    };
+    function frontMeta(front) {
+      return FRONT_META[front] || { ico: '📊', name: String(front || 'front'), src: '—' };
+    }
+
+    // Tier → strip label / icon. L4 is the Principal Engineer, never "Manager".
+    const TIER_META = {
+      L1: { ico: '👁', label: 'L1 sweep',        sub: 'Monitor-Eye',      badge: 'L1' },
+      L2: { ico: '🛰',  label: 'L2 fronts',       sub: 'NetOps + Incident', badge: 'L2' },
+      L3: { ico: '🧭', label: 'L3 device-deep',  sub: 'Router + Config',   badge: 'L3' },
+      L4: { ico: '🧠', label: 'L4 / Principal',  sub: 'Jarvis',            badge: 'L4 / Principal Engineer' }
+    };
+    const TIER_ORDER = ['L1', 'L2', 'L3', 'L4'];
+
+    // triage state
+    let activeTriageId = null;
+    let triageSeverity = 'P1';
+    let triageMsgCount = 0;
+    let triageLastRound = 0;
+    let chosenSeverity = 'P1';
+    let triageBlindReasons = {}; // front -> reason (from triage_opened.blindSpots)
+
+    // ---------- severity modal ----------
+    function openTriageModal() {
+      document.getElementById('triageError').style.display = 'none';
+      document.getElementById('triageModalOverlay').classList.add('on');
+    }
+    function closeTriageModal() {
+      document.getElementById('triageModalOverlay').classList.remove('on');
+    }
+    document.getElementById('triageModalOverlay').addEventListener('click', (e) => {
+      if (e.target.id === 'triageModalOverlay') closeTriageModal();
+    });
+    function selectSeverity(sev) {
+      chosenSeverity = sev;
+      document.querySelectorAll('#sevGrid .sev-opt').forEach(b => {
+        b.classList.toggle('sel', b.dataset.sev === sev);
+      });
+    }
+
+    async function startTriage() {
+      const description = document.getElementById('triageDescription').value.trim();
+      const errEl = document.getElementById('triageError');
+      if (!description) {
+        errEl.textContent = 'Add a plain-words description first.';
+        errEl.style.display = 'block';
+        return;
+      }
+      const btn = document.getElementById('startTriageBtn');
+      btn.disabled = true; btn.textContent = 'Starting…';
+      try {
+        const res = await fetch('/api/triage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ severity: chosenSeverity, description })
+        });
+        if (!res.ok) throw new Error('Server said ' + res.status);
+        const out = await res.json();
+        closeTriageModal();
+        // The console opens for real when triage_opened arrives over WS.
+        // Remember the id so a refresh mid-triage can restore the board.
+        if (out && out.triageId) {
+          try { sessionStorage.setItem('activeTriageId', out.triageId); } catch (e) {}
+        }
+      } catch (e) {
+        errEl.textContent = 'Could not start the triage: ' + e.message;
+        errEl.style.display = 'block';
+      } finally {
+        btn.disabled = false; btn.textContent = 'Start triage →';
+      }
+    }
+
+    // ---------- console open / close ----------
+    function showTriageConsole() { document.getElementById('triageConsole').classList.add('on'); }
+    function closeTriageConsole() {
+      const c = document.getElementById('triageConsole');
+      c.classList.remove('on');
+      c.classList.remove('maxed');
+      document.getElementById('tcMaxBtn').textContent = '⛶';
+    }
+    function toggleTriageMax() {
+      const c = document.getElementById('triageConsole');
+      const maxed = c.classList.toggle('maxed');
+      document.getElementById('tcMaxBtn').textContent = maxed ? '⤡' : '⛶';
+      document.getElementById('tcMaxBtn').title = maxed ? 'Back to dashboard' : 'Maximize';
+    }
+
+    // ---------- event dispatcher ----------
+    function handleTriageEvent(type, p) {
+      switch (type) {
+        case 'triage_opened':   renderTriageOpened(p); break;
+        case 'triage_progress': renderTriageProgress(p); break;
+        case 'triage_message':  renderTriageMessage(p); break;
+        case 'triage_evidence': applyTriageEvidence(p); break;
+        case 'triage_verdict':  renderTriageVerdict(p); break;
+        case 'triage_closed':   renderTriageClosed(p); break;
+      }
+    }
+
+    // ---------- 1. opened ----------
+    function renderTriageOpened(p) {
+      activeTriageId = p.triageId;
+      triageSeverity = p.severity || 'P1';
+      triageMsgCount = 0;
+      triageLastRound = 0;
+      triageBlindReasons = {};
+      (p.blindSpots || []).forEach(b => { if (b && b.front) triageBlindReasons[b.front] = b.reason || 'not connected'; });
+      try { sessionStorage.setItem('activeTriageId', p.triageId); } catch (e) {}
+
+      // title + severity tag
+      document.getElementById('tcTitle').textContent = '🚨 ' + (p.title || 'Triage') + ' · live';
+      const sevTag = document.getElementById('tcSevTag');
+      sevTag.textContent = triageSeverity;
+      sevTag.className = 'tc-sevtag tbadge sev-' + triageSeverity;
+      sevTag.style.display = 'inline-block';
+
+      // reset panes
+      document.getElementById('tcStream').innerHTML = '';
+      document.getElementById('tcMsgCount').textContent = '0 posts';
+      document.getElementById('tcBoardState').textContent = 'live';
+      document.getElementById('tcVerdictCardHost').innerHTML = '';
+      const v = document.getElementById('tcVerdict');
+      v.className = 'tc-verdict';
+      document.getElementById('tcVerdictTitle').textContent = 'Waiting for the first sweep…';
+      document.getElementById('tcVerdictSub').textContent = 'Cards fill in as each engineer reports.';
+
+      // opener line (the human's description)
+      if (p.description) {
+        const stream = document.getElementById('tcStream');
+        const el = document.createElement('div');
+        el.className = 'tmsg';
+        el.innerHTML =
+          '<div class="tmsg-ico">🧑‍💻</div><div class="tmsg-main">' +
+          '<div class="tmsg-top"><span class="tmsg-who">Vikas</span>' +
+          '<span class="tbadge sev-' + escapeHtml(triageSeverity) + '">' + escapeHtml(triageSeverity) + '</span></div>' +
+          '<div class="tmsg-text">' + escapeHtml(p.description) + '</div></div>';
+        stream.appendChild(el);
+      }
+
+      buildEscStrip();
+      buildBoard(p.fronts || []);
+      showTriageConsole();
+    }
+
+    function buildEscStrip() {
+      const host = document.getElementById('escStrip');
+      host.innerHTML = '';
+      TIER_ORDER.forEach((t, i) => {
+        const m = TIER_META[t];
+        const el = document.createElement('div');
+        el.className = 'esc-step';
+        el.id = 'esc-' + t;
+        el.setAttribute('data-s', 'pending');
+        el.innerHTML =
+          '<div class="esc-body"><div class="esc-mark">' + t + '</div>' +
+          '<div class="esc-txt"><b>' + escapeHtml(m.label) + '</b><span>' + escapeHtml(m.sub) + '</span></div></div>' +
+          (i < TIER_ORDER.length - 1 ? '<div class="esc-link"></div>' : '');
+        host.appendChild(el);
+      });
+    }
+
+    function buildBoard(fronts) {
+      const host = document.getElementById('tcBoard');
+      host.innerHTML = '';
+      if (!fronts.length) {
+        host.innerHTML = '<div class="tc-empty-hint">No fronts to watch for this triage.</div>';
+        return;
+      }
+      fronts.forEach(front => {
+        const meta = frontMeta(front);
+        const isBlind = Object.prototype.hasOwnProperty.call(triageBlindReasons, front);
+        const el = document.createElement('article');
+        el.className = 'ev-card';
+        el.id = 'ev-' + cssId(front);
+        el.setAttribute('data-state', isBlind ? 'blind' : 'waiting');
+        el.innerHTML =
+          '<div class="ev-chead"><span class="ev-ico">' + meta.ico + '</span>' +
+          '<h4>' + escapeHtml(meta.name) + '</h4>' +
+          '<span class="ev-pill">' + (isBlind ? 'blind spot' : 'waiting') + '</span></div>' +
+          '<div class="ev-cbody"><p class="ev-empty">' +
+            (isBlind ? 'No visibility — ' + escapeHtml(triageBlindReasons[front]) : 'No evidence yet.') +
+          '</p></div>' +
+          '<div class="ev-cfoot"><span class="ev-src">' + escapeHtml(meta.src) + '</span><span class="ev-when">—</span></div>';
+        host.appendChild(el);
+      });
+    }
+
+    // ---------- 2. progress ----------
+    function renderTriageProgress(p) {
+      const el = document.getElementById('esc-' + p.tier);
+      if (!el) return;
+      el.setAttribute('data-s', p.status);
+      const mark = el.querySelector('.esc-mark');
+      if (mark) mark.textContent = p.status === 'done' ? '✓' : p.tier;
+    }
+
+    // ---------- 3. message ----------
+    function renderTriageMessage(p) {
+      const stream = document.getElementById('tcStream');
+      if (!stream) return;
+      const round = Number(p.round) || 0;
+      if (round && round !== triageLastRound) {
+        triageLastRound = round;
+        const sep = document.createElement('div');
+        sep.className = 'round-sep';
+        sep.innerHTML = '<span>' + (round === 1 ? 'Round 1 · Front findings' : 'Round 2 · Correlation') + '</span>';
+        stream.appendChild(sep);
+      }
+      const tier = p.tier || 'L1';
+      const tm = TIER_META[tier] || { ico: '🤖', badge: tier };
+      const sev = p.severity || triageSeverity;
+      const el = document.createElement('div');
+      el.className = 'tmsg';
+      el.innerHTML =
+        '<div class="tmsg-ico">' + (tm.ico || '🤖') + '</div><div class="tmsg-main">' +
+        '<div class="tmsg-top"><span class="tmsg-who">' + escapeHtml(p.agent || 'Engineer') + '</span>' +
+        '<span class="tbadge tier-' + escapeHtml(tier) + '">' + escapeHtml(tm.badge || tier) + '</span>' +
+        '<span class="tbadge sev-' + escapeHtml(sev) + '">' + escapeHtml(sev) + '</span>' +
+        '<span class="tmsg-time">' + escapeHtml(fmtTs(p.ts)) + '</span></div>' +
+        '<div class="tmsg-text">' + escapeHtml(p.text || '') + '</div></div>';
+      stream.appendChild(el);
+      stream.scrollTop = stream.scrollHeight;
+      triageMsgCount++;
+      document.getElementById('tcMsgCount').textContent = triageMsgCount + ' post' + (triageMsgCount === 1 ? '' : 's');
+    }
+
+    // ---------- 4. evidence ----------
+    function applyTriageEvidence(p) {
+      const el = document.getElementById('ev-' + cssId(p.front));
+      if (!el) return;
+      el.setAttribute('data-state', p.state || 'waiting');
+      const pillMap = { clean: 'clean', degraded: 'degraded', suspect: 'suspect', blind: 'blind spot', waiting: 'waiting' };
+      const pill = el.querySelector('.ev-pill');
+      if (pill) pill.textContent = pillMap[p.state] || p.state || 'waiting';
+      const body = el.querySelector('.ev-cbody');
+      if (body) {
+        if (p.detail) {
+          body.innerHTML = '<div class="ev-detail">' + escapeHtml(p.detail) + '</div>';
+        } else if (p.state === 'blind') {
+          body.innerHTML = '<p class="ev-empty">No visibility — not connected.</p>';
+        } else {
+          body.innerHTML = '<p class="ev-empty">No evidence yet.</p>';
+        }
+      }
+      const srcEl = el.querySelector('.ev-src');
+      if (srcEl && p.source) srcEl.textContent = p.source;
+      const whenEl = el.querySelector('.ev-when');
+      if (whenEl) whenEl.textContent = fmtTs(p.ts);
+      // flash
+      el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+      updateBoardVerdict();
+    }
+
+    function updateBoardVerdict() {
+      const suspects = document.querySelectorAll('#tcBoard .ev-card[data-state="suspect"]').length;
+      const degraded = document.querySelectorAll('#tcBoard .ev-card[data-state="degraded"]').length;
+      const v = document.getElementById('tcVerdict');
+      const title = document.getElementById('tcVerdictTitle');
+      const sub = document.getElementById('tcVerdictSub');
+      if (suspects) {
+        v.className = 'tc-verdict red';
+        title.textContent = suspects + ' front' + (suspects > 1 ? 's' : '') + ' under suspicion';
+        sub.textContent = 'Red cards are where the evidence points. Read the board top to bottom.';
+      } else if (degraded) {
+        v.className = 'tc-verdict amber';
+        title.textContent = 'Something is off — still narrowing it down';
+        sub.textContent = 'One or more fronts look degraded. Engineers are digging in.';
+      } else {
+        v.className = 'tc-verdict';
+        title.textContent = 'Fronts reporting in…';
+        sub.textContent = 'Cards fill in as each engineer reports.';
+      }
+    }
+
+    // ---------- 5. verdict ----------
+    function renderTriageVerdict(p) {
+      const host = document.getElementById('tcVerdictCardHost');
+      if (!host) return;
+      let rows = '';
+      if (p.verdict) rows += '<div class="vc-row"><i>Verdict</i><span>' + escapeHtml(p.verdict) + '</span></div>';
+      if (p.impact)  rows += '<div class="vc-row"><i>Impact</i><span>' + escapeHtml(p.impact) + '</span></div>';
+      if (p.nextChecks && p.nextChecks.length) {
+        let li = '';
+        p.nextChecks.forEach(c => { li += '<li>' + escapeHtml(c) + '</li>'; });
+        rows += '<div class="vc-row"><i>Next checks</i><span><ol>' + li + '</ol></span></div>';
+      }
+      if (p.blindSpots && p.blindSpots.length) {
+        let bs = '';
+        p.blindSpots.forEach(b => {
+          bs += (bs ? ' ' : '') + escapeHtml((b.front || '') + ': ' + (b.reason || 'not connected'));
+        });
+        rows += '<div class="vc-row blind"><i>Blind spots</i><span>' + bs + '</span></div>';
+      }
+      host.innerHTML =
+        '<div class="verdict-card"><div class="vc-head">🧠 L4 / Principal Engineer — verdict</div>' + rows + '</div>';
+      document.getElementById('tcBoardState').textContent = 'settled';
+    }
+
+    // ---------- 6. closed ----------
+    function renderTriageClosed(p) {
+      document.getElementById('tcBoardState').textContent = 'closed';
+      document.getElementById('tcTitle').textContent = '✅ Triage · ' + escapeHtml(triageSeverity) + ' · closed';
+      try { sessionStorage.removeItem('activeTriageId'); } catch (e) {}
+      activeTriageId = null;
+      // Return to the calm dashboard shortly; the triage stays in history server-side.
+      setTimeout(() => { closeTriageConsole(); }, 1400);
+    }
+
+    // ---------- helpers ----------
+    function cssId(s) { return String(s).replace(/[^a-zA-Z0-9_-]/g, '_'); }
+    function fmtTs(ts) {
+      if (!ts) return new Date().toTimeString().slice(0, 8);
+      const d = new Date(ts);
+      if (isNaN(d.getTime())) return String(ts).slice(0, 8);
+      return d.toTimeString().slice(0, 8);
+    }
+
+    // ---------- restore on load / reconnect ----------
+    async function restoreActiveTriage() {
+      try {
+        // Prefer the id we opened this session; fall back to the recent list.
+        let id = null;
+        try { id = sessionStorage.getItem('activeTriageId'); } catch (e) {}
+        if (!id) {
+          const listRes = await fetch('/api/triage');
+          if (listRes.ok) {
+            const list = await listRes.json();
+            const open = (Array.isArray(list) ? list : (list.triages || []))
+              .find(t => t && (t.status === 'open' || t.status === 'running' || t.status === 'active'));
+            if (open) id = open.id;
+          }
+        }
+        if (!id) return;
+        const res = await fetch('/api/triage/' + encodeURIComponent(id));
+        if (!res.ok) { try { sessionStorage.removeItem('activeTriageId'); } catch (e) {} return; }
+        const obj = await res.json();
+        replayTriageObject(obj);
+      } catch (e) {
+        console.warn('[triage] restore skipped:', e.message);
+      }
+    }
+
+    // Best-effort replay of the full triage object (GET /api/triage/:id).
+    // The live WS path is primary; this rebuilds the board after a refresh.
+    function replayTriageObject(obj) {
+      if (!obj || !obj.triageId && !obj.id) return;
+      const status = obj.status;
+      if (status === 'closed') { try { sessionStorage.removeItem('activeTriageId'); } catch (e) {} return; }
+      renderTriageOpened({
+        triageId: obj.triageId || obj.id,
+        severity: obj.severity, title: obj.title, description: obj.description,
+        staffed: obj.staffed, blindSpots: obj.blindSpots, fronts: obj.fronts
+      });
+      (obj.progress || []).forEach(pr => renderTriageProgress(pr));
+      (obj.messages || []).forEach(m => renderTriageMessage(m));
+      (obj.evidence || []).forEach(ev => applyTriageEvidence(ev));
+      if (obj.verdict) renderTriageVerdict(obj.verdict);
+    }
+
+    // ---------- Live Activity collapse ----------
+    function toggleActivityCollapse() {
+      const card = document.getElementById('activityFeedCard');
+      const collapsed = card.classList.toggle('collapsed');
+      const btn = document.getElementById('activityCollapseBtn');
+      btn.textContent = collapsed ? '▼' : '▲';
+      btn.title = collapsed ? 'Expand' : 'Collapse';
+    }
+
+    // ---------- Light / Dark toggle ----------
+    // Real switch: flips the whole page between the light and dark presets,
+    // remembers the choice, and defaults to the OS preference on first load.
+    function setLightDark(mode) {
+      applyTheme(mode); // reuses the dashboard's own theme engine
+      try {
+        localStorage.setItem('missionControlTheme', mode);
+        localStorage.removeItem('missionControlColors'); // let the preset win cleanly on reload
+      } catch (e) {}
+      syncThemeToggleUI();
+    }
+    function toggleLightDark() {
+      setLightDark(isLightActive() ? 'dark' : 'light');
+    }
+    function isLightActive() {
+      const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim();
+      return luminance(bg) > 0.5;
+    }
+    function luminance(color) {
+      let r = 0, g = 0, b = 0;
+      const hx = color.replace('#', '');
+      if (/^[0-9a-fA-F]{6}$/.test(hx)) {
+        r = parseInt(hx.slice(0, 2), 16); g = parseInt(hx.slice(2, 4), 16); b = parseInt(hx.slice(4, 6), 16);
+      } else {
+        const m = color.match(/(\d+)[,\s]+(\d+)[,\s]+(\d+)/);
+        if (m) { r = +m[1]; g = +m[2]; b = +m[3]; }
+      }
+      return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    }
+    function syncThemeToggleUI() {
+      const light = isLightActive();
+      document.body.classList.toggle('theme-is-light', light);
+      const icon = document.getElementById('themeToggleIcon');
+      if (icon) icon.textContent = light ? '☀️' : '🌙';
+      const tg = document.getElementById('themeToggle');
+      if (tg) tg.title = light ? 'Switch to dark' : 'Switch to light';
+    }
+    function initThemeDefault() {
+      let saved = null;
+      try { saved = localStorage.getItem('missionControlTheme'); } catch (e) {}
+      const hasCustom = (() => { try { return !!localStorage.getItem('missionControlColors'); } catch (e) { return false; } })();
+      if (!saved && !hasCustom) {
+        // Default to the OS preference on first ever load.
+        const prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+        setLightDark(prefersLight ? 'light' : 'dark');
+      } else {
+        syncThemeToggleUI();
+      }
+    }
+
+    // ---------- Demo stub (?demo=1) — visual test only ----------
+    // Drives the EXACT contract events through the real render path so the
+    // console can be verified without the live backend. Never runs by default.
+    function runTriageDemo() {
+      const id = 'demo-1';
+      const seq = [
+        { d: 200,  ev: { type: 'triage_opened', triageId: id, severity: 'P1',
+            title: 'DC-1 apps crawling', description: 'Apps in DC-1 are crawling since about 2pm. Campus users complain, but the office Wi-Fi looks fine to me.',
+            openedAt: Date.now(),
+            staffed: [ {agent:'Monitor-Eye',tier:'L1'}, {agent:'NetOps',tier:'L2'}, {agent:'Incident-Handler',tier:'L2'}, {agent:'Router-Expert',tier:'L3'}, {agent:'Config-Keeper',tier:'L3'}, {agent:'Jarvis',tier:'L4'} ],
+            blindSpots: [ {front:'firewall',reason:'no FMC connected'}, {front:'loadbalancer',reason:'F5 — no Cisco sandbox'} ],
+            fronts: ['campus','fabric','wan','incidents','firewall','loadbalancer'] } },
+        { d: 400,  ev: { type: 'triage_progress', triageId: id, tier: 'L1', status: 'active' } },
+        { d: 500,  ev: { type: 'triage_message', triageId: id, agent: 'Monitor-Eye', tier: 'L1', severity: 'P1', round: 1,
+            text: 'On it. Running the basic sweep now — ping, reachability and health across every device I can see.', ts: Date.now() } },
+        { d: 900,  ev: { type: 'triage_evidence', triageId: id, front: 'campus', state: 'clean', detail: '4/4 access stacks reachable, health 100, 0.0% loss', source: 'Catalyst Center', ts: Date.now() } },
+        { d: 300,  ev: { type: 'triage_evidence', triageId: id, front: 'fabric', state: 'degraded', detail: 'Reachable, but fault counters climbing fast', source: 'ACI (APIC)', ts: Date.now() } },
+        { d: 500,  ev: { type: 'triage_message', triageId: id, agent: 'Monitor-Eye', tier: 'L1', severity: 'P1', round: 1,
+            text: 'Sweep back. Campus is clean — 4/4 stacks answering, health 100. But the fabric is throwing faults hard. Past my level: escalating to L2.', ts: Date.now() } },
+        { d: 300,  ev: { type: 'triage_progress', triageId: id, tier: 'L1', status: 'done' } },
+        { d: 100,  ev: { type: 'triage_progress', triageId: id, tier: 'L2', status: 'active' } },
+        { d: 500,  ev: { type: 'triage_message', triageId: id, agent: 'Incident-Handler', tier: 'L2', severity: 'P1', round: 1,
+            text: 'Fabric read is ugly. 121 critical faults on the APIC, up from 6 this morning. Biggest bucket is port-down on the app-tier leaf pair.', ts: Date.now() } },
+        { d: 400,  ev: { type: 'triage_evidence', triageId: id, front: 'fabric', state: 'suspect', detail: '121 critical faults (was 6). Top: F1394 port-down, leaf 201/202', source: 'ACI (APIC)', ts: Date.now() } },
+        { d: 300,  ev: { type: 'triage_evidence', triageId: id, front: 'incidents', state: 'degraded', detail: '3 linked tickets, oldest 41 min, 27 users reporting', source: 'Catalyst + ACI', ts: Date.now() } },
+        { d: 500,  ev: { type: 'triage_progress', triageId: id, tier: 'L2', status: 'done' } },
+        { d: 100,  ev: { type: 'triage_progress', triageId: id, tier: 'L3', status: 'active' } },
+        { d: 500,  ev: { type: 'triage_message', triageId: id, agent: 'Router-Expert', tier: 'L3', severity: 'P1', round: 1,
+            text: 'L3 here, going device-deep. Ruling the WAN out first — edge is boring, which is what we want. 6/6 BGP peers up, 6d uptime, zero output drops.', ts: Date.now() } },
+        { d: 400,  ev: { type: 'triage_evidence', triageId: id, front: 'wan', state: 'clean', detail: '6/6 BGP peers up, longest uptime 6d 02h, output drops 0', source: 'SD-WAN vManage', ts: Date.now() } },
+        { d: 500,  ev: { type: 'triage_message', triageId: id, agent: 'Config-Keeper', tier: 'L3', severity: 'P1', round: 1,
+            text: 'Tried to pull the fabric change log to confirm the trigger — APIC login failed (ETIMEDOUT). Cannot confirm the change from here, flagging it rather than guessing.', ts: Date.now() } },
+        { d: 400,  ev: { type: 'triage_evidence', triageId: id, front: 'incidents', state: 'suspect', detail: 'APIC change-log read failed (ETIMEDOUT) — cause unconfirmed', source: 'ACI (APIC)', ts: Date.now() } },
+        { d: 500,  ev: { type: 'triage_progress', triageId: id, tier: 'L3', status: 'done' } },
+        { d: 100,  ev: { type: 'triage_progress', triageId: id, tier: 'L4', status: 'active' } },
+        { d: 600,  ev: { type: 'triage_message', triageId: id, agent: 'Jarvis', tier: 'L4', severity: 'P1', round: 2,
+            text: 'L4 here. Correlating the fronts now — campus and WAN are clean, the damage is inside DC-1 on the fabric.', ts: Date.now() } },
+        { d: 700,  ev: { type: 'triage_verdict', triageId: id,
+            verdict: 'The fabric is the source: 121 critical faults concentrated on the app-tier leaf pair, timed with a change ~41 min ago. The change-log read failed, so the exact trigger is unconfirmed.',
+            impact: 'App traffic inside DC-1 only. 27 users reporting, 3 tickets. Campus, WAN and internet unaffected.',
+            nextChecks: ['Get APIC access back and confirm the 13:52 change on EPG-APP-TIER.', 'If a contract was removed, roll it back and watch the critical fault count fall below 10.', 'Ask why the change ran unreviewed.'],
+            blindSpots: [ {front:'firewall',reason:'no FMC — cannot see firewall state'}, {front:'loadbalancer',reason:'F5, no Cisco sandbox'} ], ts: Date.now() } },
+        { d: 400,  ev: { type: 'triage_progress', triageId: id, tier: 'L4', status: 'done' } }
+      ];
+      let acc = 0;
+      seq.forEach(step => {
+        acc += step.d;
+        setTimeout(() => handleTriageEvent(step.ev.type, step.ev), acc);
+      });
+    }
+
     // Initialize
     loadSavedSettings();
-    connect();
+    initThemeDefault();
+
+    // Demo flag drives the console from the inline stub (no backend needed),
+    // so it skips the live WebSocket to stay a pure, clean visual harness.
+    const _params = new URLSearchParams(location.search);
+    if (_params.get('demo') === '1') {
+      setTimeout(runTriageDemo, 300);
+    } else {
+      connect();
+      restoreActiveTriage();
+    }
   </script>
 
   <!-- Agent Chat Modal -->
