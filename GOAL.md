@@ -56,7 +56,7 @@ Engineer works. No simulation, no fabricated data or capability.
         the key turns real Jarvis on. Flag this prominently on the morning page.
       - LLM integration: read the `claude-api` skill BEFORE writing any Claude call. Key in OS
         keychain / gitignored .env.local, never in code or logs.
-- [ ] FINAL — integration review of the whole thing live + a visual "what I built overnight"
+- [x] FINAL — integration smoke 21/21 PASS + cleanups merged; morning page next  (a visual "what I built overnight"
       page for Vikas (writeable, feedback layer) with TEST IT steps and honest what's-done/what's-not.
 
 ## Process (unattended-safe)
@@ -75,3 +75,4 @@ Engineer works. No simulation, no fabricated data or capability.
 - 2026-08-16 ~00:xx: Phase C merged (real approval gate: auto-approve reads default + ask mode approve/deny; denied read makes zero wire calls, never faked; writes blocked before the gate). Reviewed MERGE. Phase D starting.
 - 2026-08-16 ~00:xx: Phase D merged (per-triage artifacts + SLT/engineer docs from the real record; path-safe; secrets absent). Reviewed MERGE. Phase E (Jarvis real Claude) starting.
 - 2026-08-16 ~01:xx: Phase E merged (real Claude Jarvis: plan+synthesis, honest 'needs API key' state, plumbing runs real reads through the gate). Reviewed MERGE. FINAL (integration + cleanup + morning page) starting.
+- 2026-08-16 ~01:xx: FINAL merged (dead rule-router removed, help-intent fix, plan max_tokens 2048, last Mission-Control strings gone; 21/21 integration smoke). Building morning page, then loop stops.
