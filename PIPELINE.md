@@ -70,3 +70,13 @@ Stage 5 Build + Stage 6 Review = done.
 runBridge's finally idles ALL roster agents on any bridge close — two concurrent triages,
 the first to finish flips shared agent statuses to idle while the second still runs. Cosmetic
 (agent-status sidebar only); per-triage boards stay correct via the WS triageId guard. Fix later.
+
+## DESIGN MISS — full reskin (Vikas, 2026-08-15)
+Vikas opened the built app and saw it IS mission-control with a triage mode + a
+renamed banner — NOT the Evidence Split Console identity he picked at Gate 2.
+Root cause: build brief said "build the console INTO the existing index.html", so
+the mock C look only appears transiently during a triage; the shell stayed
+mission-control. DECISION: Option A — FULL RESKIN. Rebuild the whole front end
+(public/index.html) in the mock C design language so the entire app IS the
+Evidence Split Console. Backend/WS contract/triage engine unchanged. Adversarial
+QA (honesty/XSS/concurrency) already passed and stays valid; UI QA obsoleted by reskin.
