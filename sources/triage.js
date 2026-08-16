@@ -208,7 +208,11 @@ async function gatedFrontRead({ front, agentId, agentName, triageId, label, reas
   const g = await approvals.gate(
     { agentId, agentName, command: `read ${front} front`, target: source, triageId, front, reason },
     () => session.runWithContext(
-      { triageId, agentId, agentName, front, label },
+      { triageId, agentId, agentName, front, label,
+        // Screen-share this triage front read into the chat as a command_share.
+        share: true, tier: 'triage',
+        purpose: `read the ${front} front`,
+        reasoning: reason || `triage read of the ${front} front` },
       () => READERS[front]()));
   if (g.denied) {
     return { state: 'suspect', source, denied: true,
@@ -550,8 +554,13 @@ async function withAgent(agentId, triage, worker) {
         triageId: triage.id, reason: `bridge investigation turn on triage ${triage.id}` },
       () => session.runWithContext(
         // Tag every wire call this turn makes with the triage + agent, so the
-        // CLI/session view can replay exactly what each engineer read on the bridge.
-        { triageId: triage.id, agentId, agentName: agentInfo(agentId).name, label: `Triage ${triage.id}` },
+        // CLI/session view can replay exactly what each engineer read on the bridge,
+        // and share:true screen-shares each real check into the chat as a command_share.
+        { triageId: triage.id, agentId, agentName: agentInfo(agentId).name, label: `Triage ${triage.id}`,
+          share: true,
+          tier: (triage.staffed.find((s) => s.agent === agentId) || {}).tier || 'triage',
+          purpose: `bridge investigation on triage ${triage.id}`,
+          reasoning: `bridge investigation turn on triage ${triage.id}` },
         () => worker(agentId)));
     if (g.denied) {
       post(triage, {

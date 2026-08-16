@@ -712,52 +712,69 @@ async function gatherForJarvis(agentId, question) {
   const agent = (ctx && ctx.agents && ctx.agents[agentId]) || { name: agentId };
   const name = agent.name || agentId;
 
-  // Not-connected agents never invent a report — Jarvis is told so plainly.
-  if (NO_BACKEND[agentId]) {
-    const need = NO_BACKEND[agentId];
-    return {
-      agentId, name, connected: false, stance: 'not-connected',
-      text: `Not connected — no ${need} wired up. Nothing real to report.`,
-    };
-  }
-
-  const builder = DEBATE_BUILDERS[agentId];
-  if (!builder) {
-    return {
-      agentId, name, connected: false, stance: 'not-connected',
-      text: 'No live data source mapped for this agent — nothing real to report.',
-    };
-  }
-
-  // Every gathered read passes the permission gate and is tagged for the CLI
-  // session log, exactly like a direct question or a triage read.
-  const meta = {
-    agentId, agentName: name,
-    command: `Jarvis delegation: ${String(question || '').slice(0, 80)}`,
-    target: (typeof builder.source === 'function' ? builder.source() : 'live source'),
-    reason: 'Jarvis (Principal Engineer) delegated this read',
-  };
-
+  // CLASS FIX (transparency contract, agent_status): the MOMENT Jarvis delegates
+  // to an agent it is engaged — flip it active here and idle when the turn ends,
+  // covering every exit path (not-connected, denied, evidence, unreachable) via
+  // finally. This is the delegation engagement path the roster light was missing.
+  ctx.updateAgentStatus(agentId, 'active', `Jarvis delegation: ${String(question || '').slice(0, 60)}`);
   try {
-    const g = await approvals.gate(meta, () =>
-      session.runWithContext(
-        { agentId, agentName: name, label: `Jarvis delegation` },
-        () => builder.build(question),
-      ));
-
-    if (g.denied) {
+    // Not-connected agents never invent a report — Jarvis is told so plainly.
+    if (NO_BACKEND[agentId]) {
+      const need = NO_BACKEND[agentId];
       return {
-        agentId, name, connected: true, stance: 'denied',
-        text: 'Read denied by the operator — ran nothing, and I will not invent a result.',
+        agentId, name, connected: false, stance: 'not-connected',
+        text: `Not connected — no ${need} wired up. Nothing real to report.`,
       };
     }
-    return { agentId, name, connected: true, stance: 'evidence', text: String(g.result || '').trim() };
-  } catch (err) {
-    const src = typeof builder.source === 'function' ? builder.source() : 'the source';
-    return {
-      agentId, name, connected: true, stance: 'unreachable',
-      text: `Source unreachable — ${src} did not answer: ${err.message}. No readings, so nothing to report.`,
+
+    const builder = DEBATE_BUILDERS[agentId];
+    if (!builder) {
+      return {
+        agentId, name, connected: false, stance: 'not-connected',
+        text: 'No live data source mapped for this agent — nothing real to report.',
+      };
+    }
+
+    // Every gathered read passes the permission gate and is tagged for the CLI
+    // session log, exactly like a direct question or a triage read.
+    const meta = {
+      agentId, agentName: name,
+      command: `Jarvis delegation: ${String(question || '').slice(0, 80)}`,
+      target: (typeof builder.source === 'function' ? builder.source() : 'live source'),
+      reason: 'Jarvis (Principal Engineer) delegated this read',
     };
+
+    try {
+      const g = await approvals.gate(meta, () =>
+        // share:true → every real wire call this delegated read makes is also
+        // screen-shared into the chat as a command_share (real command + raw +
+        // reasoning + conclusion), on top of the summary chat line below.
+        session.runWithContext(
+          {
+            agentId, agentName: name, label: `Jarvis delegation`,
+            share: true, tier: 'L4 delegation',
+            purpose: `answer Jarvis's sub-question: "${String(question || '').slice(0, 120)}"`,
+            reasoning: 'Jarvis (Principal Engineer) delegated this read to answer its sub-question.',
+          },
+          () => builder.build(question),
+        ));
+
+      if (g.denied) {
+        return {
+          agentId, name, connected: true, stance: 'denied',
+          text: 'Read denied by the operator — ran nothing, and I will not invent a result.',
+        };
+      }
+      return { agentId, name, connected: true, stance: 'evidence', text: String(g.result || '').trim() };
+    } catch (err) {
+      const src = typeof builder.source === 'function' ? builder.source() : 'the source';
+      return {
+        agentId, name, connected: true, stance: 'unreachable',
+        text: `Source unreachable — ${src} did not answer: ${err.message}. No readings, so nothing to report.`,
+      };
+    }
+  } finally {
+    ctx.updateAgentStatus(agentId, 'idle', 'Delegation turn ended');
   }
 }
 

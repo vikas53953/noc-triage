@@ -249,6 +249,12 @@ function broadcast(type, data) {
 // for reconnect/restore.
 session.setBroadcast((rec) => broadcast('session_record', rec));
 
+// command_share (transparency contract): each real check an engaged agent runs
+// during a delegation/triage is "screen-shared" into the chat — the exact command,
+// the real raw output (already secret-scrubbed by the session log), why it ran and
+// what it means — in addition to the summary chat_message.
+session.setCommandShareBroadcast((data) => broadcast('command_share', data));
+
 // The permission gate (Phase C) broadcasts approval requests + decisions so the
 // approval surface updates live: approval_new, approval_update, approval_mode.
 approvals.setBroadcast((type, data) => broadcast(type, data));
@@ -1172,13 +1178,25 @@ function updateAgentStatus(agentId, status, lastAction) {
     const statusPath = getAgentStatusPath(agentId);
     if (statusPath) safeWrite(statusPath, JSON.stringify(agents[agentId], null, 2), `${agentId} status`);
 
-    broadcast('agent_status', agents[agentId]);
+    // Transparency contract shape: {agentId, status, note?}. The full agent object
+    // (with id/name/icon/lastAction) is still carried so a client can render either
+    // a status-light delta or a full-roster refresh from the same event.
+    broadcast('agent_status', { ...agents[agentId], agentId, status, note: lastAction || null });
   }
 }
 
-// Append to activity log
+// Append to activity log — persist to the file AND stream a live activity_new
+// event so the Live Activity panel updates the instant any meaningful thing
+// happens (agent engaged, ran X, Jarvis delegated to Y, verdict). One seam, so
+// every caller of appendToActivityLog feeds the feed with no per-site wiring.
 function appendToActivityLog(entry) {
   safeAppend(PATHS.activityLog, entry, 'activity log');
+  const line = String(entry || '').replace(/\n+$/, '');
+  if (!line) return;
+  const m = /^\[([^\]]+)\]\s*\[([^\]]+)\]\s*([\s\S]*)$/.exec(line);
+  broadcast('activity_new', m
+    ? { source: m[2], text: m[3], ts: m[1] }
+    : { source: 'System', text: line, ts: new Date().toISOString() });
 }
 
 // Get tasks from TASKS.md
