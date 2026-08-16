@@ -16,7 +16,7 @@ Autonomous overnight. Treat as THE goal. No fabrication ever. He reviews a visua
 6. Morning: publish a writeable visual report (feedback layer) — every bug found, fixed/▢, with evidence.
 
 ## Known backlog (already reported — fold into the spec, fix these for sure)
-- [in-flight] Delegated agents drop fields: EPG list, mgmt IPs, sw version → answer the real question.
+- [DONE] Delegated agents drop fields → FIXED+merged (PR #21): EPGs, mgmt IPs, sw version now real; declines honestly for fields the adapter lacks.
 - [done] Chat auto-scroll (real scroll container, near-bottom-aware) — merged; browser-confirm in the morning.
 - ServiceNow export (Majors 1-3): State should be In-Progress/On-Hold when the verdict rests on an unverified
   blind spot (not Resolved); fix CI parsing (LF-101 split into "1"/"101"); strip tag artifacts (unread:/none/clean:/blind:).
@@ -37,3 +37,4 @@ identity + professional chat/collapse UX; XSS escaping on every sink; rate limit
 
 ## Status log
 - 2026-08-17 ~00:xx: mission set. delegated-fields fix in flight. QA sweep starting.
+- 2026-08-17 ~00:xx: delegated-fields fix merged (PR #21, reviewed MERGE). QA sweep still running.
