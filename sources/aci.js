@@ -72,9 +72,36 @@ async function getEpgs() {
 }
 
 // Every ACI dn starts uni/tn-<tenant>/... — pull the tenant name out of it.
+// Fabric/infra faults (topology/pod-.../node-...) carry no tenant, so we say
+// 'unknown' honestly rather than inventing one.
 function tenantOf(dn) {
   const m = /uni\/tn-([^/]+)/.exec(dn || '');
   return m ? m[1] : 'unknown';
+}
+
+// Faults on fabric nodes carry the node in their dn: topology/pod-1/node-1/...
+// Return the bare node id (e.g. "1") or null when the dn has none.
+function nodeOf(dn) {
+  const m = /\/node-(\d+)/.exec(dn || '');
+  return m ? m[1] : null;
+}
+
+// The single timestamp we reason about for a fault. APIC gives `created` (when
+// the fault was first raised) and `lastTransition` (last state change). We
+// anchor on `created` — "when did this problem start" — and only fall back to
+// lastTransition when created is absent. Never invent one: no timestamp -> null.
+function faultTs(f) {
+  return (f && (f.created || f.lastTransition)) || null;
+}
+
+// Parse an ISO/epoch value to epoch-ms, or null if it isn't a real timestamp.
+// APIC created/lastTransition are ISO-8601 with offset (…+00:00) — Date parses
+// them directly.
+function toMs(ts) {
+  if (ts === null || ts === undefined || ts === '') return null;
+  if (typeof ts === 'number') return Number.isFinite(ts) ? ts : null;
+  const ms = Date.parse(ts);
+  return Number.isNaN(ms) ? null : ms;
 }
 
 async function getFaults(severities = ['critical', 'major']) {
@@ -83,9 +110,53 @@ async function getFaults(severities = ['critical', 'major']) {
     .filter((f) => severities.includes(f.severity))
     .map((f) => ({
       code: f.code, severity: f.severity, cause: f.cause,
-      description: f.descr, dn: f.dn, affected: f.affected,
-      created: f.created, tenant: tenantOf(f.dn),
+      // `description` kept for existing callers; `descr` is the spec field name.
+      description: f.descr, descr: f.descr, dn: f.dn, affected: f.affected,
+      created: f.created, lastTransition: f.lastTransition,
+      tenant: tenantOf(f.dn), node: nodeOf(f.dn),
     }));
+}
+
+// Group faults by severity+tenant. Each group carries a count, the newest
+// timestamp seen in it, and a few example {code, descr} for context. Operates
+// on the mapped per-fault objects returned by getFaults().
+function clusterFaults(faults = []) {
+  const groups = {};
+  for (const f of faults) {
+    const severity = f.severity || 'unknown';
+    const tenant = f.tenant || 'unknown';
+    const key = `${severity}|${tenant}`;
+    if (!groups[key]) {
+      groups[key] = { severity, tenant, count: 0, newestTs: null, examples: [] };
+    }
+    const g = groups[key];
+    g.count += 1;
+    const ts = faultTs(f);
+    const ms = toMs(ts);
+    if (ms !== null && (g.newestTs === null || ms > toMs(g.newestTs))) g.newestTs = ts;
+    if (g.examples.length < 3) g.examples.push({ code: f.code, descr: f.descr || f.description });
+  }
+  // Sort: critical before major, then biggest group first — most urgent on top.
+  const rank = { critical: 0, major: 1, minor: 2, warning: 3 };
+  return Object.values(groups).sort((a, b) =>
+    (rank[a.severity] ?? 9) - (rank[b.severity] ?? 9) || b.count - a.count);
+}
+
+// Split faults into those raised inside the incident window and those older.
+// windowStart may be epoch-ms or an ISO string. A fault counts as inWindow when
+// its created/lastTransition timestamp is at/after windowStart. Faults with no
+// parseable timestamp can't be proven recent, so they count as `older` (honest
+// and conservative — never inflate the in-window/"blamed" bucket).
+function countByAge(faults = [], windowStart) {
+  const startMs = toMs(windowStart);
+  let inWindow = 0;
+  let older = 0;
+  for (const f of faults) {
+    const ms = toMs(faultTs(f));
+    if (startMs === null || ms === null) { older += 1; continue; }
+    if (ms >= startMs) inWindow += 1; else older += 1;
+  }
+  return { inWindow, older };
 }
 
 // ── The audit: walk the hierarchy and report what is INCOMPLETE ─────────────
@@ -148,5 +219,7 @@ module.exports = {
   getTenants,
   getEpgs,
   getFaults,
+  clusterFaults,
+  countByAge,
   auditTenant,
 };
