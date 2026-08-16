@@ -610,7 +610,10 @@ function handleMention(fromAgentId, toAgentId, message) {
       text: response,
       timestamp: new Date().toISOString()
     });
-    appendToActivityLog(`[${new Date().toISOString()}] [${toAgent.name}] Responded to @${fromAgent.name}\n`);
+    // handleMention is only ever reached from an operator-typed command, so the
+    // responding agent answered the operator's @mention — not fromAgent, which is
+    // merely the operator's currently-focused chat. Name the true relationship.
+    appendToActivityLog(`[${new Date().toISOString()}] [${toAgent.name}] Responded to the operator's @mention\n`);
   }, responseDelay);
 }
 
