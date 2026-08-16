@@ -22,6 +22,9 @@ const sdwan = require('./sdwan');
 const session = require('./session-log');
 const approvals = require('./approvals');
 const artifacts = require('./artifacts');
+const jarvis = require('./jarvis');
+const baseline = require('./baseline-store');
+const configStore = require('./config-store');
 
 // The host app injects broadcast + status plumbing here so this module stays
 // free of server internals — the same seam live-agents.js uses.
@@ -62,6 +65,58 @@ const ROSTER = {
 function tiersFor(severity) {
   if (severity === 'P1' || severity === 'P2') return ['L1', 'L2', 'L3', 'L4'];
   return ['L1', 'L2', 'L4']; // P3
+}
+
+// ── Severity changes BEHAVIOUR, not just a label (gap 3) ─────────────────────
+// P1 = sweep fronts in PARALLEL with aggressive per-read timeouts, hit the
+// in-scope/impacted front FIRST. P3 = a leisurely sequential full walk with
+// relaxed timeouts. P2 sits in between. The picker returns the real knobs the
+// bridge uses — parallelism, per-read timeout, and inter-post pacing — so the two
+// severities genuinely read differently, they don't just print a different word.
+function cadenceFor(severity) {
+  if (severity === 'P1') {
+    return { parallel: true, readTimeoutMs: 15000, step: 120,
+      label: 'P1 cadence — fronts swept in PARALLEL, aggressive 15s per-read timeout, in-scope front first' };
+  }
+  if (severity === 'P2') {
+    return { parallel: false, readTimeoutMs: 30000, step: 250,
+      label: 'P2 cadence — sequential sweep, moderate 30s per-read timeout' };
+  }
+  return { parallel: false, readTimeoutMs: 60000, step: 500,
+    label: 'P3 cadence — leisurely sequential full walk, relaxed 60s per-read timeout' };
+}
+
+// How many in-scope switches Config-Keeper diffs per run (gap 5). Bounded so a
+// slow Command Runner cannot stall the whole bridge; honest note when it caps.
+const CONFIG_MAX = Number(process.env.TRIAGE_CONFIG_MAX || 4);
+// Config reads go through Catalyst Center Command Runner, which is inherently slow
+// (submit → poll → fetch). They get their OWN generous timeout, independent of the
+// severity cadence, so a P1's aggressive front-read budget never guillotines a
+// legitimately slow config read.
+const CONFIG_READ_TIMEOUT_MS = Number(process.env.TRIAGE_CONFIG_TIMEOUT_MS || 120000);
+
+// Resolve a promise, or a { __timeout:true } sentinel if it outruns `ms`. Never
+// rejects — a thrown reader surfaces as { __error }. This is the mechanism that
+// makes a P1 front read give up early instead of blocking the parallel sweep.
+function withTimeout(promise, ms) {
+  if (!ms || ms <= 0) return Promise.resolve(promise);
+  return new Promise((resolve) => {
+    let done = false;
+    const t = setTimeout(() => { if (!done) { done = true; resolve({ __timeout: true, __ms: ms }); } }, ms);
+    Promise.resolve(promise).then(
+      (v) => { if (!done) { done = true; clearTimeout(t); resolve(v); } },
+      (e) => { if (!done) { done = true; clearTimeout(t); resolve({ __error: e }); } });
+  });
+}
+
+// Order fronts so the in-scope/impacted ones come FIRST (gap 1 + gap 3). Out-of-
+// scope fronts are still read (honesty — we never silently skip a front), just
+// later; the verdict is what de-emphasises them ("campus not dwelt on").
+function orderFronts(fronts, sym) {
+  if (!sym || !Array.isArray(sym.scope) || !sym.scope.length) return fronts.slice();
+  const inScope = fronts.filter((f) => sym.scope.includes(f));
+  const rest = fronts.filter((f) => !sym.scope.includes(f));
+  return [...inScope, ...rest];
 }
 
 // ── The network-subject gate (honesty fix) ──────────────────────────────────
@@ -111,7 +166,24 @@ function log(line) {
 // On any failure it returns state:"suspect" carrying the REAL error message —
 // this is the honesty rule and it is the whole point of the app.
 
-async function readCampus() {
+// Each reader now takes the parsed symptom (sym) so it can filter evidence to the
+// incident WINDOW and lead with real structure (alarm groups, in-window fault
+// counts). Every reader also returns a `count` — the one number the baseline store
+// tracks for that front's delta (gap 2). A filtered-out fault is never dropped
+// silently: it is COUNTED and CALLED OUT as pre-existing.
+
+// Human window label for the notes, e.g. "the 14:00 window".
+function windowLabel(sym) {
+  if (!sym || !sym.timeAnchor) return 'the recent window';
+  // Render in UTC so the label matches the ISO anchor the symptom parse produced
+  // (e.g. "2pm" -> 14:00Z -> "the 14:00 UTC window"), not a locale-shifted time.
+  const d = new Date(sym.timeAnchor);
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  return `the ${hh}:${mm} UTC window`;
+}
+
+async function readCampus(sym) {
   const source = catalyst.label;
   try {
     const devices = await catalyst.getDevices();
@@ -120,14 +192,15 @@ async function readCampus() {
     const down = devices.length - up;
     const detail =
       `${up}/${devices.length} reachable` +
-      (health && health.score != null ? `, health ${health.score}` : '');
-    return { state: down > 0 ? 'degraded' : 'clean', detail, source, devices, health };
+      (health && health.score != null ? `, health ${health.score}` : '') +
+      (down ? `, ${down} not reachable` : '');
+    return { state: down > 0 ? 'degraded' : 'clean', detail, source, devices, health, count: down };
   } catch (err) {
     return { state: 'suspect', detail: shortErr('Catalyst Center', err), source };
   }
 }
 
-async function readFabric() {
+async function readFabric(sym) {
   const source = aci.label;
   try {
     const nodes = await aci.getFabricNodes();
@@ -135,45 +208,79 @@ async function readFabric() {
     const faults = await aci.getFaults(['critical', 'major']).catch(() => []);
     const crit = faults.filter((f) => f.severity === 'critical').length;
     const major = faults.length - crit;
+
+    // Window filter (gap 1): split faults into raised-in-window vs pre-existing.
+    let age = null; let windowNote = '';
+    if (sym && sym.timeAnchorMs) {
+      age = aci.countByAge(faults, sym.timeAnchorMs);
+      if (faults.length && age.inWindow === 0) {
+        windowNote = ` — all ${faults.length} PRE-DATE ${windowLabel(sym)} (pre-existing, not the cause)`;
+      } else if (age.inWindow) {
+        windowNote = ` — ${age.inWindow} raised inside ${windowLabel(sym)}, ${age.older} pre-existing`;
+      }
+    }
     const detail =
       `${nodes.length} nodes` +
       (health.score != null ? `, health ${health.score}` : '') +
-      `, ${crit} crit / ${major} major faults`;
-    const state = crit > 0 || major > 0 ? 'degraded' : 'clean';
-    return { state, detail, source, nodes, health, faults };
+      `, ${crit} crit / ${major} major faults${windowNote}`;
+    // A fault present -> the card shows degraded (amber) so it is visible; whether
+    // it is BLAMED is decided in L4 from `age` (in-window vs pre-existing). We keep
+    // the card colour honest and let the verdict carry the window judgement.
+    const state = (crit > 0 || major > 0) ? 'degraded' : 'clean';
+    return { state, detail, source, nodes, health, faults, age, count: faults.length };
   } catch (err) {
     return { state: 'suspect', detail: shortErr('APIC', err), source };
   }
 }
 
-async function readWan() {
+async function readWan(sym) {
   const source = sdwan.label;
   try {
     const devices = await sdwan.getDevices();
-    const alarms = await sdwan.getAlarmCount().catch(() => ({ active: null }));
-    const active = alarms.active;
-    const detail = `${devices.length} devices, ${active == null ? 'n/a' : active} active alarms`;
-    const state = Number(active) > 0 ? 'degraded' : 'clean';
-    return { state, detail, source, devices, alarms };
+    // Real per-alarm objects so we can CLUSTER (gap 4) instead of leading with a
+    // raw count. clusterAlarms marks chronic (pre-window) vs new per group.
+    const alarms = await sdwan.getAlarms().catch(() => []);
+    const sinceTs = (sym && sym.timeAnchorMs) || undefined;
+    const groups = sdwan.clusterAlarms(alarms, { sinceTs, by: ['type'], topN: 3 });
+    const total = groups.total;
+    const top3 = groups.groups.slice(0, 3).map((g) => {
+      const tag = g.chronic ? 'chronic' : (g.newCount ? `${g.newCount} new` : 'new');
+      return `${g.type || g.key} (${g.count}, ${tag})`;
+    }).join('; ');
+    const detail =
+      `${devices.length} devices, ${total} active alarms` +
+      (total ? ` — top 3: ${top3}` : '') +
+      (sinceTs ? `, ${groups.newCount} new since ${windowLabel(sym)}` : '');
+    // Alarms present -> amber; whether they are chronic noise or a NEW spike is in
+    // `groups` and drives the verdict, not the card colour.
+    const state = total > 0 ? 'degraded' : 'clean';
+    return { state, detail, source, devices, alarms, groups, count: total };
   } catch (err) {
     return { state: 'suspect', detail: shortErr('vManage', err), source };
   }
 }
 
-async function readIncidents() {
+async function readIncidents(sym) {
   const source = `${catalyst.label} + ${aci.label}`;
   try {
     const issues = await catalyst.getIssues();
     let faults = [];
     let faultNote = '';
+    let age = null;
     try {
       faults = await aci.getFaults(['critical', 'major']);
+      if (sym && sym.timeAnchorMs) {
+        age = aci.countByAge(faults, sym.timeAnchorMs);
+        faultNote = age.inWindow
+          ? ` (${age.inWindow} of the faults inside ${windowLabel(sym)})`
+          : (faults.length ? ` (all faults pre-date ${windowLabel(sym)})` : '');
+      }
     } catch (e) {
       faultNote = ` (ACI faults unread: ${e.message})`;
     }
     const detail = `${issues.length} Catalyst issues, ${faults.length} ACI faults${faultNote}`;
-    const state = issues.length || faults.length ? 'degraded' : 'clean';
-    return { state, detail, source, issues, faults };
+    const state = (issues.length || faults.length) ? 'degraded' : 'clean';
+    return { state, detail, source, issues, faults, age, count: issues.length + faults.length };
   } catch (err) {
     return { state: 'suspect', detail: shortErr('Catalyst Center', err), source };
   }
@@ -203,22 +310,56 @@ const FRONT_SOURCE = {
 // In auto mode it auto-approves and logs; in ask mode it PAUSES for a decision.
 // A denied read touches no wire and returns an honest "denied" evidence card —
 // never a fabricated clean result. Returns { state, detail, source, ... }.
-async function gatedFrontRead({ front, agentId, agentName, triageId, label, reason }) {
+async function gatedFrontRead(triage, { front, agentId, agentName, label, reason, sym, cadence }) {
   const source = FRONT_SOURCE[front] || null;
+  const triageId = triage.id;
   const g = await approvals.gate(
     { agentId, agentName, command: `read ${front} front`, target: source, triageId, front, reason },
+    // share:FALSE here (issue 8): the underlying HTTP hops no longer each emit an
+    // identical command_share row — we emit ONE consolidated check below instead.
     () => session.runWithContext(
-      { triageId, agentId, agentName, front, label,
-        // Screen-share this triage front read into the chat as a command_share.
-        share: true, tier: 'triage',
+      { triageId, agentId, agentName, front, label, share: false, tier: 'triage',
         purpose: `read the ${front} front`,
         reasoning: reason || `triage read of the ${front} front` },
-      () => READERS[front]()));
+      () => runReaderWithTimeout(front, sym, cadence)));
+  let result;
   if (g.denied) {
-    return { state: 'suspect', source, denied: true,
+    result = { state: 'suspect', source, denied: true,
       detail: 'Operator denied this read — nothing was run, and nothing was invented.' };
+  } else {
+    result = g.result;
+    attachDelta(triage, front, result);
   }
-  return g.result;
+  shareFrontCheck(triage, front, agentId, result, nextAttempt(triage, front));
+  return result;
+}
+
+// Run one front's reader with the severity cadence's per-read timeout. A timeout
+// or a thrown reader both become an honest 'suspect' card — never a faked clean.
+async function runReaderWithTimeout(front, sym, cadence) {
+  const readFn = READERS[front];
+  const source = FRONT_SOURCE[front] || null;
+  if (!readFn) return { state: 'suspect', source, detail: `no live reader for ${front}` };
+  const ms = cadence ? cadence.readTimeoutMs : 0;
+  const r = await withTimeout(Promise.resolve().then(() => readFn(sym)), ms);
+  if (r && r.__timeout) {
+    return { state: 'suspect', source,
+      detail: `read exceeded the ${r.__ms}ms per-read budget — treating ${front} as unread rather than blocking the sweep.` };
+  }
+  if (r && r.__error) return { state: 'suspect', source, detail: shortErr(front, r.__error) };
+  return r;
+}
+
+// Investigate a front from INSIDE a withAgent turn (L2/L3). The turn is already
+// gated by withAgent, so this does NOT gate again (no double approval prompt). It
+// runs the reader with the cadence timeout, attaches the delta, and emits ONE
+// consolidated check (issue 8). Returns the enriched result for the caller to
+// post as evidence + narrate.
+async function investigateFront(triage, front, agentId, sym, cadence) {
+  const result = await runReaderWithTimeout(front, sym, cadence);
+  attachDelta(triage, front, result);
+  shareFrontCheck(triage, front, agentId, result, nextAttempt(triage, front));
+  return result;
 }
 
 // ── Posting: a triage_message (narration) + the matching triage_evidence ────
@@ -232,14 +373,91 @@ function post(triage, { agent, tier, round, text }) {
   return msg;
 }
 
-function postEvidence(triage, front, { state, detail, source }) {
-  const card = emit('triage_evidence', triage.id, { front, state, detail, source: source || null });
-  triage.evidence[front] = { front, state, detail, source: source || null, ts: card.ts };
-  // Keep the FULL transition history (each real read), not just the latest state,
-  // so the persisted artifacts can replay every front's transitions with the real
-  // detail/error. This is append-only and never overwrites a prior transition.
+function postEvidence(triage, front, result) {
+  const { state, detail, source } = result;
+  // Slim, render-ready extras added to the card (additive — the FE ignores fields
+  // it doesn't know). delta drives "220 (baseline 218, +2)"; groups is the top-3
+  // alarm clusters; age is in-window vs pre-existing fault counts.
+  const delta = result.delta || null;
+  const groups = result.groups
+    ? { total: result.groups.total, newCount: result.groups.newCount, chronicCount: result.groups.chronicCount,
+        top: (result.groups.groups || []).slice(0, 3).map((g) => ({
+          key: g.type || g.key, count: g.count, chronic: !!g.chronic, newCount: g.newCount || 0, severity: g.severity || null })) }
+    : null;
+  const age = result.age || null;
+  const count = (result.count != null) ? result.count : null;
+  const card = emit('triage_evidence', triage.id, {
+    front, state, detail, source: source || null, delta, groups, age, count,
+  });
+  triage.evidence[front] = { front, state, detail, source: source || null, ts: card.ts, delta, groups, age, count };
   recordEvidenceHistory(triage, front, state, detail, source, card.ts);
   return card;
+}
+
+// Attach the per-front baseline DELTA (gap 2) to a read result, and record the
+// new count — but compute the delta ONCE per front per bridge and reuse it, so
+// later reads of the same front in the same bridge don't collapse the delta to 0
+// by recording over their own baseline mid-run.
+function attachDelta(triage, front, result) {
+  if (!result || result.count == null) return result;
+  if (!triage.frontDelta) triage.frontDelta = {};
+  if (triage.frontDelta[front] === undefined) {
+    triage.frontDelta[front] = baseline.delta(front, result.count) || null;
+    baseline.record(front, result.count);
+  }
+  result.delta = triage.frontDelta[front];
+  return result;
+}
+
+// Build the one-block raw text for a front's command_share (issue 8): the real
+// numbers, the window split, the delta and the top alarm groups — derived only
+// from the real read.
+function buildFrontRaw(front, result) {
+  const lines = [`front: ${front}`, `state: ${result.state}`, `detail: ${result.detail}`];
+  if (result.count != null) lines.push(`count: ${result.count}`);
+  if (result.delta && result.delta.baseline != null) {
+    lines.push(`baseline: ${result.delta.baseline}  (delta ${result.delta.delta >= 0 ? '+' : ''}${result.delta.delta} since ${result.delta.since || 'last sweep'})`);
+  } else if (result.delta && result.delta.firstSweep) {
+    lines.push('baseline: none yet (first sweep — recorded now)');
+  }
+  if (result.age) lines.push(`in-window faults: ${result.age.inWindow}  ·  pre-existing: ${result.age.older}`);
+  if (result.groups && result.groups.groups) {
+    lines.push('top alarm groups:');
+    result.groups.groups.slice(0, 3).forEach((g) =>
+      lines.push(`  - ${g.type || g.key}: ${g.count} (${g.chronic ? 'chronic' : (g.newCount ? g.newCount + ' new' : 'new')})`));
+  }
+  return lines.join('\n');
+}
+
+// Emit EXACTLY ONE command_share per front read (issue 8 fix, at the source).
+// The old path let every HTTP hop under a share:true context emit its own
+// identical "check — read the X front" row (3-4 per read). Now the front reads run
+// under share:FALSE (so no per-hop rows) and this emits a single consolidated
+// check, carrying an attempt count in the data — the UI shows "×N" on a retry
+// instead of stacking identical rows.
+function shareFrontCheck(triage, front, agentId, result, attempt) {
+  const info = agentInfo(agentId);
+  const src = result.source || FRONT_SOURCE[front] || null;
+  session.emitCommandShare({
+    agent: agentId, agentName: info.name, tier: 'triage',
+    purpose: `read the ${front} front` + (attempt > 1 ? ` ×${attempt}` : ''),
+    command: `read ${front} front${src ? ' — ' + src : ''}`,
+    raw: buildFrontRaw(front, result),
+    reasoning: `Triage ${triage.id}: one real read of the ${front} front` + (attempt > 1 ? ` (attempt ${attempt})` : '') + '.',
+    conclusion: result.state === 'suspect'
+      ? `unread/suspect — ${result.detail}`
+      : `${front}: ${result.detail}`,
+    ok: result.state !== 'suspect',
+    triageId: triage.id,
+    attempts: attempt,
+  });
+}
+
+// Bump and return the attempt counter for a front (drives the ×N in the UI).
+function nextAttempt(triage, front) {
+  if (!triage.attempts) triage.attempts = {};
+  triage.attempts[front] = (triage.attempts[front] || 0) + 1;
+  return triage.attempts[front];
 }
 
 // Append one evidence transition to the per-triage history. The real detail/error
@@ -278,19 +496,38 @@ function agentHeldByOpenBridge(agentId, exceptTriageId) {
 // ── The bridge ──────────────────────────────────────────────────────────────
 async function runBridge(triage) {
   const staffedTiers = tiersFor(triage.severity);
+  const cadence = cadenceFor(triage.severity);
+  triage.cadence = cadence;
   try {
-    // ROUND 1 — L1 opener: acknowledge, basic sweep across every live front,
-    // then the escalation call.
-    await runL1(triage, staffedTiers);
+    // ── Parse the SYMPTOM first (gap 1) — real reasoning about the complaint's
+    // time window + scope, so every read below can filter to the incident. ──
+    const sym = await jarvis.extractSymptom(triage.description).catch(() => null)
+      || { timeAnchor: null, timeAnchorMs: null, scope: null, rawSymptom: triage.description, note: 'symptom parse unavailable', source: 'none' };
+    sym.severity = triage.severity;
+    triage.symptom = sym;
+    // Rank the blind spots by relevance to THIS symptom (gap 6).
+    triage.rankedBlindSpots = jarvis.rankBlindSpots(BLIND_SPOTS, sym.rawSymptom || triage.description);
+    emit('triage_symptom', triage.id, {
+      timeAnchor: sym.timeAnchor, scope: sym.scope, rawSymptom: sym.rawSymptom,
+      note: sym.note, source: sym.source, cadence: cadence.label,
+      rankedBlindSpots: triage.rankedBlindSpots,
+    });
+    // Re-emit the blind cards now weighted (high-risk flagged) — additive fields.
+    triage.rankedBlindSpots.forEach((b) =>
+      emit('triage_evidence', triage.id, { front: b.front, state: 'blind', detail: b.reason, source: null, risk: b.risk, why: b.why }));
+
+    // ROUND 1 — L1 opener: acknowledge, symptom-aware sweep across every live
+    // front (parallel + in-scope-first at P1), then the escalation call.
+    await runL1(triage, staffedTiers, sym, cadence);
 
     // ROUND 1 — L2 investigation: campus + incidents, device-level.
-    if (staffedTiers.includes('L2')) await runL2(triage);
+    if (staffedTiers.includes('L2')) await runL2(triage, sym, cadence);
 
-    // ROUND 1 — L3 SME device-deep: fabric + wan + campus software (P1/P2 only).
-    if (staffedTiers.includes('L3')) await runL3(triage);
+    // ROUND 1 — L3 SME device-deep: fabric + wan + campus software + config diff.
+    if (staffedTiers.includes('L3')) await runL3(triage, sym, cadence);
 
-    // ROUND 2 — L4 correlation + verdict, then close.
-    await runL4(triage);
+    // ROUND 2 — L4 correlation + committed hypothesis, then close.
+    await runL4(triage, sym);
   } catch (err) {
     // A bridge must never take the server down. Record it, close honestly.
     log(`[Triage ${triage.id}] bridge error — ${err.message}`);
@@ -322,40 +559,55 @@ async function runBridge(triage) {
   }
 }
 
-async function runL1(triage, staffedTiers) {
+async function runL1(triage, staffedTiers, sym, cadence) {
   const agent = 'monitor-eye';
   progress(triage, 'L1', 'active');
   setStatus(agent, 'active', `Triage ${triage.id} — L1 sweep`);
 
+  const symLine =
+    (sym.timeAnchor ? `window: since ${sym.timeAnchor}` : 'no time anchor — recent default') +
+    (sym.scope ? `; in scope: ${sym.scope.join(', ')}` : '; no explicit scope') +
+    ` (${sym.source === 'claude' ? 'reasoned' : sym.source === 'heuristic' ? 'keyword-parsed' : 'defaulted'})`;
   post(triage, {
     agent, tier: 'L1', round: 1,
     text: `Acknowledged — ${triage.severity} triage open: "${triage.title}". ` +
-      `Running a basic live sweep across every connected front before I make the escalation call.`,
+      `${cadence.label}. Symptom read — ${symLine}. Sweeping the connected fronts now.`,
   });
-  await wait(STEP);
+  await wait(cadence.step);
 
-  // Basic sweep: a real reading for EVERY live front so no card is blank even
-  // at P3, where no SME (L3) is staffed to go deeper on fabric/wan.
-  for (const front of LIVE_FRONTS) {
-    const r = await gatedFrontRead({
+  // Order the sweep so the in-scope/impacted fronts go FIRST (gap 1 + gap 3).
+  const order = orderFronts(LIVE_FRONTS, sym);
+
+  const runOne = async (front) => {
+    const r = await gatedFrontRead(triage, {
       front, agentId: 'monitor-eye', agentName: agentInfo('monitor-eye').name,
-      triageId: triage.id, label: `Triage ${triage.id} — L1 sweep`,
-      reason: `L1 basic sweep of the ${front} front`,
+      label: `Triage ${triage.id} — L1 sweep`, reason: `L1 basic sweep of the ${front} front`,
+      sym, cadence,
     });
     postEvidence(triage, front, r);
     post(triage, {
       agent, tier: 'L1', round: 1,
-      text: `Sweep — ${front}: ${r.state === 'suspect' ? '⚠️ ' : ''}${r.detail} [${r.source}]`,
+      text: `Sweep — ${front}${sym.scope && sym.scope.includes(front) ? ' (in scope)' : ''}: ` +
+        `${r.state === 'suspect' ? '⚠️ ' : ''}${r.detail} [${r.source}]` +
+        (r.delta && r.delta.baseline != null ? ` · ${r.count} (baseline ${r.delta.baseline}, ${r.delta.delta >= 0 ? '+' : ''}${r.delta.delta})` : ''),
     });
-    await wait(STEP);
+  };
+
+  if (cadence.parallel) {
+    // P1: fire every front at once — the aggressive per-read timeout bounds each,
+    // so the whole sweep finishes in ~one slow read, not the sum of four.
+    post(triage, { agent, tier: 'L1', round: 1, text: '⚡ P1 — sweeping all fronts in parallel (impacted front first).' });
+    await Promise.all(order.map(runOne));
+  } else {
+    // P2/P3: sequential full walk, paced by the cadence step.
+    for (const front of order) { await runOne(front); await wait(cadence.step); }
   }
 
-  // Escalation call — driven by severity, stated plainly.
   const call = escalationCall(triage.severity, staffedTiers);
   post(triage, { agent, tier: 'L1', round: 1, text: call });
   progress(triage, 'L1', 'done');
   setStatus(agent, 'idle', 'L1 sweep delivered');
-  await wait(STEP);
+  await wait(cadence.step);
 }
 
 function escalationCall(severity, staffedTiers) {
@@ -371,12 +623,12 @@ function escalationCall(severity, staffedTiers) {
     `L4 Principal Engineer will still correlate and post the verdict.`;
 }
 
-async function runL2(triage) {
+async function runL2(triage, sym, cadence) {
   progress(triage, 'L2', 'active');
 
   // NetOps -> campus, live inventory + health.
   await withAgent('netops', triage, async (agent) => {
-    const r = await readCampus();
+    const r = await investigateFront(triage, 'campus', 'netops', sym, cadence);
     postEvidence(triage, 'campus', r);
     post(triage, {
       agent, tier: 'L2', round: 1,
@@ -389,7 +641,7 @@ async function runL2(triage) {
 
   // Incident-Handler -> incidents, Catalyst issues + ACI faults combined.
   await withAgent('incident-handler', triage, async (agent) => {
-    const r = await readIncidents();
+    const r = await investigateFront(triage, 'incidents', 'incident-handler', sym, cadence);
     postEvidence(triage, 'incidents', r);
     let text;
     if (r.state === 'suspect') {
@@ -405,15 +657,16 @@ async function runL2(triage) {
   });
 
   progress(triage, 'L2', 'done');
-  await wait(STEP);
+  await wait(cadence.step);
 }
 
-async function runL3(triage) {
+async function runL3(triage, sym, cadence) {
   progress(triage, 'L3', 'active');
 
-  // Router-Expert -> fabric (ACI) and wan (SD-WAN), the two SME fronts.
+  // Router-Expert -> fabric (ACI) and wan (SD-WAN), the two SME fronts. WAN now
+  // LEADS with the top-3 alarm groups (gap 4), fabric with the in-window split.
   await withAgent('router-expert', triage, async (agent) => {
-    const f = await readFabric();
+    const f = await investigateFront(triage, 'fabric', 'router-expert', sym, cadence);
     postEvidence(triage, 'fabric', f);
     post(triage, {
       agent, tier: 'L3', round: 1,
@@ -422,88 +675,192 @@ async function runL3(triage) {
         : `Fabric (ACI) device-deep: ${f.detail}. Live from ${f.source}` +
           (f.nodes ? ` — ${f.nodes.map((n) => `${n.name}/${n.role}`).join(', ')}.` : '.'),
     });
-    await wait(STEP);
+    await wait(cadence.step);
 
-    const w = await readWan();
+    const w = await investigateFront(triage, 'wan', 'router-expert', sym, cadence);
     postEvidence(triage, 'wan', w);
     post(triage, {
       agent, tier: 'L3', round: 1,
       text: w.state === 'suspect'
         ? `WAN overlay read failed — ${w.detail}. Not vouching for the overlay blind.`
-        : `WAN (SD-WAN) device-deep: ${w.detail}. Live from ${w.source}.`,
+        : `WAN (SD-WAN): ${w.detail}. Live from ${w.source}.`,
     });
   });
 
-  // Config-Keeper -> campus device-deep: running software versions, read live.
-  // Honest limit: it holds no golden baseline, so it reports current state only.
+  // Config-Keeper -> the REAL change front (gap 5). For the in-scope reachable
+  // switches: read running-config live, DIFF against the last snapshot BEFORE
+  // saving the new one, and emit a real change finding — "no config change on
+  // sw1–sw4 in the window" (rules out a cause class) or "sw2 changed at <when> —
+  // inside the window". Then snapshot. Never a drift claim without a real diff.
   await withAgent('config-keeper', triage, async (agent) => {
-    const r = await readCampus();
+    const r = await readCampus(sym);
     if (r.state === 'suspect') {
-      postEvidence(triage, 'campus', r);
       post(triage, {
         agent, tier: 'L3', round: 1,
         text: `Config read blocked — ${r.detail}. I hold no offline baseline to fall back on, so nothing to show.`,
       });
+      triage.configFindings = [{ device: null, changed: false, note: `campus unreadable — ${r.detail}` }];
       return;
     }
-    const versions = (r.devices || [])
-      .map((d) => `${d.hostname} ${d.software || 'version n/a'}`)
-      .join('; ');
-    // Refine the campus card with the device-deep detail, keeping the live state.
-    postEvidence(triage, 'campus', {
-      state: r.state,
-      detail: `${r.detail} · versions read live`,
-      source: r.source,
-    });
+    const reachable = (r.devices || []).filter((d) => d.reachability === 'Reachable' && d.id);
+    // In-scope first, then bounded so a slow Command Runner cannot stall the bridge.
+    const targets = reachable.slice(0, CONFIG_MAX);
+    if (!targets.length) {
+      post(triage, { agent, tier: 'L3', round: 1, text: 'No reachable campus switch to read a running-config from — no config finding this pass.' });
+      triage.configFindings = [];
+      return;
+    }
     post(triage, {
       agent, tier: 'L3', round: 1,
-      text: `Running software, read live from ${r.source}: ${versions || 'no devices returned'}. ` +
-        `I hold no golden baseline or change history, so this is current state only — no drift claim.`,
+      text: `Reading running-config live from ${targets.map((d) => d.hostname).join(', ')} via Command Runner, then diffing against the last snapshot… (this can take a minute per switch)`,
+    });
+
+    const findings = await Promise.all(targets.map((d) => diffOneDevice(triage, d, sym)));
+    triage.configFindings = findings;
+
+    const changed = findings.filter((x) => x.changed);
+    const inWindowChanged = changed.filter((x) => x.inWindow);
+    let summary;
+    if (inWindowChanged.length) {
+      summary = `⚠️ Config CHANGE inside ${windowLabel(sym)}: ` +
+        inWindowChanged.map((x) => `${x.device} at ${x.when} (${x.summary})`).join('; ') +
+        `. That lands in the incident window — a strong candidate cause.`;
+    } else if (changed.length) {
+      summary = `Config changes found, but all PRE-DATE ${windowLabel(sym)}: ` +
+        changed.map((x) => `${x.device} at ${x.when}`).join('; ') + `. Not the trigger for this incident.`;
+    } else {
+      const named = findings.filter((x) => !x.error).map((x) => x.device);
+      const firsts = findings.filter((x) => x.firstSnapshot).map((x) => x.device);
+      summary = firsts.length && firsts.length === findings.length
+        ? `First config snapshot taken for ${named.join(', ')} — no prior to diff against yet, so no drift claim (honest). The next triage will diff against this.`
+        : `No config change on ${named.join(', ') || 'the checked switches'} in the window — that rules out a config-change cause class for the campus front.`;
+    }
+    const errs = findings.filter((x) => x.error);
+    if (errs.length) summary += ` (${errs.map((x) => `${x.device || 'device'}: ${x.error}`).join('; ')})`;
+
+    post(triage, { agent, tier: 'L3', round: 1, text: `Config-Keeper: ${summary}` });
+    // A dedicated one-block command_share so the config check reads as one row.
+    session.emitCommandShare({
+      agent: 'config-keeper', agentName: agentInfo('config-keeper').name, tier: 'L3',
+      purpose: 'diff running-config vs last snapshot',
+      command: 'show running-config (per in-scope switch) → config-store.diff',
+      raw: findings.map((x) => `${x.device || 'device'}: ${x.error ? 'ERROR ' + x.error : (x.firstSnapshot ? 'first snapshot (no prior)' : (x.changed ? `CHANGED at ${x.when}${x.inWindow ? ' [in window]' : ' [pre-window]'} — ${x.summary}` : `no change since ${x.when || 'last snapshot'}`))}`).join('\n'),
+      reasoning: `Triage ${triage.id}: real running-config diff for change correlation (gap 5). Diff runs BEFORE the new snapshot is saved.`,
+      conclusion: summary,
+      ok: !errs.length,
+      triageId: triage.id,
     });
   });
 
   progress(triage, 'L3', 'done');
-  await wait(STEP);
+  await wait(cadence.step);
 }
 
-async function runL4(triage) {
+// Read one device's running-config, diff vs its last snapshot (BEFORE saving the
+// new one), then snapshot. Returns an honest finding object; never throws.
+async function diffOneDevice(triage, device, sym) {
+  const hostname = device.hostname || device.id;
+  try {
+    const cfg = await withTimeout(
+      Promise.resolve().then(() => catalyst.getRunningConfig(device.id)),
+      CONFIG_READ_TIMEOUT_MS);
+    if (cfg && cfg.__timeout) return { device: hostname, changed: false, error: `config read exceeded ${CONFIG_READ_TIMEOUT_MS}ms — treated as unread` };
+    if (!cfg || !cfg.ok) return { device: hostname, changed: false, error: (cfg && cfg.error) || 'unreadable' };
+
+    // DIFF against the last snapshot FIRST (compare to the previous run)…
+    const d = configStore.diff(hostname, cfg.text);
+    // …then save the new snapshot for the next run.
+    configStore.snapshot(hostname, cfg.text);
+
+    if (d.firstSnapshot) return { device: hostname, changed: false, firstSnapshot: true, when: null };
+    if (!d.changed) return { device: hostname, changed: false, when: d.when || null };
+    const whenMs = d.when ? Date.parse(d.when) : NaN;
+    const inWindow = sym && sym.timeAnchorMs && !Number.isNaN(whenMs) ? whenMs >= sym.timeAnchorMs : false;
+    return { device: hostname, changed: true, when: d.when || null, summary: d.summary || 'config changed', inWindow, added: d.added, removed: d.removed };
+  } catch (e) {
+    return { device: hostname, changed: false, error: (e && e.message) || 'error' };
+  }
+}
+
+async function runL4(triage, sym) {
   const agent = 'jarvis';
   progress(triage, 'L4', 'active');
   setStatus(agent, 'active', `Triage ${triage.id} — L4 correlation`);
-  await wait(STEP);
+  await wait(triage.cadence ? triage.cadence.step : STEP);
 
   const ev = triage.evidence;
   const degraded = LIVE_FRONTS.filter((f) => ev[f] && ev[f].state === 'degraded');
   const suspect = LIVE_FRONTS.filter((f) => ev[f] && ev[f].state === 'suspect');
   const clean = LIVE_FRONTS.filter((f) => ev[f] && ev[f].state === 'clean');
 
-  // Verdict is built ONLY from the collected live evidence — no invented number.
+  // Window-aware split of the degraded fronts (gap 1): which carry IN-WINDOW
+  // evidence (a candidate cause) vs only pre-existing/chronic noise (called out,
+  // never blamed).
+  const active = degraded.filter((f) => frontIsActive(ev[f]));
+  const preExisting = degraded.filter((f) => !frontIsActive(ev[f]));
+
+  // Honest rule-built verdict — the fallback if Jarvis has no key / declines.
   let verdict;
-  if (suspect.length && !degraded.length) {
-    verdict = `Cannot fully rule: ${suspect.length} front(s) could not be read (${suspect.join(', ')}). ` +
-      `The fronts that did answer look clean, but I will not call an all-clear over a blind front.`;
-  } else if (!degraded.length && !suspect.length) {
-    verdict = `No live evidence of an active fault. Every connected front read clean: ${clean.join(', ')}. ` +
-      `If the reporter still sees impact, it sits in a blind spot below, not on the connected estate.`;
+  if (active.length) {
+    verdict = `Live evidence in ${windowLabel(sym)} points at ${active.join(', ')}. ` +
+      active.map((f) => `${f}: ${ev[f].detail}`).join(' | ') +
+      (preExisting.length ? `. Pre-existing (not the cause): ${preExisting.join(', ')}.` : '') +
+      (suspect.length ? ` Unread (treat as blind): ${suspect.join(', ')}.` : '');
+  } else if (preExisting.length) {
+    verdict = `Nothing NEW inside ${windowLabel(sym)} on the connected estate. ${preExisting.join(', ')} carry faults/alarms, but they PRE-DATE the window (pre-existing, not the trigger). ` +
+      `If impact is real, it sits in a blind spot below.`;
+  } else if (suspect.length && !degraded.length) {
+    verdict = `Cannot fully rule: ${suspect.length} front(s) could not be read (${suspect.join(', ')}). The fronts that did answer look clean.`;
   } else {
-    verdict = `Live evidence points at ${degraded.join(', ')}. ` +
-      degraded.map((f) => `${f}: ${ev[f].detail}`).join(' | ') +
-      (suspect.length ? `. Unread (treat as blind): ${suspect.join(', ')}.` : '.');
+    verdict = `No live evidence of an active fault in ${windowLabel(sym)}. Every connected front read clean: ${clean.join(', ') || 'none'}. If the reporter still sees impact, it sits in a blind spot below.`;
   }
 
-  const impact = buildImpact(triage, degraded, suspect, clean);
-  const nextChecks = buildNextChecks(triage, ev, degraded, suspect);
+  const impact = buildImpact(triage, active, preExisting, suspect, clean, sym);
+  const nextChecks = buildNextChecks(triage, ev, active, suspect);
+  const ranked = triage.rankedBlindSpots && triage.rankedBlindSpots.length ? triage.rankedBlindSpots : jarvis.rankBlindSpots(BLIND_SPOTS, (sym && sym.rawSymptom) || triage.description);
 
-  const v = emit('triage_verdict', triage.id, {
-    verdict, impact, nextChecks, blindSpots: BLIND_SPOTS,
-  });
-  triage.verdict = { verdict, impact, nextChecks, blindSpots: BLIND_SPOTS, ts: v.ts };
+  // ── Committed hypothesis (gap 7) — strictly from the real findings ──
+  post(triage, { agent, tier: 'L4', round: 2, text: '🧠 Correlating the collected findings into a committed hypothesis…' });
+  const findingsBlock = buildFindingsBlock(triage, ev, active, preExisting, suspect, clean, ranked, sym);
+  const hypo = await jarvis.synthesizeTriageVerdict({
+    title: triage.title, severity: triage.severity, symptom: sym, findingsBlock,
+  }).catch(() => null);
 
-  post(triage, {
-    agent, tier: 'L4', round: 2,
-    text: `L4 / Principal Engineer verdict: ${verdict}`,
-  });
-  await wait(STEP);
+  const verdictPayload = {
+    verdict, impact, nextChecks,
+    blindSpots: ranked,           // ranked/weighted (gap 6)
+    hypothesis: hypo || null,     // committed ranked hypothesis + if/then + confidence (gap 7)
+    window: sym ? { timeAnchor: sym.timeAnchor, scope: sym.scope, source: sym.source } : null,
+    configFindings: triage.configFindings || [],
+  };
+  const v = emit('triage_verdict', triage.id, verdictPayload);
+  triage.verdict = { ...verdictPayload, ts: v.ts };
+
+  if (hypo) {
+    const rankedTxt = (hypo.ranked || []).map((r) => `${r.cause} (${r.likelihood})`).join(' · ');
+    post(triage, {
+      agent, tier: 'L4', round: 2,
+      text: `L4 / Principal Engineer — committed hypothesis:\n` +
+        `• Most likely: ${hypo.hypothesis}\n` +
+        (rankedTxt ? `• Ranked: ${rankedTxt}\n` : '') +
+        `• Next check: ${hypo.ifThen}\n` +
+        `• Confidence: ${hypo.confidence} — ${hypo.why}`,
+    });
+  } else {
+    post(triage, {
+      agent, tier: 'L4', round: 2,
+      text: `L4 / Principal Engineer verdict (no reasoning key — honest rule-based read): ${verdict}`,
+    });
+  }
+  // Always flag the high-risk blind spot for this symptom (gap 6).
+  const high = ranked.filter((b) => b.risk === 'high');
+  if (high.length) {
+    post(triage, {
+      agent, tier: 'L4', round: 2,
+      text: `⚠️ Blind-spot priority for this symptom: ${high.map((b) => b.front).join(', ')} — ${high[0].why}`,
+    });
+  }
+  await wait(triage.cadence ? triage.cadence.step : STEP);
 
   triage.status = 'closed';
   triage.closedAt = now();
@@ -512,16 +869,68 @@ async function runL4(triage) {
   log(`[Triage ${triage.id}] closed — ${triage.severity} "${triage.title}"`);
 }
 
-function buildImpact(triage, degraded, suspect, clean) {
-  if (degraded.length) {
-    return `Confirmed live impact on: ${degraded.join(', ')}. ` +
+// Is this front's evidence ACTIVE inside the incident window, or only pre-existing?
+// campus has no per-item timestamp, so a degraded campus (unreachable device) is
+// treated as active. fabric/incidents use the fault age split; wan uses the alarm
+// group new-count. When there is no time anchor at all, degraded == active.
+function frontIsActive(card) {
+  if (!card || card.state !== 'degraded') return false;
+  if (card.age) return card.age.inWindow > 0;
+  if (card.groups) return (card.groups.newCount || 0) > 0;
+  return true; // campus / no-anchor: a degraded card is active
+}
+
+function buildImpact(triage, active, preExisting, suspect, clean, sym) {
+  if (active.length) {
+    return `Confirmed live impact IN ${windowLabel(sym)} on: ${active.join(', ')}. ` +
+      (preExisting.length ? `${preExisting.join(', ')} carry pre-existing faults/alarms (not the cause). ` : '') +
       `${clean.length} front(s) read clean (${clean.join(', ') || 'none'})` +
       (suspect.length ? `; ${suspect.length} unread (${suspect.join(', ')})` : '') + '.';
+  }
+  if (preExisting.length) {
+    return `No NEW impact in ${windowLabel(sym)}. ${preExisting.join(', ')} have pre-existing faults/alarms only — pre-dating the window, so not the trigger.`;
   }
   if (suspect.length) {
     return `No confirmed impact, but ${suspect.join(', ')} could not be read — impact there is unknown, not clear.`;
   }
-  return `No live impact found on any connected front. Blind spots below are outside what this bridge can see.`;
+  return `No live impact found on any connected front in ${windowLabel(sym)}. Blind spots below are outside what this bridge can see.`;
+}
+
+// The findings block the hypothesis call reasons over — REAL numbers only, laid
+// out so Jarvis can commit without inventing anything.
+function buildFindingsBlock(triage, ev, active, preExisting, suspect, clean, ranked, sym) {
+  const L = [];
+  L.push(`SYMPTOM: ${sym && sym.rawSymptom ? sym.rawSymptom : triage.description}`);
+  L.push(`WINDOW: ${sym && sym.timeAnchor ? `since ${sym.timeAnchor}` : 'no explicit anchor — recent default'}` +
+    ` (${sym ? sym.source : 'none'})`);
+  L.push(`SCOPE: ${sym && sym.scope ? sym.scope.join(', ') : 'not scoped'}`);
+  L.push('');
+  L.push('FRONTS:');
+  for (const f of LIVE_FRONTS) {
+    const c = ev[f];
+    if (!c) continue;
+    let line = `- ${f} [${c.state}]: ${c.detail}`;
+    if (c.delta && c.delta.baseline != null) line += ` | delta: ${c.count} vs baseline ${c.delta.baseline} (${c.delta.delta >= 0 ? '+' : ''}${c.delta.delta})`;
+    else if (c.delta && c.delta.firstSweep) line += ` | delta: first sweep, no baseline yet`;
+    if (c.age) line += ` | faults in-window: ${c.age.inWindow}, pre-existing: ${c.age.older}`;
+    if (c.groups && c.groups.top) line += ` | alarm groups: ${c.groups.top.map((g) => `${g.key} ${g.count}${g.chronic ? ' chronic' : g.newCount ? ` ${g.newCount} new` : ''}`).join('; ')}`;
+    L.push(line);
+  }
+  L.push('');
+  L.push(`ACTIVE-IN-WINDOW: ${active.join(', ') || 'none'}`);
+  L.push(`PRE-EXISTING (not the cause): ${preExisting.join(', ') || 'none'}`);
+  L.push(`UNREAD/SUSPECT: ${suspect.join(', ') || 'none'}`);
+  L.push(`CLEAN: ${clean.join(', ') || 'none'}`);
+  L.push('');
+  L.push('CONFIG CORRELATION:');
+  (triage.configFindings || []).forEach((x) => {
+    L.push(`- ${x.device || 'device'}: ${x.error ? 'error ' + x.error : (x.firstSnapshot ? 'first snapshot (no prior to diff)' : (x.changed ? `CHANGED at ${x.when}${x.inWindow ? ' [IN WINDOW]' : ' [pre-window]'}` : `no change since ${x.when || 'last snapshot'}`))}`);
+  });
+  if (!(triage.configFindings || []).length) L.push('- no config diff collected this pass');
+  L.push('');
+  L.push('BLIND SPOTS (ranked by relevance to this symptom):');
+  (ranked || []).forEach((b) => L.push(`- ${b.front} [${b.risk}-risk]: ${b.reason}`));
+  return L.join('\n');
 }
 
 function buildNextChecks(triage, ev, degraded, suspect) {
@@ -554,10 +963,11 @@ async function withAgent(agentId, triage, worker) {
         triageId: triage.id, reason: `bridge investigation turn on triage ${triage.id}` },
       () => session.runWithContext(
         // Tag every wire call this turn makes with the triage + agent, so the
-        // CLI/session view can replay exactly what each engineer read on the bridge,
-        // and share:true screen-shares each real check into the chat as a command_share.
+        // CLI/session view can replay exactly what each engineer read on the bridge.
+        // share:FALSE (issue 8): the turn's helpers emit ONE consolidated check per
+        // front instead of one row per underlying HTTP hop.
         { triageId: triage.id, agentId, agentName: agentInfo(agentId).name, label: `Triage ${triage.id}`,
-          share: true,
+          share: false,
           tier: (triage.staffed.find((s) => s.agent === agentId) || {}).tier || 'triage',
           purpose: `bridge investigation on triage ${triage.id}`,
           reasoning: `bridge investigation turn on triage ${triage.id}` },
@@ -622,6 +1032,12 @@ function startTriage(severity, description) {
     evidenceHistory: [],
     messages: [],
     verdict: null,
+    symptom: null,             // filled by extractSymptom at bridge start (gap 1)
+    rankedBlindSpots: null,    // filled by rankBlindSpots (gap 6)
+    configFindings: [],        // filled by the config diff pass (gap 5)
+    cadence: null,             // severity-driven orchestration knobs (gap 3)
+    attempts: {},              // per-front read attempt counters (issue 8)
+    frontDelta: {},            // per-front baseline delta, computed once (gap 2)
   };
   triages.set(id, triage);
 
@@ -691,6 +1107,11 @@ function getTriage(id) {
     evidence: t.fronts.map((f) => t.evidence[f]).filter(Boolean),
     messages: t.messages,
     verdict: t.verdict,
+    // Wave-2 additive fields for refresh/restore (FE ignores what it doesn't use).
+    symptom: t.symptom || null,
+    rankedBlindSpots: t.rankedBlindSpots || null,
+    configFindings: t.configFindings || [],
+    cadence: t.cadence ? t.cadence.label : null,
   };
 }
 
@@ -741,10 +1162,12 @@ async function retryFront(triageId, front) {
   }
   // Which engineer owns this front (for the session-log tag + the bridge note).
   const owner = { campus: 'netops', fabric: 'router-expert', wan: 'router-expert', incidents: 'incident-handler' }[front] || 'monitor-eye';
-  const r = await gatedFrontRead({
+  // Re-read with the SAME symptom window + a relaxed cadence — the retry emits ONE
+  // check with the incremented attempt count (×N), never a stacked duplicate row.
+  const r = await gatedFrontRead(t, {
     front, agentId: owner, agentName: agentInfo(owner).name,
-    triageId: t.id, label: `Manual retry — ${front}`,
-    reason: `operator asked to re-read the ${front} front`,
+    label: `Manual retry — ${front}`, reason: `operator asked to re-read the ${front} front`,
+    sym: t.symptom || { rawSymptom: t.description }, cadence: t.cadence || cadenceFor(t.severity),
   });
   postEvidence(t, front, r);
   post(t, {
