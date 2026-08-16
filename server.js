@@ -18,6 +18,7 @@ const catalyst = require('./sources/catalyst-center');
 const aci = require('./sources/aci');
 const sdwan = require('./sources/sdwan');
 const session = require('./sources/session-log');
+const chatStore = require('./sources/chat-store');
 const approvals = require('./sources/approvals');
 const artifacts = require('./sources/artifacts');
 const { checkIntent } = require('./sources/guardrails');
@@ -236,6 +237,20 @@ function withRequest(type, data) {
 // Broadcast to all connected clients
 function broadcast(type, data) {
   data = withRequest(type, data);
+  // ONE SEAM for reload persistence (bug B4): every chat_message / activity_new
+  // the app broadcasts passes through here, so persisting the recent window at
+  // this single point restores the whole conversation + Live Activity feed on a
+  // refresh (and across a server restart) with no per-caller wiring. The store
+  // secret-scrubs before anything touches disk.
+  if (type === 'chat_message') chatStore.appendChat(data);
+  else if (type === 'activity_new' && data && data.ts !== undefined) {
+    // activity_new is broadcast in two shapes: the canonical {source,text,ts}
+    // from appendToActivityLog, and a {timestamp,agent,message} RE-broadcast of
+    // the very same line by the ACTIVITY_LOG.md file watcher. Persist only the
+    // canonical one (it carries `ts`) so the restored feed has one uniform shape
+    // and no duplicates — the watcher copy would double every entry on reload.
+    chatStore.appendActivity(data);
+  }
   const message = JSON.stringify({ type, data, timestamp: new Date().toISOString() });
   clients.forEach(client => {
     if (client.readyState === 1) { // WebSocket.OPEN
@@ -373,7 +388,13 @@ wss.on('connection', (ws, req) => {
       activity: getRecentActivity(),
       debates: debateThreads,
       mentionCounts: { ...mentionCounts },
-      paused: isPaused
+      paused: isPaused,
+      // Bug B4 restore contract: the recent direct-chat/DM stream and Live
+      // Activity feed, oldest→newest, so a reconnecting client can rebuild both
+      // instead of coming back empty. Same payload shapes chat_message /
+      // activity_new already broadcast; already secret-scrubbed on disk.
+      chatHistory: chatStore.getChatHistory(),
+      activityHistory: chatStore.getActivityHistory()
     },
     timestamp: new Date().toISOString()
   }));
