@@ -316,6 +316,25 @@ function recordReasoning({ agent = 'jarvis', agentName, command, raw, interpreta
   return rec;
 }
 
+// ── Explicit command_share (for direct reads that own their clean block) ────
+// A wire read may make several HTTP hops (login → submit → poll → fetch); for a
+// direct question we want ONE clean block with the real CLI command + the real
+// device output, not one per hop. The agent calls this once, with the real
+// values it already holds. `raw` is scrubbed + capped here, same as any record,
+// so no secret can reach the browser. Honesty is the caller's: pass real data or
+// an honest unreachable conclusion — nothing is fabricated here.
+function emitCommandShare(share) {
+  if (!onCommandShare || !share) return;
+  const out = Object.assign({}, share, {
+    raw: scrub(share.raw == null ? '' : String(share.raw)).slice(0, RAW_CAP),
+    ts: share.ts || new Date().toISOString(),
+  });
+  if (share.raw != null && String(share.raw).length > RAW_CAP) {
+    out.raw += `\n… (${String(share.raw).length - RAW_CAP} more chars truncated)`;
+  }
+  try { onCommandShare(out); } catch (e) { /* never let telemetry break a read */ }
+}
+
 // ── Query ───────────────────────────────────────────────────────────────────
 function all() { return records.slice(); }
 function query({ agentId, source, triageId, limit } = {}) {
@@ -329,6 +348,6 @@ function query({ agentId, source, triageId, limit } = {}) {
 }
 
 module.exports = {
-  runWithContext, getContext, record, recordReasoning,
+  runWithContext, getContext, record, recordReasoning, emitCommandShare,
   setBroadcast, setCommandShareBroadcast, scrub, all, query,
 };
