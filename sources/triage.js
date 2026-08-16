@@ -25,6 +25,7 @@ const artifacts = require('./artifacts');
 const jarvis = require('./jarvis');
 const baseline = require('./baseline-store');
 const configStore = require('./config-store');
+const incidentStore = require('./incident-store');
 
 // The host app injects broadcast + status plumbing here so this module stays
 // free of server internals — the same seam live-agents.js uses.
@@ -390,6 +391,11 @@ function postEvidence(triage, front, result) {
     front, state, detail, source: source || null, delta, groups, age, count,
   });
   triage.evidence[front] = { front, state, detail, source: source || null, ts: card.ts, delta, groups, age, count };
+  // Keep the FULL raw read result in memory (never persisted — it can carry raw
+  // faults/alarms/devices) so the re-triage diff (issue 11) and the affected-CI
+  // list can compare real item identities run-to-run, not just slim card fields.
+  if (!triage.reads) triage.reads = {};
+  triage.reads[front] = result;
   recordEvidenceHistory(triage, front, state, detail, source, card.ts);
   return card;
 }
@@ -835,6 +841,12 @@ async function runL4(triage, sym) {
   };
   const v = emit('triage_verdict', triage.id, verdictPayload);
   triage.verdict = { ...verdictPayload, ts: v.ts };
+  // MTTR stop-clock (issue 11): the verdict is "resolution" — stamp the moment
+  // Jarvis commits so the record's MTTR is opened→verdict, a real elapsed time.
+  triage.verdictAt = v.ts;
+  // Real affected CIs (issue 11 / ServiceNow) — the actual devices/tenants behind
+  // the degraded or unread fronts, pulled from the live read results in memory.
+  triage.affectedCIs = collectAffectedCIs(triage);
 
   if (hypo) {
     const rankedTxt = (hypo.ranked || []).map((r) => `${r.cause} (${r.likelihood})`).join(' · ');
@@ -864,9 +876,9 @@ async function runL4(triage, sym) {
 
   triage.status = 'closed';
   triage.closedAt = now();
-  emit('triage_closed', triage.id, {});
+  emit('triage_closed', triage.id, { incidentId: triage.incidentId || null, mttr: mttrOf(triage) });
   progress(triage, 'L4', 'done');
-  log(`[Triage ${triage.id}] closed — ${triage.severity} "${triage.title}"`);
+  log(`[Triage ${triage.id}] closed — ${triage.severity} "${triage.title}" — MTTR ${mttrOf(triage).mttrHuman}`);
 }
 
 // Is this front's evidence ACTIVE inside the incident window, or only pre-existing?
@@ -985,11 +997,313 @@ async function withAgent(agentId, triage, worker) {
   await wait(STEP);
 }
 
+// ── MTTR clock (issue 11) ────────────────────────────────────────────────────
+// The mean-time-to-resolve stop-clock. openedAt is the start; the verdict is
+// "resolution", so the FINAL mttr is opened→verdict (falling back to close if the
+// bridge ended with no verdict). While the bridge is open, `elapsedMs` is a live
+// running value (now − opened) the UI can tick every second. Everything here is
+// derived from the triage's REAL timestamps — never fabricated.
+function humanizeMs(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return 'unknown';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60), rem = s % 60;
+  if (m < 60) return `${m}m${rem ? ` ${rem}s` : ''}`;
+  const h = Math.floor(m / 60), remM = m % 60;
+  return `${h}h${remM ? ` ${remM}m` : ''}`;
+}
+
+function mttrOf(triage) {
+  const openedMs = triage.openedAt ? Date.parse(triage.openedAt) : NaN;
+  const verdictMs = triage.verdictAt ? Date.parse(triage.verdictAt) : NaN;
+  const closedMs = triage.closedAt ? Date.parse(triage.closedAt) : NaN;
+  const running = triage.status !== 'closed';
+  // Stop point: the verdict if we have one, else close, else "still running".
+  const stopMs = Number.isFinite(verdictMs) ? verdictMs : (Number.isFinite(closedMs) ? closedMs : NaN);
+  const elapsedMs = Number.isFinite(openedMs) ? ((Number.isFinite(stopMs) ? stopMs : Date.now()) - openedMs) : null;
+  const mttrMs = (!running && Number.isFinite(openedMs) && Number.isFinite(stopMs)) ? stopMs - openedMs : null;
+  return {
+    openedAt: triage.openedAt || null,
+    verdictAt: triage.verdictAt || null,
+    closedAt: triage.closedAt || null,
+    running,
+    elapsedMs: elapsedMs != null ? Math.max(0, elapsedMs) : null,
+    mttrMs: mttrMs != null ? Math.max(0, mttrMs) : null,
+    mttrHuman: mttrMs != null ? humanizeMs(mttrMs) : (running ? 'running' : 'unknown'),
+  };
+}
+
+// ── Real affected CIs (issue 11 / ServiceNow) ────────────────────────────────
+// Pull the ACTUAL configuration items — device hostnames, ACI tenants/nodes, WAN
+// devices — behind the degraded/unread fronts, straight from the live read
+// results held in memory. Nothing invented: a front we could not read contributes
+// no CI (it is listed as unread instead). Deduped, capped so a noisy estate does
+// not produce an unbounded list.
+function collectAffectedCIs(triage) {
+  const out = [];
+  const seen = new Set();
+  const add = (ci, type, front) => {
+    const key = `${type}:${ci}`;
+    if (!ci || seen.has(key)) return;
+    seen.add(key);
+    out.push({ ci: String(ci), type, front });
+  };
+  const reads = triage.reads || {};
+  const ev = triage.evidence || {};
+  // campus — unreachable devices are the affected CIs.
+  const campus = reads.campus;
+  if (campus && Array.isArray(campus.devices)) {
+    campus.devices.filter((d) => d && d.reachability && d.reachability !== 'Reachable')
+      .forEach((d) => add(d.hostname || d.id, 'device', 'campus'));
+  }
+  // fabric — tenants/nodes carrying critical/major faults (in-window first).
+  const fabric = reads.fabric;
+  if (fabric && Array.isArray(fabric.faults)) {
+    fabric.faults.slice(0, 12).forEach((f) => {
+      if (f && f.tenant) add(f.tenant, 'tenant', 'fabric');
+      if (f && f.node) add(f.node, 'node', 'fabric');
+    });
+  }
+  // wan — devices/hosts named on the active alarms.
+  const wan = reads.wan;
+  if (wan && Array.isArray(wan.alarms)) {
+    wan.alarms.slice(0, 20).forEach((a) => {
+      const dev = a && (a.device || a.host);
+      if (dev) add(dev, 'device', 'wan');
+      if (a && a.site) add(a.site, 'site', 'wan');
+    });
+  }
+  // incidents — devices named on open Catalyst issues.
+  const inc = reads.incidents;
+  if (inc && Array.isArray(inc.issues)) {
+    inc.issues.slice(0, 12).forEach((i) => {
+      const dev = i && (i.deviceName || i.device || i.entity);
+      if (dev) add(dev, 'device', 'incidents');
+    });
+  }
+  // Honesty: if a degraded front yielded no nameable CI, record the front itself
+  // as the affected area rather than dropping it silently.
+  LIVE_FRONTS.forEach((f) => {
+    if (ev[f] && ev[f].state === 'degraded' && !out.some((c) => c.front === f)) {
+      add(f, 'front', f);
+    }
+  });
+  return out.slice(0, 40);
+}
+
+// ── Re-triage & diff (issue 11) ──────────────────────────────────────────────
+// Re-run the SAME triage (same severity, same description → same symptom window +
+// scope), link the new run to the SAME incident id, then diff the fresh verdict
+// against the previous run: fronts improved/worsened, faults & alarms new/cleared,
+// config changes in the window, and whether the hypothesis moved. A real re-run
+// and a real diff — when nothing moved it says so with the real numbers and the
+// real time, it never fabricates a "nothing changed".
+
+// Snapshot the comparable facts of a run, from the live triage OR a persisted
+// record — so a re-triage can diff even against a run from before a restart.
+function runSnapshot(source) {
+  // Live triage object path.
+  if (source && source.evidence && source.reads !== undefined) {
+    const fronts = {};
+    LIVE_FRONTS.forEach((f) => {
+      const c = source.evidence[f];
+      if (c) fronts[f] = { state: c.state, count: c.count != null ? c.count : null };
+    });
+    return {
+      triageId: source.id,
+      verdictAt: source.verdictAt || (source.verdict && source.verdict.ts) || source.closedAt || null,
+      fronts,
+      faultCodes: faultCodesOf(source.reads && source.reads.fabric),
+      incidentFaultCodes: faultCodesOf(source.reads && source.reads.incidents),
+      wanTotal: (source.reads && source.reads.wan && source.reads.wan.count != null) ? source.reads.wan.count : null,
+      hypothesis: hypoTextOf(source.verdict),
+    };
+  }
+  // Persisted record path (post-restart) — coarser: states + counts only, no raw
+  // fault identities (the record never stores them), so fault-level new/cleared is
+  // honestly reported as unavailable.
+  const rec = source || {};
+  const fronts = {};
+  (rec.evidenceFinal || []).forEach((e) => {
+    if (LIVE_FRONTS.includes(e.front)) fronts[e.front] = { state: e.state, count: e.count != null ? e.count : null };
+  });
+  return {
+    triageId: rec.id,
+    verdictAt: (rec.mttr && rec.mttr.verdictAt) || rec.closedAt || null,
+    fronts,
+    faultCodes: null,           // not recoverable from the slim record
+    incidentFaultCodes: null,
+    wanTotal: (fronts.wan && fronts.wan.count != null) ? fronts.wan.count : null,
+    hypothesis: (rec.verdict && (rec.verdict.hypothesis ? rec.verdict.hypothesis.hypothesis : null))
+      || (rec.verdict && rec.verdict.verdict) || null,
+  };
+}
+
+function faultCodesOf(read) {
+  if (!read || !Array.isArray(read.faults)) return null;
+  return read.faults.map((f) => (f && (f.code != null ? String(f.code) : null))).filter(Boolean);
+}
+
+function hypoTextOf(verdict) {
+  if (!verdict) return null;
+  if (verdict.hypothesis && verdict.hypothesis.hypothesis) return verdict.hypothesis.hypothesis;
+  return verdict.verdict || null;
+}
+
+// Diff two run snapshots into a real delta. `prev` may have null fault-code sets
+// (a restored record) — the diff then honestly says fault identities are
+// unavailable rather than inventing new/cleared.
+function diffRuns(prev, next) {
+  const frontDeltas = [];
+  LIVE_FRONTS.forEach((f) => {
+    const a = prev.fronts[f], b = next.fronts[f];
+    if (!a && !b) return;
+    const before = a ? a.state : 'unknown';
+    const after = b ? b.state : 'unknown';
+    const rank = { clean: 0, waiting: 1, blind: 1, degraded: 2, suspect: 3, unknown: 1 };
+    let direction = 'unchanged';
+    if (before !== after) direction = (rank[after] ?? 1) < (rank[before] ?? 1) ? 'improved' : 'worsened';
+    const beforeCount = a && a.count != null ? a.count : null;
+    const afterCount = b && b.count != null ? b.count : null;
+    const countDelta = (beforeCount != null && afterCount != null) ? afterCount - beforeCount : null;
+    frontDeltas.push({ front: f, before, after, direction, beforeCount, afterCount, countDelta });
+  });
+
+  const faultDiff = diffCodes(prev.faultCodes, next.faultCodes);
+  const wanDelta = (prev.wanTotal != null && next.wanTotal != null) ? next.wanTotal - prev.wanTotal : null;
+
+  const configChanges = (next.configFindings || []).filter((x) => x && x.changed)
+    .map((x) => ({ device: x.device, when: x.when, inWindow: !!x.inWindow, summary: x.summary || 'config changed' }));
+
+  const hypothesisChanged = !!(prev.hypothesis && next.hypothesis && prev.hypothesis.trim() !== next.hypothesis.trim())
+    || (!prev.hypothesis !== !next.hypothesis);
+
+  const material = frontDeltas.some((d) => d.direction !== 'unchanged')
+    || (faultDiff && (faultDiff.new.length || faultDiff.cleared.length))
+    || (wanDelta != null && wanDelta !== 0)
+    || configChanges.length > 0
+    || hypothesisChanged;
+
+  return { frontDeltas, faultDiff, wanDelta, configChanges, hypothesisChanged, material };
+}
+
+function diffCodes(prevCodes, nextCodes) {
+  if (!Array.isArray(prevCodes) || !Array.isArray(nextCodes)) {
+    return { available: false, new: [], cleared: [],
+      note: 'fault-level new/cleared needs both runs in memory; the previous run was restored from its record, which stores counts, not fault ids.' };
+  }
+  const prevSet = new Set(prevCodes), nextSet = new Set(nextCodes);
+  return {
+    available: true,
+    new: nextCodes.filter((c) => !prevSet.has(c)),
+    cleared: prevCodes.filter((c) => !nextSet.has(c)),
+  };
+}
+
+function summarizeDelta(delta, prev, next) {
+  if (!delta.material) {
+    const since = prev.verdictAt ? ` since ${prev.verdictAt}` : ' since the last verdict';
+    return `No material change${since}: every connected front holds the same state and the same counts, no faults were raised or cleared, and the hypothesis did not move.`;
+  }
+  const bits = [];
+  const moved = delta.frontDeltas.filter((d) => d.direction !== 'unchanged');
+  moved.forEach((d) => bits.push(`${d.front} ${d.direction} (${d.before}→${d.after}${d.countDelta != null ? `, count ${d.countDelta >= 0 ? '+' : ''}${d.countDelta}` : ''})`));
+  if (delta.faultDiff && delta.faultDiff.available) {
+    if (delta.faultDiff.new.length) bits.push(`${delta.faultDiff.new.length} new fault(s): ${delta.faultDiff.new.join(', ')}`);
+    if (delta.faultDiff.cleared.length) bits.push(`${delta.faultDiff.cleared.length} cleared fault(s): ${delta.faultDiff.cleared.join(', ')}`);
+  }
+  if (delta.wanDelta != null && delta.wanDelta !== 0) bits.push(`WAN alarms ${delta.wanDelta >= 0 ? '+' : ''}${delta.wanDelta}`);
+  delta.configChanges.forEach((c) => bits.push(`config change on ${c.device} at ${c.when}${c.inWindow ? ' (in window)' : ''}`));
+  if (delta.hypothesisChanged) bits.push('hypothesis changed');
+  return `Changed since ${prev.verdictAt || 'the last verdict'}: ${bits.join('; ')}.`;
+}
+
+// Load the previous run as a snapshot: prefer the live in-memory triage (full
+// fidelity, real fault ids), fall back to its persisted record (coarser).
+function previousRunSnapshot(id) {
+  const live = triages.get(id);
+  if (live) return runSnapshot(live);
+  const rec = artifacts.getRecord(id);
+  if (rec) return runSnapshot(rec);
+  return null;
+}
+
+// Public: re-run a triage and return the real delta. Awaits the fresh bridge so
+// the delta is real (computed from the completed re-run), not a promise of one.
+async function retriage(id) {
+  const prevSnap = previousRunSnapshot(id);
+  if (!prevSnap) return { error: 'not_found', reason: 'No such triage to re-run.' };
+
+  // Pull severity + description from the live triage or the record — the re-run is
+  // the SAME triage (same severity, symptom, scope), just at a later moment.
+  const live = triages.get(id);
+  const rec = live ? null : artifacts.getRecord(id);
+  const severity = (live && live.severity) || (rec && rec.severity);
+  const description = (live && live.description) || (rec && rec.description);
+  const incidentId = (live && live.incidentId) || (rec && rec.incidentId) || null;
+  if (!severity || !description) return { error: 'not_found', reason: 'That triage has no severity/description to re-run.' };
+
+  // Build the new run, carrying the SAME incident id and a link to the run it
+  // re-triages. runBridge persists its own record (linked by incidentId).
+  const newTriage = buildTriage(severity, description, {
+    incidentId, reTriageOf: id, parentIncidentId: incidentId,
+  });
+  if (newTriage.refused) return { error: 'refused', reason: newTriage.reason };
+
+  emitOpened(newTriage);
+  await runBridge(newTriage); // await the REAL re-run to completion
+
+  const nextSnap = runSnapshot(newTriage);
+  nextSnap.configFindings = newTriage.configFindings || [];
+  const delta = diffRuns({ ...prevSnap, configFindings: [] }, { ...nextSnap });
+  const summary = summarizeDelta(delta, prevSnap, nextSnap);
+
+  const payload = {
+    incidentId,
+    previousTriageId: prevSnap.triageId,
+    newTriageId: newTriage.id,
+    previousVerdictAt: prevSnap.verdictAt,
+    newVerdictAt: nextSnap.verdictAt,
+    fronts: delta.frontDeltas,
+    faults: delta.faultDiff,
+    wanAlarmDelta: delta.wanDelta,
+    configChanges: delta.configChanges,
+    hypothesisChanged: delta.hypothesisChanged,
+    previousHypothesis: prevSnap.hypothesis,
+    newHypothesis: nextSnap.hypothesis,
+    material: delta.material,
+    summary,
+  };
+  // Stamp the delta onto the new triage so it lands in the persisted record and
+  // is available on refresh. Re-persist the record now that the delta exists.
+  newTriage.reTriageDelta = payload;
+  try { artifacts.writeForTriage(newTriage); } catch (e) { /* never fatal */ }
+  emit('triage_retriage_delta', newTriage.id, payload);
+  log(`[Triage ${newTriage.id}] re-triage of ${id} (incident ${incidentId}) — ${delta.material ? 'material change' : 'no material change'}`);
+  return { ok: true, delta: payload, newTriageId: newTriage.id, incidentId };
+}
+
 // ── Public entry points ─────────────────────────────────────────────────────
 
 // Start a triage. Returns { triageId } on success, or { refused, reason } if
 // the description names no real network subject (the landlord-problem fix).
 function startTriage(severity, description) {
+  const triage = buildTriage(severity, description);
+  if (triage.refused) return { refused: true, reason: triage.reason };
+
+  emitOpened(triage);
+
+  // Run the bridge in the background. Failures are contained inside runBridge.
+  runBridge(triage).catch((err) => log(`[Triage ${triage.id}] unhandled bridge error — ${err.message}`));
+
+  return { triageId: triage.id };
+}
+
+// Validate + construct a triage object (and register it), WITHOUT emitting or
+// running the bridge. Shared by startTriage and retriage. `opts` carries the
+// lifecycle linkage (incidentId to reuse, reTriageOf) so a re-run stays on the
+// SAME incident. Returns the triage, or { refused, reason }.
+function buildTriage(severity, description, opts = {}) {
   const sev = String(severity || '').toUpperCase();
   if (!['P1', 'P2', 'P3'].includes(sev)) {
     return { refused: true, reason: `Severity must be P1, P2 or P3 — got "${severity}".` };
@@ -1010,20 +1324,30 @@ function startTriage(severity, description) {
   }
 
   const id = newId();
+  const openedAt = now();
   const staffedTiers = tiersFor(sev);
   const staffed = [];
   for (const tier of staffedTiers) {
     for (const agent of ROSTER[tier]) staffed.push({ agent, tier });
   }
 
+  // Incident id (issue 11): a re-triage REUSES the parent's incident id so every
+  // run of the same incident shares one operator-facing handle. A fresh triage
+  // gets a new INC-YYYYMMDD-NNN, its date derived from THIS run's real openedAt and
+  // its sequence a persisted daily counter (survives restart).
+  const incidentId = opts.incidentId || incidentStore.assign(openedAt).incidentId;
+
   const triage = {
     id,
+    incidentId,                          // stable human-readable id (issue 11)
+    reTriageOf: opts.reTriageOf || null, // set when this run is a re-triage
     severity: sev,
     title: titleFrom(desc),
     description: desc,
     status: 'open',
-    openedAt: now(),
+    openedAt,
     closedAt: null,
+    verdictAt: null,           // MTTR stop-clock, stamped when Jarvis commits
     staffed,
     blindSpots: BLIND_SPOTS,
     fronts: FRONTS,
@@ -1038,6 +1362,9 @@ function startTriage(severity, description) {
     cadence: null,             // severity-driven orchestration knobs (gap 3)
     attempts: {},              // per-front read attempt counters (issue 8)
     frontDelta: {},            // per-front baseline delta, computed once (gap 2)
+    reads: {},                 // in-memory raw read results (re-triage diff / CIs)
+    affectedCIs: [],           // real affected devices/tenants (ServiceNow)
+    reTriageDelta: null,       // set on a re-run: the real delta vs the prior run
   };
   triages.set(id, triage);
 
@@ -1051,13 +1378,21 @@ function startTriage(severity, description) {
     recordEvidenceHistory(triage, front, initial.state, initial.detail, initial.source, initial.ts);
   });
 
+  return triage;
+}
+
+// Emit the opening board for a triage (triage_opened + blind cards + progress).
+function emitOpened(triage) {
+  const id = triage.id;
   // triage_opened carries the whole board so the UI can render it at once.
   emit('triage_opened', id, {
-    severity: sev,
+    incidentId: triage.incidentId,          // issue 11 — surfaced to the operator
+    reTriageOf: triage.reTriageOf || null,
+    severity: triage.severity,
     title: triage.title,
-    description: desc,
+    description: triage.description,
     openedAt: triage.openedAt,
-    staffed,
+    staffed: triage.staffed,
     blindSpots: BLIND_SPOTS,
     fronts: FRONTS,
   });
@@ -1068,12 +1403,9 @@ function startTriage(severity, description) {
   ['L1', 'L2', 'L3', 'L4'].forEach((tier) =>
     emit('triage_progress', id, { tier, status: 'pending' }));
 
-  log(`[Triage ${id}] opened — ${sev} "${triage.title}" — staffed ${staffed.map((s) => s.agent).join(', ')}`);
-
-  // Run the bridge in the background. Failures are contained inside runBridge.
-  runBridge(triage).catch((err) => log(`[Triage ${id}] unhandled bridge error — ${err.message}`));
-
-  return { triageId: id };
+  log(`[Triage ${id}] opened — ${triage.severity} "${triage.title}" — incident ${triage.incidentId}` +
+    (triage.reTriageOf ? ` (re-triage of ${triage.reTriageOf})` : '') +
+    ` — staffed ${triage.staffed.map((s) => s.agent).join(', ')}`);
 }
 
 function blindReason(front) {
@@ -1092,6 +1424,10 @@ function getTriage(id) {
   if (!t) return null;
   return {
     triageId: t.id,
+    incidentId: t.incidentId || null,   // issue 11 — stable operator-facing id
+    reTriageOf: t.reTriageOf || null,
+    mttr: mttrOf(t),                     // issue 11 — running/final MTTR clock
+    reTriageDelta: t.reTriageDelta || null,
     severity: t.severity,
     title: t.title,
     description: t.description,
@@ -1186,10 +1522,13 @@ function listTriages() {
     .sort((a, b) => (a.openedAt < b.openedAt ? 1 : -1))
     .map((t) => ({
       id: t.id,
+      incidentId: t.incidentId || null,
+      reTriageOf: t.reTriageOf || null,
       severity: t.severity,
       title: t.title,
       status: t.status,
       openedAt: t.openedAt,
+      mttr: mttrOf(t),
     }));
 }
 
@@ -1200,6 +1539,7 @@ module.exports = {
   listTriages,
   postOperatorMessage,
   retryFront,
+  retriage,
   isNetworkSubject,
   FRONTS,
   BLIND_SPOTS,

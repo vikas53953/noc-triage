@@ -1915,6 +1915,38 @@ app.post('/api/triage/:id/message', (req, res) => {
   res.json({ ok: true, message: result.message });
 });
 
+// Re-triage & diff (issue 11 — ops lifecycle). Re-runs the SAME triage (same
+// severity, symptom, scope), links it to the SAME incident id, and returns the
+// REAL delta vs the previous verdict: fronts improved/worsened, faults/alarms
+// new/cleared, config changes, and whether the hypothesis moved. A real re-run —
+// it awaits the fresh bridge — so the delta is real, never a fabricated
+// "nothing changed". Write-rate-limited (POST). Path-safe: the id is looked up in
+// the in-memory map / resolved through the workspace guard in artifacts.getRecord.
+app.post('/api/triage/:id/retriage', async (req, res) => {
+  try {
+    const result = await triage.retriage(req.params.id);
+    if (result.error) {
+      const code = result.error === 'not_found' ? 404 : 422;
+      return res.status(code).json({ error: result.reason || 'Could not re-triage.' });
+    }
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: 'Re-triage failed.' });
+  }
+});
+
+// ServiceNow / ITSM export (issue 11). Returns the structured ServiceNow-ready
+// object built from the REAL persisted record (real incident id, affected CIs,
+// hypothesis, MTTR) plus a copy-ready text form. Read-rate-limited (GET). The id
+// is resolved through the workspace safeJoin guard inside artifacts — a traversal
+// attempt resolves to null and 404s. Secret values never appear (record is
+// scrub()'d; CIs are device/tenant names only).
+app.get('/api/triage/:id/servicenow', (req, res) => {
+  const sn = artifacts.getServiceNow(req.params.id);
+  if (!sn) return res.status(404).json({ error: 'No such triage record to export.' });
+  res.json({ id: req.params.id, serviceNow: sn.object, text: sn.text, readOnly: true });
+});
+
 // ── Triage records / history + auto-written docs (Phase D) ──────────────────
 // After a triage closes, its complete REAL record (timeline, every command + raw
 // output, evidence transition history, operator posts, verdict) plus two derived
@@ -1937,15 +1969,16 @@ app.get('/api/records/:id', (req, res) => {
 // One triage's auto-written document — 'slt' (leadership) or 'engineer'.
 app.get('/api/records/:id/doc/:which', (req, res) => {
   const which = req.params.which;
-  if (which !== 'slt' && which !== 'engineer') {
-    return res.status(400).json({ error: 'Unknown document — use slt or engineer.' });
+  if (which !== 'slt' && which !== 'engineer' && which !== 'servicenow') {
+    return res.status(400).json({ error: 'Unknown document — use slt, engineer or servicenow.' });
   }
   const content = artifacts.getDoc(req.params.id, which);
   if (content == null) return res.status(404).json({ error: 'Document not found (or path refused).' });
+  const names = { slt: 'Leadership summary', engineer: 'Engineer writeup', servicenow: 'ServiceNow export' };
   res.json({
     id: req.params.id,
     which,
-    name: which === 'slt' ? 'Leadership summary' : 'Engineer writeup',
+    name: names[which] || which,
     content,
     readOnly: true,
   });

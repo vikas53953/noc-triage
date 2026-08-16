@@ -74,6 +74,23 @@ function durationHuman(openedAt, closedAt) {
   return `${m} minute${m === 1 ? '' : 's'}${rem ? ` ${rem}s` : ''}`;
 }
 
+// MTTR (issue 11): opened → verdict is the resolution time; fall back to close if
+// the bridge ended with no verdict. Derived purely from the record's real
+// timestamps — never fabricated.
+function mttrFrom(openedAt, verdictAt, closedAt) {
+  const openedMs = openedAt ? Date.parse(openedAt) : NaN;
+  const stop = verdictAt || closedAt;
+  const stopMs = stop ? Date.parse(stop) : NaN;
+  const mttrMs = (Number.isFinite(openedMs) && Number.isFinite(stopMs) && stopMs >= openedMs) ? stopMs - openedMs : null;
+  return {
+    openedAt: openedAt || null,
+    verdictAt: verdictAt || null,
+    closedAt: closedAt || null,
+    mttrMs,
+    mttrHuman: mttrMs != null ? durationHuman(openedAt, stop) : 'unknown',
+  };
+}
+
 const STATE_WORDS = {
   clean: 'read clean (no live fault found)',
   degraded: 'degraded — a live fault was found',
@@ -167,14 +184,22 @@ function buildRecord(triage) {
     return ta - tb;
   });
 
-  return {
+  const mttr = mttrFrom(t.openedAt, t.verdictAt, t.closedAt);
+
+  const record = {
     id: t.id,
+    incidentId: t.incidentId || null,        // issue 11 — stable operator-facing id
+    reTriageOf: t.reTriageOf || null,         // set when this run is a re-triage
     severity: t.severity,
     title: t.title,
     description: t.description,
     status: t.status,
     openedAt: t.openedAt,
     closedAt: t.closedAt || null,
+    verdictAt: t.verdictAt || null,
+    mttr,                                     // issue 11 — final MTTR (opened→verdict)
+    affectedCIs: t.affectedCIs || [],         // real devices/tenants (ServiceNow)
+    reTriageDelta: t.reTriageDelta || null,   // real delta vs the prior run, if any
     durationHuman: durationHuman(t.openedAt, t.closedAt),
     staffed: t.staffed || [],
     blindSpots: t.blindSpots || [],
@@ -189,6 +214,123 @@ function buildRecord(triage) {
     // Honest provenance note baked into the record.
     provenance: 'Every field above is drawn from the live triage record and the real recorded wire session. No value is invented. Failed or blind reads are kept as-is.',
   };
+
+  // ITSM / ServiceNow export (issue 11) — a structured, ServiceNow-ready object +
+  // a copy-ready text form, derived ONLY from the real record above. Baked into the
+  // record so the GET endpoint and the persisted servicenow.md share one source.
+  record.serviceNow = buildServiceNow(record);
+  record.serviceNowText = renderServiceNowText(record, record.serviceNow);
+  return record;
+}
+
+// ── ITSM / ServiceNow export ──────────────────────────────────────────────────
+// Map an internal severity (P1/P2/P3) to ServiceNow impact/urgency (1-3). Real
+// mapping, no invention: P1 = highest.
+function snImpactUrgency(severity) {
+  const map = {
+    P1: { severity: 'P1', impact: '1 - High', urgency: '1 - High', priority: '1 - Critical' },
+    P2: { severity: 'P2', impact: '2 - Medium', urgency: '2 - Medium', priority: '2 - High' },
+    P3: { severity: 'P3', impact: '3 - Low', urgency: '3 - Low', priority: '3 - Moderate' },
+  };
+  return map[severity] || { severity: severity || 'unknown', impact: '3 - Low', urgency: '3 - Low', priority: '3 - Moderate' };
+}
+
+// Build the structured ServiceNow-ready object from the REAL record. Every field
+// traces to real triage data; nothing is a placeholder. Secrets never appear here
+// (the whole record is scrub()'d on write, and CIs are device/tenant names only).
+function buildServiceNow(rec) {
+  const iu = snImpactUrgency(rec.severity);
+  const c = classifyFronts(rec);
+
+  const findings = [];
+  (rec.evidenceFinal || []).forEach((e) => {
+    findings.push({ front: e.front, state: e.state, detail: e.detail || '', source: e.source || null });
+  });
+
+  const affectedCIs = (rec.affectedCIs || []).map((x) => ({ ci: x.ci, class: x.type, front: x.front }));
+
+  const nextSteps = (rec.verdict && rec.verdict.nextChecks) || [];
+  const hypothesis = rec.verdict && rec.verdict.hypothesis
+    ? {
+        mostLikely: rec.verdict.hypothesis.hypothesis || null,
+        ranked: rec.verdict.hypothesis.ranked || [],
+        nextCheck: rec.verdict.hypothesis.ifThen || null,
+        confidence: rec.verdict.hypothesis.confidence || null,
+        why: rec.verdict.hypothesis.why || null,
+      }
+    : null;
+
+  const shortDescription =
+    `${rec.severity} ${rec.incidentId ? rec.incidentId + ' — ' : ''}${rec.title}`;
+
+  return {
+    incidentId: rec.incidentId || null,
+    internalId: rec.id,
+    reTriageOf: rec.reTriageOf || null,
+    shortDescription,
+    severity: iu.severity,
+    impact: iu.impact,
+    urgency: iu.urgency,
+    priority: iu.priority,
+    category: 'Network',
+    state: rec.status === 'closed' ? 'Resolved' : 'In Progress',
+    openedAt: rec.openedAt || null,
+    closedAt: rec.closedAt || null,
+    mttr: rec.mttr ? { mttrMs: rec.mttr.mttrMs, mttrHuman: rec.mttr.mttrHuman, verdictAt: rec.mttr.verdictAt } : null,
+    affectedCIs,
+    affectedFronts: {
+      degraded: c.degraded.map((e) => e.front),
+      unread: c.suspect.map((e) => e.front),
+      clean: c.clean.map((e) => e.front),
+      blindSpots: (rec.blindSpots || []).map((b) => b.front),
+    },
+    findings,
+    verdict: (rec.verdict && rec.verdict.verdict) || null,
+    hypothesis,
+    nextSteps,
+    workNotes: rec.provenance,
+  };
+}
+
+// A copy-ready text/markdown form of the ServiceNow export — the operator pastes
+// this straight into the ticket. Same real data, human-readable.
+function renderServiceNowText(rec, sn) {
+  const L = [];
+  L.push(`# ServiceNow incident — ${sn.incidentId || rec.id}`);
+  L.push('');
+  L.push(`- **Short description:** ${sn.shortDescription}`);
+  L.push(`- **Category:** ${sn.category}`);
+  L.push(`- **Severity:** ${sn.severity}   **Impact:** ${sn.impact}   **Urgency:** ${sn.urgency}   **Priority:** ${sn.priority}`);
+  L.push(`- **State:** ${sn.state}`);
+  L.push(`- **Opened:** ${sn.openedAt || '(unknown)'}`);
+  L.push(`- **Closed:** ${sn.closedAt || '(still open)'}`);
+  L.push(`- **MTTR:** ${sn.mttr ? sn.mttr.mttrHuman : 'unknown'}${sn.mttr && sn.mttr.verdictAt ? ` (verdict at ${sn.mttr.verdictAt})` : ''}`);
+  if (sn.reTriageOf) L.push(`- **Re-triage of:** ${sn.reTriageOf}`);
+  L.push('');
+  L.push('## Affected CIs');
+  if (sn.affectedCIs.length) sn.affectedCIs.forEach((c) => L.push(`- ${c.ci} (${c.class}, ${c.front})`));
+  else L.push('- None nameable from the connected estate this run (see findings).');
+  L.push('');
+  L.push('## Findings');
+  sn.findings.forEach((f) => L.push(`- **${f.front}** [${f.state}]: ${f.detail}${f.source ? ` — ${f.source}` : ''}`));
+  L.push('');
+  L.push('## Verdict / hypothesis');
+  if (sn.hypothesis) {
+    L.push(`- **Most likely:** ${sn.hypothesis.mostLikely || '(none)'}`);
+    if ((sn.hypothesis.ranked || []).length) L.push(`- **Ranked:** ${sn.hypothesis.ranked.map((r) => `${r.cause} (${r.likelihood})`).join(' · ')}`);
+    if (sn.hypothesis.nextCheck) L.push(`- **Next check:** ${sn.hypothesis.nextCheck}`);
+    L.push(`- **Confidence:** ${sn.hypothesis.confidence || 'n/a'}${sn.hypothesis.why ? ` — ${sn.hypothesis.why}` : ''}`);
+  } else {
+    L.push(`- ${sn.verdict || 'No formal verdict was recorded.'}`);
+  }
+  L.push('');
+  L.push('## Next steps');
+  if (sn.nextSteps.length) sn.nextSteps.forEach((s) => L.push(`- ${s}`));
+  else L.push('- No next-steps recorded.');
+  L.push('');
+  L.push('---');
+  L.push('*Generated from the real triage record. Every field traces to a live reading; credential values are redacted.*');
+  return L.join('\n');
 }
 
 // ── Derived views used by both docs ───────────────────────────────────────────
@@ -283,11 +425,13 @@ function renderEngineerDoc(rec) {
   L.push('');
   L.push(`*Auto-written from the real triage record + recorded wire session on ${rec.generatedAt}. Nothing below is fabricated.*`);
   L.push('');
+  if (rec.incidentId) L.push(`- **Incident ID:** ${rec.incidentId}${rec.reTriageOf ? ` (re-triage of ${rec.reTriageOf})` : ''}`);
   L.push(`- **Title:** ${rec.title}`);
   L.push(`- **Reported:** ${rec.description || '(none)'}`);
   L.push(`- **Opened:** ${rec.openedAt}`);
   L.push(`- **Closed:** ${rec.closedAt || '(still open)'}`);
   L.push(`- **Duration:** ${rec.durationHuman}`);
+  if (rec.mttr) L.push(`- **MTTR (opened→verdict):** ${rec.mttr.mttrHuman}`);
   L.push(`- **Staffed:** ${(rec.staffed || []).map((s) => `${s.agent} (${s.tier})`).join(', ') || '(none)'}`);
   L.push('');
 
@@ -388,9 +532,11 @@ function writeForTriage(triage) {
     const recPath = safeJoin(dir, 'record.json');
     const sltPath = safeJoin(dir, 'slt.md');
     const engPath = safeJoin(dir, 'engineer.md');
+    const snPath = safeJoin(dir, 'servicenow.md');
     if (recPath && safeWrite(recPath, scrub(JSON.stringify(record, null, 2)), `triage record ${triage.id}`)) files.push('record.json');
     if (sltPath && safeWrite(sltPath, scrub(renderSltDoc(record)), `triage SLT doc ${triage.id}`)) files.push('slt.md');
     if (engPath && safeWrite(engPath, scrub(renderEngineerDoc(record)), `triage engineer doc ${triage.id}`)) files.push('engineer.md');
+    if (snPath && safeWrite(snPath, scrub(record.serviceNowText || ''), `triage ServiceNow doc ${triage.id}`)) files.push('servicenow.md');
 
     return { id: triage.id, dir, files };
   } catch (e) {
@@ -402,7 +548,9 @@ function writeForTriage(triage) {
 // ── Read side (browsable history) — every path through safeJoin ───────────────
 function recordPath(id) { return safeJoin(triagesRoot(), path.join(String(id), 'record.json')); }
 function docFileFor(which) {
-  return which === 'slt' ? 'slt.md' : which === 'engineer' ? 'engineer.md' : null;
+  return which === 'slt' ? 'slt.md'
+    : which === 'engineer' ? 'engineer.md'
+    : which === 'servicenow' ? 'servicenow.md' : null;
 }
 function docPath(id, which) {
   const file = docFileFor(which);
@@ -428,6 +576,9 @@ function listRecords() {
       const rec = JSON.parse(fs.readFileSync(p, 'utf8'));
       out.push({
         id: rec.id,
+        incidentId: rec.incidentId || null,
+        reTriageOf: rec.reTriageOf || null,
+        mttr: rec.mttr || null,
         severity: rec.severity,
         title: rec.title,
         status: rec.status,
@@ -456,15 +607,30 @@ function getDoc(id, which) {
   try { return fs.readFileSync(p, 'utf8'); } catch (e) { return null; }
 }
 
+// The structured ServiceNow-ready export for one triage (issue 11). Returns the
+// object baked into the record; for a record written before this field existed it
+// rebuilds it from the same real record. Text form travels alongside so a caller
+// gets both JSON and copy-ready markdown. Null if there is no such record.
+function getServiceNow(id) {
+  const rec = getRecord(id);
+  if (!rec) return null;
+  const object = rec.serviceNow || buildServiceNow(rec);
+  const text = rec.serviceNowText || renderServiceNowText(rec, object);
+  return { object, text };
+}
+
 module.exports = {
   writeForTriage,
   listRecords,
   getRecord,
   getDoc,
+  getServiceNow,
   // exported for tests / reuse
   buildRecord,
   renderSltDoc,
   renderEngineerDoc,
+  buildServiceNow,
+  renderServiceNowText,
   scrub,
   triagesRoot,
 };
