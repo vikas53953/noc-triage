@@ -724,6 +724,55 @@ pre.cli{
 .cs-collapse>summary .cs-tag{margin-right:.15rem}
 .cs-collapse .collapse-body>.cs-cmd:first-child{border-top:none}
 
+/* ---------- markdown inside chat bubbles (B6) — mdToHtml escapes then formats ---------- */
+.msg-text>:first-child{margin-top:0}
+.msg-text>:last-child{margin-bottom:0}
+.msg-text p{margin:.3rem 0}
+.msg-text ul{margin:.3rem 0 .3rem 1.05rem;padding:0}
+.msg-text li{margin:.12rem 0}
+.msg-text h3,.msg-text h4{font-size:.86rem;font-weight:800;margin:.45rem 0 .2rem}
+.msg-text code{font-family:var(--mono);font-size:.9em;background:rgba(148,163,184,.18);padding:.03rem .3rem;border-radius:4px}
+.msg-text pre{font-family:var(--mono);font-size:.7rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:.45rem .55rem;margin:.35rem 0;overflow:auto}
+.msg-right .msg-text code{background:rgba(255,255,255,.22);color:#fff}
+.msg-right .msg-text pre{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.22);color:#fff}
+
+/* ---------- dual timestamp (B5) — keep the two zones from wrapping awkwardly ---------- */
+.msg-time,.act-time,.act-gtime,.rec-card-time,.sr-time,.appr-time{white-space:nowrap}
+
+/* ---------- Send disabled state (B8) ---------- */
+.btn:disabled{opacity:.5;cursor:default;box-shadow:none;transform:none}
+.btn-primary:disabled:hover{background:var(--accent);transform:none}
+
+/* ---------- Re-check spinner (B9) ---------- */
+.mini-btn.working{position:relative}
+.spin{display:inline-block;width:.72em;height:.72em;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-1px;margin-right:.3rem;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---------- @mention autocomplete (B7) ---------- */
+.cmdbar{position:relative}
+.mention-pop{
+  position:absolute;left:.7rem;right:.7rem;bottom:calc(100% + .3rem);z-index:130;
+  background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);
+  max-height:230px;overflow-y:auto;padding:.3rem
+}
+.mention-pop[hidden]{display:none}
+.mention-opt{
+  display:flex;align-items:center;gap:.5rem;padding:.4rem .5rem;border-radius:7px;cursor:pointer;
+  font-size:.78rem;color:var(--ink)
+}
+.mention-opt .mo-ico{width:22px;height:22px;border-radius:6px;background:var(--panel);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0}
+.mention-opt .mo-name{font-weight:700;flex-shrink:0}
+.mention-opt .mo-src{font-size:.64rem;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mention-opt.blind{opacity:.6}
+.mention-opt.blind .mo-src{font-style:italic}
+.mention-opt.active,.mention-opt:hover{background:var(--hover)}
+
+/* ---------- escalation strip: skipped tier (B12) — n/a, not a stalled pending ---------- */
+.step[data-s="skipped"]{opacity:.6}
+.step[data-s="skipped"] .step-mark{border-color:var(--line);color:var(--ink3);background:var(--card);border-style:dashed;animation:none}
+.step[data-s="skipped"] .step-txt b{color:var(--ink3)}
+.step[data-s="skipped"] .step-txt span{color:var(--ink3)}
+
 ::-webkit-scrollbar{width:7px;height:7px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
@@ -1348,20 +1397,38 @@ function setStep(k, state){
   var el = $('step-'+k); if(!el) return;
   el.setAttribute('data-s', state);
   var mark = el.querySelector('.step-mark');
-  if(mark) mark.textContent = state === 'done' ? '✓' : k;
+  if(mark) mark.textContent = state === 'done' ? '✓' : (state === 'skipped' ? '–' : k);
+  // A tier the severity plan never staffs (e.g. L3 at P3) reports 'skipped' — show
+  // it as an honest "n/a", not a pending step that looks stalled forever (B12).
+  var sub = el.querySelector('.step-txt span');
+  if(sub){
+    var m = STEP_META[k];
+    sub.textContent = state === 'skipped' ? 'n/a · not staffed at ' + (currentSeverity || 'this severity') : (m ? m.sub : '');
+  }
 }
 
-/* ---------- clock (real local time) ---------- */
-setInterval(function(){
-  $('clock').textContent = new Date().toTimeString().slice(0,8);
-},1000);
-$('clock').textContent = new Date().toTimeString().slice(0,8);
-function nowClock(){ return new Date().toTimeString().slice(0,8); }
-function tsClock(ts){
+/* ---------- clock — dual local + UTC (B5) ----------
+   The engine and every doc speak UTC; the operator's wall clock is local.
+   ONE helper labels every user-facing timestamp with BOTH, so nobody has to
+   guess which zone a bare "14:00" is in. tsClock() → "14:00 local · 19:00 UTC". */
+function pad2(n){ return n < 10 ? '0'+n : ''+n; }
+function tsParse(ts){
   var d = ts ? new Date(ts) : new Date();
   if(isNaN(d.getTime())) d = new Date();
-  return d.toTimeString().slice(0,8);
+  return d;
 }
+function fmtLocalHM(d){ return pad2(d.getHours())+':'+pad2(d.getMinutes()); }
+function fmtUTCHM(d){ return pad2(d.getUTCHours())+':'+pad2(d.getUTCMinutes()); }
+/* Class-wide label used at every timestamp sink (chat, activity, records, scope). */
+function tsClock(ts){ var d = tsParse(ts); return fmtLocalHM(d)+' local · '+fmtUTCHM(d)+' UTC'; }
+function nowClock(){ return tsClock(); }
+/* Header clock keeps ticking seconds on local, UTC to the minute — same dual label. */
+function headerClock(){
+  var d = new Date();
+  return fmtLocalHM(d)+':'+pad2(d.getSeconds())+' local · '+fmtUTCHM(d)+' UTC';
+}
+setInterval(function(){ $('clock').textContent = headerClock(); },1000);
+$('clock').textContent = headerClock();
 
 /* ---------- incident id + live MTTR clock (issue 11) ----------
    The ribbon carries the operator-facing incident id and a timer that ticks
@@ -2382,7 +2449,7 @@ function renderChat(d){
     el.className = 'msg msg-you msg-right';
     el.innerHTML =
       '<div class="msg-main">'+
-      '<div class="msg-text">'+escapeHtml(d.text)+'</div>'+
+      '<div class="msg-text">'+mdToHtml(d.text)+'</div>'+
       '<div class="msg-time">'+escapeHtml(tsClock(d.timestamp))+'</div></div>';
   } else {
     // The agent's reply stays LEFT with icon + name + tier badge + timestamp.
@@ -2395,7 +2462,7 @@ function renderChat(d){
       '<div class="msg-ico">'+escapeHtml(ico)+'</div><div class="msg-main">'+
       '<div class="msg-top"><span class="msg-who">'+escapeHtml(who)+'</span>'+tierBadge+
       '<span class="msg-time">'+escapeHtml(tsClock(d.timestamp))+'</span></div>'+
-      '<div class="msg-text">'+escapeHtml(d.text)+'</div></div>';
+      '<div class="msg-text">'+mdToHtml(d.text)+'</div></div>';
   }
   // Near-bottom-aware auto-scroll: always snap down on the user's own message;
   // for incoming replies, only follow if they were already near the bottom (so
@@ -2413,9 +2480,9 @@ function sendAgentMessage(){
   if(DEMO){
     renderChat({type:'outgoing', agent:selectedAgent, text:text, timestamp:new Date().toISOString()});
     renderChat({type:'incoming', agent:selectedAgent, text:'(Demo mode — connect the live server to get a real answer.)', timestamp:new Date().toISOString()});
-    inp.value=''; return;
+    inp.value=''; syncSendDisabled(); return;
   }
-  inp.value='';
+  inp.value=''; syncSendDisabled();
   fetch('/api/command', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ agent: selectedAgent, command: text })
@@ -2425,7 +2492,119 @@ function sendAgentMessage(){
   });
 }
 $('sendBtn').onclick = sendAgentMessage;
-$('cmdInput').addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); sendAgentMessage(); } });
+
+/* ---------- @mention: switch the "To:" chip + autocomplete (B7) ----------
+   The chip must never lie about who will answer. Typing "@Name" retargets the
+   message to that engineer (same as clicking them in the roster) and, while a
+   partial "@na…" is being typed, offers a filtered roster list to pick from.
+   The list is built from the SAME ROSTER we already have — no new source. */
+var AGENT_BY_NAME = {};
+ROSTER.forEach(function(g){ g.engs.forEach(function(e){
+  AGENT_BY_NAME[e.name.toLowerCase()] = e.id;
+}); });
+var MENTION_LIST = [];
+ROSTER.forEach(function(g){ g.engs.forEach(function(e){ MENTION_LIST.push(e); }); });
+
+var cmdInputEl = $('cmdInput');
+var sendBtnEl = $('sendBtn');
+var mentionPop = document.createElement('div');
+mentionPop.className = 'mention-pop'; mentionPop.id = 'mentionPop'; mentionPop.hidden = true;
+mentionPop.setAttribute('role','listbox');
+$('cmdInput').parentNode.appendChild(mentionPop);
+var mentionActive = -1;   // highlighted option index while the pop is open
+
+/* The @token being typed immediately before the caret, if any. */
+function currentMentionPartial(){
+  var val = cmdInputEl.value;
+  var caret = cmdInputEl.selectionStart == null ? val.length : cmdInputEl.selectionStart;
+  var upto = val.slice(0, caret);
+  var m = /@([\w-]*)$/.exec(upto);
+  return m ? { partial: m[1], start: caret - m[1].length - 1, end: caret } : null;
+}
+function hideMention(){ mentionPop.hidden = true; mentionActive = -1; }
+function renderMention(matches){
+  if(!matches.length){ hideMention(); return; }
+  mentionPop.innerHTML = matches.map(function(e, i){
+    return '<div class="mention-opt'+(e.live?'':' blind')+(i===mentionActive?' active':'')+'" '+
+      'role="option" data-mid="'+escapeHtml(e.id)+'">'+
+      '<span class="mo-ico">'+e.ico+'</span>'+
+      '<span class="mo-name">'+escapeHtml(e.name)+'</span>'+
+      '<span class="mo-src">'+escapeHtml(e.live?e.src:'not connected')+'</span></div>';
+  }).join('');
+  mentionPop.hidden = false;
+}
+function updateMentionPop(){
+  var mp = currentMentionPartial();
+  if(!mp){ hideMention(); return; }
+  var q = mp.partial.toLowerCase();
+  var matches = MENTION_LIST.filter(function(e){
+    return e.name.toLowerCase().indexOf(q) === 0 || e.id.indexOf(q) === 0;
+  });
+  if(mentionActive < 0 && matches.length) mentionActive = 0;
+  if(mentionActive >= matches.length) mentionActive = matches.length - 1;
+  renderMention(matches);
+}
+/* Insert the chosen agent's name in place of the partial @token, switch chip. */
+function chooseMention(id){
+  var e = AGENT_BY_ID[id]; if(!e) return;
+  var mp = currentMentionPartial();
+  var val = cmdInputEl.value;
+  if(mp){
+    var before = val.slice(0, mp.start), after = val.slice(mp.end);
+    var insert = '@'+e.name+' ';
+    cmdInputEl.value = before + insert + after;
+    var pos = (before + insert).length;
+    cmdInputEl.setSelectionRange(pos, pos);
+  }
+  selectAgent(id);            // retarget + move the roster highlight + chip
+  hideMention();
+  syncSendDisabled();
+  cmdInputEl.focus();
+}
+/* Any COMPLETE "@Name" already in the box retargets the chip live, so the chip
+   always matches who the server will actually route to. First exact match wins. */
+function retargetFromText(){
+  var re = /@([\w-]+)/g, m, hit = null;
+  while((m = re.exec(cmdInputEl.value))){
+    var id = AGENT_BY_NAME[m[1].toLowerCase()] || (AGENT_BY_ID[m[1].toLowerCase()] ? m[1].toLowerCase() : null);
+    if(id){ hit = id; break; }
+  }
+  if(hit && hit !== selectedAgent) selectAgent(hit);
+}
+
+/* ---------- Send button disabled on empty/whitespace (B8) ---------- */
+function syncSendDisabled(){ sendBtnEl.disabled = cmdInputEl.value.trim() === ''; }
+syncSendDisabled();
+
+cmdInputEl.addEventListener('input', function(){
+  syncSendDisabled();
+  retargetFromText();
+  updateMentionPop();
+});
+cmdInputEl.addEventListener('keydown', function(e){
+  var open = !mentionPop.hidden;
+  if(open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')){
+    e.preventDefault();
+    var opts = mentionPop.querySelectorAll('.mention-opt');
+    if(!opts.length) return;
+    mentionActive += (e.key === 'ArrowDown' ? 1 : -1);
+    if(mentionActive < 0) mentionActive = opts.length - 1;
+    if(mentionActive >= opts.length) mentionActive = 0;
+    [].forEach.call(opts, function(o,i){ o.classList.toggle('active', i === mentionActive); });
+    return;
+  }
+  if(open && (e.key === 'Enter' || e.key === 'Tab')){
+    var act = mentionPop.querySelector('.mention-opt.active') || mentionPop.querySelector('.mention-opt');
+    if(act){ e.preventDefault(); chooseMention(act.getAttribute('data-mid')); return; }
+  }
+  if(e.key === 'Escape' && open){ e.preventDefault(); hideMention(); return; }
+  if(e.key === 'Enter'){ e.preventDefault(); sendAgentMessage(); }
+});
+mentionPop.addEventListener('mousedown', function(e){
+  var opt = e.target.closest('.mention-opt'); if(!opt) return;
+  e.preventDefault(); chooseMention(opt.getAttribute('data-mid'));
+});
+cmdInputEl.addEventListener('blur', function(){ setTimeout(hideMention, 120); });
 
 /* Post operator context into the OPEN triage bridge. */
 function postBridgeMessage(){
@@ -2874,11 +3053,16 @@ function srcRowHtml(id, s){
 }
 function loadSources(){
   if(DEMO) return;
+  // Re-probing all three live sources can take seconds — show a working state on
+  // the Re-check button so it never looks unresponsive (B9).
+  var btn = $('srcRefresh');
+  if(btn){ btn.disabled = true; btn.classList.add('working'); btn.innerHTML = '<span class="spin"></span>Re-checking…'; }
+  function restoreBtn(){ if(btn){ btn.disabled = false; btn.classList.remove('working'); btn.textContent = 'Re-check'; } }
   fetch('/api/sources').then(function(r){ return r.json(); }).then(function(d){
     var host = $('srcList'); if(!host || !d || !d.sources) return;
     var order = ['catalyst-center','aci','sdwan'];
     host.innerHTML = order.map(function(id){ return d.sources[id] ? srcRowHtml(id, d.sources[id]) : ''; }).join('');
-  }).catch(function(){});
+  }).catch(function(){}).finally(restoreBtn);
 }
 $('srcRefresh').onclick = loadSources;
 $('srcList').addEventListener('click', function(e){
@@ -2903,6 +3087,33 @@ $('srcList').addEventListener('click', function(e){
     .finally(function(){ b.disabled = false; b.textContent = 'Retry'; });
 });
 
+/* ---------- boot snapshot restore (B4) ----------
+   The server's `init` message carries a snapshot the moment the socket opens.
+   CONTRACT (persistence layer):
+     init.data.chatHistory     — chat_message payloads, oldest→newest
+     init.data.activityHistory — activity_new payloads, oldest→newest
+   We replay each through the SAME renderChat / pushActivity paths the live
+   events use, so a refresh restores the exact look. Older backends omit these
+   fields → nothing is restored (empty, exactly as before — graceful). Only the
+   FIRST connect restores; reconnects skip so history is never duplicated. */
+var initRestored = false;
+function handleInit(data){
+  if(!data || initRestored) return;
+  initRestored = true;
+  var acts = data.activityHistory;
+  if(Array.isArray(acts)){
+    acts.forEach(function(ad){
+      if(!ad) return;
+      pushActivity(ad.source || ad.agent || 'Activity', ad.text || ad.message || '', tsClock(ad.ts || ad.timestamp));
+    });
+    finalizeBurst();   // seal the restored burst so live events open a fresh group
+  }
+  var chats = data.chatHistory;
+  if(Array.isArray(chats)){
+    chats.forEach(function(cd){ if(cd) renderChat(cd); });
+  }
+}
+
 /* ---------- WebSocket ---------- */
 var ws = null, wsRetry = 0;
 function setConn(state){
@@ -2922,6 +3133,9 @@ function connectWS(){
   ws.onmessage = function(ev){
     var m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
     if(!m || !m.type) return;
+    // Snapshot restore on connect — bring back the direct chat + Live Activity so
+    // a page refresh no longer wipes the conversation (B4).
+    if(m.type === 'init'){ handleInit(m.data); return; }
     if(m.type === 'session_record' && m.data){
       if(ingestRecord(m.data) && $('sessDrawer').classList.contains('on') && recMatches(m.data)){
         var body = $('sessBody');
