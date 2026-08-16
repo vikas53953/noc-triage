@@ -95,7 +95,7 @@ button{font-family:inherit}
 
 /* ---------- layout ---------- */
 .shell{
-  display:grid; grid-template-columns:250px minmax(0,1fr) 330px;
+  display:grid; grid-template-columns:250px minmax(0,1fr) 360px;
   gap:.8rem; padding:.8rem; height:calc(100vh - 56px);
   transition:grid-template-columns .25s ease;
 }
@@ -371,7 +371,8 @@ pre.cli{
 .act{padding:.55rem .75rem;border-bottom:1px solid var(--line-soft);font-size:.75rem;animation:slidein .3s ease}
 @keyframes slidein{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:none}}
 .act-top{display:flex;justify-content:space-between;gap:.5rem;margin-bottom:.15rem}
-.act-who{font-weight:700;color:var(--accent);font-size:.73rem}
+.act-who{font-weight:700;color:var(--accent);font-size:.73rem;white-space:nowrap;flex-shrink:0}
+.act-gsum .act-who{max-width:46%;overflow:hidden;text-overflow:ellipsis}
 .act-time{font-family:var(--mono);font-size:.62rem;color:var(--ink3)}
 .act-msg{color:var(--ink2);line-height:1.45;font-size:.72rem;word-break:break-word}
 .shell.activity-collapsed .act-body,
@@ -704,7 +705,7 @@ pre.cli{
   background:var(--panel);border:1px solid var(--line);border-radius:3px 12px 12px 12px;
   padding:.5rem .72rem;width:fit-content;max-width:min(100%,62ch)
 }
-.msg-main>.cmd-share,.msg-main>.mgr-card,.msg-main>.collapse{width:100%;max-width:min(100%,62ch)}
+.msg-main>.cmd-share,.msg-main>.mgr-card,.msg-main>.collapse,.msg-main>.hypo,.msg-main>.delta-panel{width:100%;max-width:min(100%,62ch)}
 /* human-side (you / operator / reporter) → right bubble. The row itself pushes
    its content to the right edge, and the main column shrinks to its content
    (never flex:1) and caps at ~65% so the bubble genuinely hugs the right. */
@@ -727,6 +728,199 @@ pre.cli{
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
 ::-webkit-scrollbar-thumb:hover{background:var(--ink3)}
+
+/* ============================================================
+   WAVE-4 — triage intelligence surfaces. Same Evidence Split
+   Console language (tokens, radii, mono numerals); every string
+   below is escaped by the caller. Nothing here invents data.
+   ============================================================ */
+
+/* ---------- incident ribbon (incident id · live MTTR · actions) ---------- */
+.inc-ribbon{
+  display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;
+  padding:.5rem .75rem;border-bottom:1px solid var(--line);background:var(--panel);flex-shrink:0
+}
+.inc-id{
+  font-family:var(--mono);font-size:.78rem;font-weight:800;letter-spacing:.02em;color:var(--ink);
+  background:var(--card);border:1px solid var(--line);border-radius:7px;padding:.24rem .55rem
+}
+.inc-retag{
+  font-size:.58rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--purple);
+  background:rgba(139,92,246,.14);border:1px solid rgba(139,92,246,.4);border-radius:5px;padding:.16rem .4rem
+}
+.mttr{display:flex;align-items:center;gap:.4rem;font-size:.72rem;color:var(--ink2)}
+.mttr .mttr-lbl{font-size:.58rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3)}
+.mttr .mttr-val{
+  font-family:var(--mono);font-size:.82rem;font-weight:800;font-variant-numeric:tabular-nums;color:var(--info)
+}
+.mttr.running .mttr-val{color:var(--warn)}
+.mttr .mttr-dot{width:7px;height:7px;border-radius:50%;background:var(--warn);animation:pulse 1.6s infinite}
+.mttr.settled .mttr-dot{background:var(--ok);animation:none}
+.inc-actions{margin-left:auto;display:flex;gap:.4rem;flex-shrink:0}
+.inc-actions .mini-btn{font-size:.68rem;padding:.34rem .6rem}
+.inc-actions .mini-btn.rerun{border-color:rgba(139,92,246,.5);color:var(--purple)}
+.inc-actions .mini-btn.rerun:hover{background:rgba(139,92,246,.1)}
+.inc-actions .mini-btn:disabled{opacity:.55;cursor:default}
+
+/* ---------- symptom scope bar (why faults are counted / excluded) ---------- */
+.scope-bar{
+  margin:.6rem .7rem 0;border:1px solid var(--line);border-radius:10px;background:var(--card);
+  padding:.5rem .65rem;font-size:.7rem;line-height:1.5
+}
+.scope-bar .scope-title{
+  font-size:.58rem;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--ink3);
+  display:flex;align-items:center;gap:.35rem;margin-bottom:.35rem
+}
+.scope-chips{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center}
+.scope-chip{
+  font-size:.64rem;font-weight:700;padding:.16rem .45rem;border-radius:6px;
+  border:1px solid var(--line);color:var(--ink2);background:var(--panel)
+}
+.scope-chip b{color:var(--ink);font-weight:800}
+.scope-chip.win{border-color:rgba(56,189,248,.45);color:var(--info)}
+.scope-chip.scope{border-color:rgba(59,130,246,.45);color:var(--accent)}
+.scope-chip.cadence{border-color:rgba(139,92,246,.4);color:var(--purple)}
+.scope-note{margin-top:.35rem;color:var(--ink3);font-size:.66rem}
+
+/* ---------- evidence card: delta · alarm groups · fault age ---------- */
+.ev-delta{
+  display:flex;align-items:baseline;gap:.4rem;flex-wrap:wrap;margin:.1rem 0 .35rem;font-size:.72rem
+}
+.ev-delta .cur{font-family:var(--mono);font-weight:800;font-size:.9rem;color:var(--ink)}
+.ev-delta .base{color:var(--ink3);font-size:.66rem}
+.ev-delta .chg{
+  font-family:var(--mono);font-weight:800;font-size:.66rem;padding:.06rem .34rem;border-radius:5px;
+  border:1px solid var(--line);color:var(--ink2)
+}
+.ev-delta .chg.up{color:var(--bad);border-color:rgba(239,68,68,.45);background:var(--bad-bg)}
+.ev-delta .chg.down{color:var(--ok);border-color:rgba(16,185,129,.45);background:var(--ok-bg)}
+.ev-delta .chg.flat{color:var(--ink3)}
+.ev-delta .chg.first{color:var(--info);border-color:rgba(56,189,248,.4);background:var(--info-bg)}
+.ev-groups{margin:.3rem 0 .1rem;display:flex;flex-direction:column;gap:.2rem}
+.ev-groups .grp-lbl{font-size:.56rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--ink3);margin-bottom:.05rem}
+.ev-grp{
+  display:flex;align-items:center;gap:.4rem;font-size:.68rem;padding:.14rem .1rem;border-bottom:1px dotted var(--line-soft)
+}
+.ev-grp:last-child{border-bottom:none}
+.ev-grp .g-key{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.ev-grp .g-count{font-family:var(--mono);font-weight:800;color:var(--ink)}
+.ev-grp .g-tag{font-size:.52rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;padding:.05rem .3rem;border-radius:4px}
+.ev-grp .g-tag.chronic{color:var(--ink3);background:rgba(148,163,184,.16)}
+.ev-grp .g-tag.new{color:var(--bad);background:var(--bad-bg);border:1px solid rgba(239,68,68,.4)}
+.ev-age{
+  font-size:.64rem;color:var(--ink3);margin-top:.25rem;display:flex;gap:.5rem;flex-wrap:wrap
+}
+.ev-age b{font-family:var(--mono);color:var(--ink2);font-weight:800}
+.ev-age .in b{color:var(--bad)}
+
+/* ---------- blind spot ranked/weighted (high-risk highlighted) ---------- */
+.ev[data-risk="high"]{
+  border-style:solid;opacity:1;
+  border-color:rgba(245,158,11,.6);box-shadow:inset 3px 0 0 var(--warn);background:var(--warn-bg)
+}
+.ev[data-risk="high"] .ev-pill{background:var(--warn-bg);color:var(--warn)}
+.ev-risk{
+  font-size:.55rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+  padding:.1rem .36rem;border-radius:4px;flex-shrink:0
+}
+.ev-risk.high{color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn)}
+.ev-why{font-size:.66rem;color:var(--ink2);margin-top:.35rem;line-height:1.45}
+.ev[data-risk="high"] .ev-why{color:var(--ink)}
+
+/* ---------- committed hypothesis card (the verdict, re-imagined) ---------- */
+.hypo{
+  margin-top:.45rem;border:1px solid rgba(139,92,246,.4);border-radius:12px;overflow:hidden;
+  background:linear-gradient(135deg,rgba(139,92,246,.08),transparent 70%),var(--card)
+}
+.hypo-head{
+  padding:.5rem .7rem;border-bottom:1px solid rgba(139,92,246,.22);display:flex;align-items:center;gap:.45rem;flex-wrap:wrap
+}
+.hypo-head .h-lbl{font-size:.58rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--purple)}
+.hypo-conf{
+  margin-left:auto;font-size:.56rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
+  padding:.12rem .42rem;border-radius:5px;border:1px solid var(--line);flex-shrink:0
+}
+.hypo-conf.high{color:var(--ok);background:var(--ok-bg);border-color:rgba(16,185,129,.5)}
+.hypo-conf.medium{color:var(--warn);background:var(--warn-bg);border-color:rgba(245,158,11,.5)}
+.hypo-conf.low{color:var(--ink3);background:rgba(148,163,184,.14)}
+.hypo-most{padding:.5rem .7rem;font-size:.82rem;line-height:1.5;color:var(--ink);font-weight:600}
+.hypo-most .m-tag{font-size:.55rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--purple);display:block;margin-bottom:.15rem}
+.hypo-row{padding:.42rem .7rem;border-top:1px solid rgba(139,92,246,.15);font-size:.74rem;line-height:1.5;color:var(--ink2)}
+.hypo-row .r-lbl{font-size:.55rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);display:block;margin-bottom:.15rem}
+.hypo-row.next{color:var(--ink);background:rgba(59,130,246,.06)}
+.hypo-row.next .r-lbl{color:var(--accent)}
+.hypo-ranked{list-style:none;margin:.1rem 0 0;padding:0;counter-reset:hyp}
+.hypo-ranked li{
+  display:flex;align-items:baseline;gap:.45rem;padding:.16rem 0;font-size:.72rem;color:var(--ink)
+}
+.hypo-ranked li::before{
+  counter-increment:hyp;content:counter(hyp);font-family:var(--mono);font-size:.6rem;font-weight:800;
+  color:var(--purple);background:rgba(139,92,246,.14);border-radius:4px;width:15px;height:15px;
+  display:inline-flex;align-items:center;justify-content:center;flex-shrink:0
+}
+.hypo-ranked .hr-like{margin-left:auto;font-size:.58rem;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--ink3);flex-shrink:0}
+.hypo-why{padding:.42rem .7rem;border-top:1px solid rgba(139,92,246,.15);font-size:.7rem;line-height:1.5;color:var(--ink3)}
+.hypo-cfg{
+  padding:.42rem .7rem;border-top:1px solid rgba(139,92,246,.15);font-size:.7rem;line-height:1.5
+}
+.hypo-cfg .r-lbl{font-size:.55rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);display:block;margin-bottom:.15rem}
+.hypo-cfg .cfg-in{color:var(--warn);font-weight:700}
+.hypo-cfg .cfg-clean{color:var(--ok)}
+
+/* ---------- re-triage delta panel (hard numbers foregrounded) ---------- */
+.delta-panel{
+  margin-top:.45rem;border:1px solid var(--accent);border-radius:12px;overflow:hidden;background:var(--card);width:100%
+}
+.delta-head{
+  padding:.5rem .7rem;background:linear-gradient(135deg,rgba(59,130,246,.14),transparent);
+  border-bottom:1px solid var(--line);display:flex;align-items:center;gap:.45rem;flex-wrap:wrap
+}
+.delta-head .d-lbl{font-size:.6rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.delta-head .d-mat{
+  margin-left:auto;font-size:.55rem;font-weight:800;text-transform:uppercase;letter-spacing:.05em;
+  padding:.12rem .42rem;border-radius:5px;flex-shrink:0
+}
+.delta-head .d-mat.changed{color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn)}
+.delta-head .d-mat.same{color:var(--ok);background:var(--ok-bg);border:1px solid rgba(16,185,129,.5)}
+.delta-nums{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:.5rem;padding:.6rem .7rem}
+.dnum{border:1px solid var(--line);border-radius:9px;padding:.45rem .55rem;background:var(--panel)}
+.dnum .dn-lbl{font-size:.55rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--ink3);margin-bottom:.2rem}
+.dnum .dn-val{font-family:var(--mono);font-size:.9rem;font-weight:800;color:var(--ink);display:flex;align-items:baseline;gap:.3rem;flex-wrap:wrap}
+.dnum .dn-chg{font-size:.62rem;font-weight:800}
+.dnum .dn-chg.up{color:var(--bad)}
+.dnum .dn-chg.down{color:var(--ok)}
+.dnum .dn-chg.flat{color:var(--ink3)}
+.dnum.worsened{border-color:rgba(239,68,68,.5);box-shadow:inset 3px 0 0 var(--bad)}
+.dnum.improved{border-color:rgba(16,185,129,.5);box-shadow:inset 3px 0 0 var(--ok)}
+.delta-fronts{padding:0 .7rem .3rem;display:flex;flex-direction:column;gap:.25rem}
+.dfront{display:flex;align-items:center;gap:.4rem;font-size:.7rem;padding:.14rem 0}
+.dfront .df-name{flex:1;color:var(--ink);font-weight:600;text-transform:capitalize}
+.dfront .df-move{font-family:var(--mono);font-size:.64rem;color:var(--ink3)}
+.dfront .df-dir{font-size:.54rem;font-weight:800;text-transform:uppercase;padding:.05rem .3rem;border-radius:4px}
+.dfront .df-dir.improved{color:var(--ok);background:var(--ok-bg)}
+.dfront .df-dir.worsened{color:var(--bad);background:var(--bad-bg)}
+.dfront .df-dir.unchanged{color:var(--ink3);background:rgba(148,163,184,.14)}
+.delta-hyp{
+  padding:.42rem .7rem;border-top:1px solid var(--line);font-size:.66rem;color:var(--ink3);line-height:1.5
+}
+.delta-hyp b{color:var(--ink2)}
+.delta-sum{padding:.42rem .7rem;border-top:1px solid var(--line);font-size:.7rem;color:var(--ink);line-height:1.5}
+
+/* ---------- ServiceNow export modal ---------- */
+.sn-body{padding:1rem 1.1rem;max-height:65vh;overflow-y:auto}
+.sn-field{margin-bottom:.7rem}
+.sn-field .sn-k{font-size:.58rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);margin-bottom:.2rem}
+.sn-field .sn-v{font-size:.8rem;color:var(--ink);line-height:1.5;word-break:break-word}
+.sn-field .sn-v.mono{font-family:var(--mono);font-size:.76rem}
+.sn-chips{display:flex;gap:.35rem;flex-wrap:wrap}
+.sn-chips .sn-chip{font-size:.62rem;font-weight:700;padding:.12rem .42rem;border-radius:6px;border:1px solid var(--line);color:var(--ink2);background:var(--panel)}
+.sn-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.5rem}
+.sn-list{list-style:none;margin:.1rem 0 0;padding:0}
+.sn-list li{font-size:.72rem;color:var(--ink);padding:.18rem 0;border-bottom:1px dotted var(--line-soft);line-height:1.45}
+.sn-list li:last-child{border-bottom:none}
+.sn-copyrow{padding:.7rem 1.1rem;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:.6rem;background:var(--panel)}
+.sn-copyrow .copied{font-size:.68rem;color:var(--ok);font-weight:700;opacity:0;transition:opacity .2s}
+.sn-copyrow .copied.on{opacity:1}
 
 @media (max-width:1180px){
   .shell{grid-template-columns:1fr;height:auto}
@@ -835,6 +1029,15 @@ pre.cli{
 
       <!-- triage console -->
       <div class="console" id="console">
+        <div class="inc-ribbon" id="incRibbon" hidden>
+          <span class="inc-id" id="incId">INC-—</span>
+          <span class="inc-retag" id="incRetag" hidden>re-triage</span>
+          <span class="mttr running" id="mttr"><span class="mttr-dot"></span><span class="mttr-lbl">MTTR</span><span class="mttr-val" id="mttrVal">0s</span></span>
+          <span class="inc-actions">
+            <button class="mini-btn rerun" id="rerunBtn" title="Re-run this triage and show what changed">🔁 Re-run this triage</button>
+            <button class="mini-btn" id="snBtn" title="Export a ServiceNow-ready summary">📤 Export / ServiceNow</button>
+          </span>
+        </div>
         <div class="strip" id="strip"></div>
         <div class="split">
 
@@ -857,6 +1060,7 @@ pre.cli{
               <span class="mini-title">⬤ Evidence board · network state</span>
               <span class="ev-pill" id="boardClock">live</span>
             </div>
+            <div class="scope-bar" id="scopeBar" hidden></div>
             <div class="verdict" id="verdict">
               <span class="vdot"></span>
               <div>
@@ -916,6 +1120,24 @@ pre.cli{
       <div class="right">
         <button class="btn btn-ghost" id="modalCancel">Cancel</button>
         <button class="btn btn-danger" id="startBtn">Start triage →</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ SERVICENOW EXPORT MODAL ============ -->
+<div class="overlay" id="snModal">
+  <div class="modal" style="max-width:600px">
+    <div class="modal-head">
+      <h3>📤 ServiceNow export</h3>
+      <button class="iconbtn" id="snClose">✕</button>
+    </div>
+    <div class="sn-body" id="snBody"></div>
+    <div class="sn-copyrow">
+      <span class="hint" style="margin:0">Structured from the real incident record — copy the ticket text below.</span>
+      <div style="display:flex;align-items:center;gap:.6rem">
+        <span class="copied" id="snCopied">Copied ✓</span>
+        <button class="btn btn-primary" id="snCopy" style="padding:.45rem .9rem;font-size:.8rem">Copy ticket text</button>
       </div>
     </div>
   </div>
@@ -1141,6 +1363,56 @@ function tsClock(ts){
   return d.toTimeString().slice(0,8);
 }
 
+/* ---------- incident id + live MTTR clock (issue 11) ----------
+   The ribbon carries the operator-facing incident id and a timer that ticks
+   every second while the triage is open (opened → now), then freezes at the
+   real final MTTR the backend reports when the verdict lands. Every value is
+   derived from real timestamps — never fabricated. */
+var incOpenedMs = null;     // ms of triage open, for the live tick
+var incTick = null;         // setInterval handle while running
+var currentIncidentId = null;
+function fmtDur(ms){
+  if(ms == null || !isFinite(ms) || ms < 0) return '—';
+  var s = Math.floor(ms/1000);
+  if(s < 60) return s + 's';
+  var m = Math.floor(s/60), rs = s % 60;
+  if(m < 60) return m + 'm' + (rs ? ' ' + rs + 's' : '');
+  var h = Math.floor(m/60), rm = m % 60;
+  return h + 'h' + (rm ? ' ' + rm + 'm' : '');
+}
+function stopMttrTick(){ if(incTick){ clearInterval(incTick); incTick = null; } }
+function setIncident(incidentId, openedAt, reTriageOf){
+  currentIncidentId = incidentId || null;
+  var ribbon = $('incRibbon'); if(!ribbon) return;
+  ribbon.hidden = false;
+  $('incId').textContent = incidentId || 'INC-—';
+  var retag = $('incRetag');
+  if(reTriageOf){ retag.hidden = false; retag.textContent = 're-triage'; retag.title = 're-triage of ' + reTriageOf; }
+  else retag.hidden = true;
+  // Re-run / Export need a persisted record; enable once we have an id.
+  $('rerunBtn').disabled = !incidentId && !currentTriageId;
+  $('snBtn').disabled = !incidentId && !currentTriageId;
+}
+function startMttrTick(openedAt){
+  stopMttrTick();
+  incOpenedMs = openedAt ? Date.parse(openedAt) : Date.now();
+  if(!isFinite(incOpenedMs)) incOpenedMs = Date.now();
+  var box = $('mttr'); if(box){ box.className = 'mttr running'; }
+  function tick(){ var el = $('mttrVal'); if(el) el.textContent = fmtDur(Date.now() - incOpenedMs); }
+  tick();
+  incTick = setInterval(tick, 1000);
+}
+function settleMttr(mttr){
+  stopMttrTick();
+  var box = $('mttr'), el = $('mttrVal');
+  if(box) box.className = 'mttr settled';
+  if(el){
+    if(mttr && mttr.mttrHuman && mttr.mttrHuman !== 'unknown' && mttr.mttrHuman !== 'running') el.textContent = mttr.mttrHuman;
+    else if(mttr && mttr.mttrMs != null) el.textContent = fmtDur(mttr.mttrMs);
+    else if(incOpenedMs) el.textContent = fmtDur(Date.now() - incOpenedMs);
+  }
+}
+
 /* ---------- theme toggle (persisted) ---------- */
 (function initTheme(){
   var saved = null;
@@ -1194,10 +1466,11 @@ function makeCollapsible(opts){
 var ACT_GAP = 2600;   // ms of quiet that ends a burst
 var actBurst = null;
 function actItemHTML(who, msg, time){
+  // title tooltips so a truncated label ("Con…"/"Inte…") is never lost (issue 10).
   return '<div class="act"><div class="act-top">'+
-      '<span class="act-who">'+escapeHtml(who)+'</span>'+
+      '<span class="act-who" title="'+escapeHtml(who)+'">'+escapeHtml(who)+'</span>'+
       '<span class="act-time">'+escapeHtml(time)+'</span></div>'+
-    '<div class="act-msg">'+escapeHtml(msg)+'</div></div>';
+    '<div class="act-msg" title="'+escapeHtml(msg)+'">'+escapeHtml(msg)+'</div></div>';
 }
 function primarySource(sc){
   var best = 'Activity', n = -1;
@@ -1211,8 +1484,8 @@ function updateBurstSummary(b){
   // Minimal clean summary: who + a short purpose (the latest line) + time.
   // No step count, no "show all" — just a chevron to open the full list.
   b.sum.innerHTML =
-    '<span class="act-who">'+escapeHtml(src)+'</span>'+
-    '<span class="act-gprev">'+escapeHtml(latest.msg)+'</span>';
+    '<span class="act-who" title="'+escapeHtml(src)+'">'+escapeHtml(src)+'</span>'+
+    '<span class="act-gprev" title="'+escapeHtml(latest.msg)+'">'+escapeHtml(latest.msg)+'</span>';
   b.gtime.textContent = latest.time;
 }
 function finalizeBurst(){
@@ -1379,6 +1652,8 @@ function resetConsole(){
   $('board').innerHTML = '';
   $('msgCount').textContent = '0 posts';
   $('boardClock').textContent = 'live';
+  var sb = $('scopeBar'); if(sb){ sb.hidden = true; sb.innerHTML = ''; }
+  SHARE_ROWS = {};
   buildStrip();
   var v = $('verdict'); v.className = 'verdict';
   $('verdictTitle').textContent = 'Waiting for the first sweep…';
@@ -1399,7 +1674,10 @@ $('closeTriageBtn').onclick = function(){
   $('stageTitle').textContent = '💬 Squad chat & commands';
   $('closeTriageBtn').style.display = 'none';
   setBridgeInput(false);
+  stopMttrTick();
+  var ribbon = $('incRibbon'); if(ribbon) ribbon.hidden = true;
   currentTriageId = null;
+  currentIncidentId = null;
 };
 
 /* ---------- board rendering ---------- */
@@ -1419,6 +1697,41 @@ function buildBoard(fronts){
     host.appendChild(el);
   });
 }
+/* Per-front DELTA — "252 (baseline 252, +0)". First-ever sweep is honest: no
+   delta, baseline just recorded. worsened=red (+), improved=green (−). */
+function deltaHtml(delta, count){
+  var cur = (count != null) ? count : (delta && delta.count != null ? delta.count : null);
+  if(cur == null) return '';
+  var h = '<div class="ev-delta"><span class="cur">'+escapeHtml(String(cur))+'</span>';
+  if(delta && delta.firstSweep){
+    h += '<span class="chg first">first sweep · baseline set</span>';
+  } else if(delta && delta.baseline != null){
+    var dv = Number(delta.delta);
+    var cls = dv > 0 ? 'up' : (dv < 0 ? 'down' : 'flat');
+    h += '<span class="base">baseline '+escapeHtml(String(delta.baseline))+'</span>'+
+         '<span class="chg '+cls+'">'+(dv > 0 ? '+' : '')+escapeHtml(String(dv))+'</span>';
+  }
+  return h + '</div>';
+}
+/* WAN / alarm card leads with the TOP-3 alarm GROUPS (chronic vs new). */
+function groupsHtml(groups){
+  if(!groups || !groups.top || !groups.top.length) return '';
+  var rows = groups.top.map(function(g){
+    var tag = g.chronic
+      ? '<span class="g-tag chronic">chronic</span>'
+      : '<span class="g-tag new">'+(g.newCount ? escapeHtml(String(g.newCount))+' new' : 'new')+'</span>';
+    return '<div class="ev-grp"><span class="g-key">'+escapeHtml(String(g.key||'group'))+'</span>'+
+      '<span class="g-count">'+escapeHtml(String(g.count))+'</span>'+tag+'</div>';
+  }).join('');
+  return '<div class="ev-groups"><span class="grp-lbl">Top alarm groups'+
+    (groups.total != null ? ' · '+escapeHtml(String(groups.total))+' total' : '')+'</span>'+rows+'</div>';
+}
+/* Fault age split — what is INSIDE the incident window vs pre-existing. */
+function ageHtml(age){
+  if(!age || (age.inWindow == null && age.older == null)) return '';
+  return '<div class="ev-age"><span class="in">in window <b>'+escapeHtml(String(age.inWindow != null ? age.inWindow : 0))+'</b></span>'+
+    '<span>pre-existing <b>'+escapeHtml(String(age.older != null ? age.older : 0))+'</b></span></div>';
+}
 function applyEvidence(u){
   var el = $('ev-'+u.front); if(!el) return;
   var map = mapState(u.state);
@@ -1426,11 +1739,27 @@ function applyEvidence(u){
   el.querySelector('.ev-pill').textContent = map.pill;
   var body = el.querySelector('.ev-body');
   if(u.state === 'blind'){
-    body.innerHTML = '<p class="ev-empty">'+escapeHtml(u.detail || 'No visibility — not connected.')+'</p>';
-  } else if(u.state === 'waiting' || !u.detail){
+    // Ranked/weighted blind spot — a high-risk one for THIS symptom is highlighted
+    // with its reason, not a flat gray footer.
+    var high = u.risk === 'high';
+    el.setAttribute('data-risk', high ? 'high' : (u.risk||'none'));
+    var head = el.querySelector('.ev-head');
+    var existing = head.querySelector('.ev-risk');
+    if(high && !existing){
+      var pill = document.createElement('span');
+      pill.className = 'ev-risk high'; pill.textContent = 'high risk';
+      head.insertBefore(pill, head.querySelector('.ev-pill'));
+    } else if(!high && existing){ existing.remove(); }
+    body.innerHTML = '<p class="ev-empty">'+escapeHtml(u.detail || 'No visibility — not connected.')+'</p>'+
+      (u.why ? '<div class="ev-why">'+escapeHtml(u.why)+'</div>' : '');
+  } else if(u.state === 'waiting' || (!u.detail && u.count == null && !u.groups)){
     body.innerHTML = '<p class="ev-empty">'+escapeHtml(u.detail || 'No evidence yet.')+'</p>';
   } else {
-    body.innerHTML = '<div class="ev-note">'+escapeHtml(u.detail)+'</div>';
+    body.innerHTML =
+      deltaHtml(u.delta, u.count) +
+      groupsHtml(u.groups) +
+      ageHtml(u.age) +
+      (u.detail ? '<div class="ev-note">'+escapeHtml(u.detail)+'</div>' : '');
   }
   var src = el.querySelector('.ev-src');
   if(src && u.source) src.textContent = u.source;
@@ -1542,15 +1871,63 @@ function renderOperatorMsg(m){
   $('stream').appendChild(el); scrollStream();
   $('msgCount').textContent = $('stream').querySelectorAll('.msg').length + ' posts';
 }
+/* Config-Keeper's real change finding (gap 5) — an in-window change is a
+   candidate cause; a pre-window / no change rules a cause class OUT. */
+function configFindingHtml(findings){
+  if(!findings || !findings.length) return '';
+  var changed = findings.filter(function(x){ return x && x.changed; });
+  var inWin = changed.filter(function(x){ return x.inWindow; });
+  var txt, cls;
+  if(inWin.length){
+    txt = 'Config CHANGE inside the window: '+inWin.map(function(x){ return escapeHtml(x.device||'device')+(x.when?(' at '+escapeHtml(x.when)):''); }).join('; ')+' — a strong candidate cause.';
+    cls = 'cfg-in';
+  } else if(changed.length){
+    txt = 'Config changes found but all pre-date the window ('+changed.map(function(x){ return escapeHtml(x.device||'device'); }).join(', ')+') — not the trigger.';
+    cls = 'cfg-clean';
+  } else {
+    var named = findings.filter(function(x){ return x && !x.error && x.device; }).map(function(x){ return escapeHtml(x.device); });
+    var note = findings.map(function(x){ return x && x.note; }).filter(Boolean)[0];
+    if(named.length){ txt = 'No config change on '+named.join(', ')+' in the window — that rules out a config-change cause class.'; cls = 'cfg-clean'; }
+    else { txt = escapeHtml(note || 'No config finding this pass.'); cls = ''; }
+  }
+  return '<div class="hypo-cfg"><span class="r-lbl">📋 Config-Keeper finding</span><span class="'+cls+'">'+txt+'</span></div>';
+}
+/* The verdict card, re-imagined as the committed HYPOTHESIS (gap 7): ranked
+   most-likely + the if/then next check + confidence + why — not a status line. */
+function hypoCardHtml(v){
+  var h = v.hypothesis;
+  var out = '<div class="hypo">';
+  var conf = (h && h.confidence) ? h.confidence : '';
+  out += '<div class="hypo-head"><span class="h-lbl">🧠 Committed hypothesis</span>'+
+    (conf ? '<span class="hypo-conf '+escapeHtml(conf)+'">confidence: '+escapeHtml(conf)+'</span>' : '')+'</div>';
+  out += '<div class="hypo-most"><span class="m-tag">Most likely</span>'+
+    escapeHtml((h && h.hypothesis) ? h.hypothesis : (v.verdict||'—'))+'</div>';
+  if(h && h.ranked && h.ranked.length){
+    var items = h.ranked.map(function(r){
+      return '<li>'+escapeHtml(r.cause||'')+'<span class="hr-like">'+escapeHtml(r.likelihood||'')+'</span></li>';
+    }).join('');
+    out += '<div class="hypo-row"><span class="r-lbl">Ranked causes</span><ol class="hypo-ranked">'+items+'</ol></div>';
+  }
+  if(h && h.ifThen){
+    out += '<div class="hypo-row next"><span class="r-lbl">Next check · if / then</span>'+escapeHtml(h.ifThen)+'</div>';
+  } else if(v.nextChecks && v.nextChecks.length){
+    out += '<div class="hypo-row next"><span class="r-lbl">Next checks</span><ul style="margin:.2rem 0 0 .95rem;padding:0">'+
+      v.nextChecks.map(function(c){ return '<li>'+escapeHtml(c)+'</li>'; }).join('')+'</ul></div>';
+  }
+  out += configFindingHtml(v.configFindings);
+  if(v.impact) out += '<div class="hypo-row"><span class="r-lbl">Impact</span>'+escapeHtml(v.impact)+'</div>';
+  if(h && h.why) out += '<div class="hypo-why"><b>Why: </b>'+escapeHtml(h.why)+'</div>';
+  var bs = v.blindSpots || [];
+  if(bs.length){
+    var bl = bs.map(function(b){
+      return '<li>'+(b.risk==='high'?'<b style="color:var(--warn)">HIGH · </b>':'')+escapeHtml(b.front)+' — '+escapeHtml(b.reason)+'</li>';
+    }).join('');
+    out += '<div class="hypo-row"><span class="r-lbl">Blind spots · ranked for this symptom</span><ul style="margin:.2rem 0 0 .95rem;padding:0">'+bl+'</ul></div>';
+  }
+  return out + '</div>';
+}
 function renderVerdictCard(v){
   markOnBridge('jarvis');
-  var checks = (v.nextChecks||[]).map(function(c){ return '<li>'+escapeHtml(c)+'</li>'; }).join('');
-  var blinds = (v.blindSpots||[]).map(function(b){ return escapeHtml(b.front)+' — '+escapeHtml(b.reason); }).join('<br>');
-  var rows = '';
-  rows += '<div class="mgr-row"><i>Verdict</i><span>'+escapeHtml(v.verdict)+'</span></div>';
-  if(v.impact) rows += '<div class="mgr-row"><i>Impact</i><span>'+escapeHtml(v.impact)+'</span></div>';
-  if(checks) rows += '<div class="mgr-row"><i>Next checks</i><span><ul>'+checks+'</ul></span></div>';
-  if(blinds) rows += '<div class="mgr-row blind"><i>Blind spots</i><span>'+blinds+'</span></div>';
   var el = document.createElement('div');
   el.className = 'msg';
   el.innerHTML =
@@ -1559,7 +1936,7 @@ function renderVerdictCard(v){
     '<span class="badge tier-L4">L4 / Principal Engineer</span>'+
     '<span class="badge sev-'+escapeHtml(currentSeverity)+'">'+escapeHtml(currentSeverity)+'</span>'+
     '<span class="msg-time">'+escapeHtml(tsClock(v.ts))+'</span></div>'+
-    '<div class="mgr-card">'+rows+'</div></div>';
+    hypoCardHtml(v)+'</div>';
   $('stream').appendChild(el); scrollStream();
   var posted = $('stream').querySelectorAll('.msg').length;
   $('msgCount').textContent = posted + ' posts';
@@ -1579,6 +1956,174 @@ function renderVerdictCard(v){
 }
 function scrollStream(){ var s = $('stream'); s.scrollTop = s.scrollHeight; }
 
+/* ============================================================
+   RE-TRIAGE & DIFF + ServiceNow export (issue 11 — ops lifecycle)
+   ============================================================ */
+function dnumTile(label, valHtml, mod){
+  return '<div class="dnum'+(mod?(' '+mod):'')+'"><div class="dn-lbl">'+escapeHtml(label)+'</div><div class="dn-val">'+valHtml+'</div></div>';
+}
+function signChg(n){
+  if(n == null) return '<span class="dn-chg flat">n/a</span>';
+  var cls = n > 0 ? 'up' : (n < 0 ? 'down' : 'flat');
+  return '<span class="dn-chg '+cls+'">'+(n>0?'+':'')+escapeHtml(String(n))+'</span>';
+}
+/* Foreground the HARD-NUMBER deltas (fronts/faults/alarms/config). The
+   hypothesis reword is SECONDARY — the backend flags hypothesisChanged even on a
+   pure LLM rewording, so it is shown small, never as the headline. */
+function renderRetriageDelta(delta){
+  if(!delta) return;
+  var host = $('stream'); if(!host) return;
+  var fronts = delta.fronts || [];
+  var moved = fronts.filter(function(f){ return f.direction !== 'unchanged'; });
+  var faultsAvail = delta.faults && delta.faults.available;
+  var newF = faultsAvail ? delta.faults.new.length : null;
+  var clrF = faultsAvail ? delta.faults.cleared.length : null;
+  var cfg = (delta.configChanges||[]).length;
+
+  var tiles = '';
+  tiles += dnumTile('Fronts changed', escapeHtml(String(moved.length))+' / '+escapeHtml(String(fronts.length)), moved.length?'worsened':'');
+  tiles += dnumTile('New faults', faultsAvail ? signChg(newF) : '<span class="dn-chg flat">n/a</span>', (newF>0?'worsened':''));
+  tiles += dnumTile('Cleared faults', faultsAvail ? signChg(clrF!=null?-clrF:null) : '<span class="dn-chg flat">n/a</span>', (clrF>0?'improved':''));
+  tiles += dnumTile('WAN alarms', signChg(delta.wanAlarmDelta), (delta.wanAlarmDelta>0?'worsened':(delta.wanAlarmDelta<0?'improved':'')));
+  tiles += dnumTile('Config changes', escapeHtml(String(cfg)), (cfg?'worsened':''));
+
+  var frontRows = fronts.map(function(f){
+    var cd = (f.countDelta != null) ? (' · '+(f.countDelta>=0?'+':'')+f.countDelta) : '';
+    return '<div class="dfront"><span class="df-name">'+escapeHtml(f.front)+'</span>'+
+      '<span class="df-move">'+escapeHtml(f.before)+' → '+escapeHtml(f.after)+escapeHtml(cd)+'</span>'+
+      '<span class="df-dir '+escapeHtml(f.direction)+'">'+escapeHtml(f.direction)+'</span></div>';
+  }).join('');
+
+  var faultLine = '';
+  if(faultsAvail){
+    if(newF || clrF){
+      faultLine = '<div class="delta-sum">'+
+        (newF ? 'New faults: '+escapeHtml(delta.faults.new.join(', ')) : '')+
+        (newF && clrF ? ' · ' : '')+
+        (clrF ? 'Cleared: '+escapeHtml(delta.faults.cleared.join(', ')) : '')+'</div>';
+    }
+  } else if(delta.faults && delta.faults.note){
+    faultLine = '<div class="delta-hyp">'+escapeHtml(delta.faults.note)+'</div>';
+  }
+
+  // Hypothesis reword — secondary, small, honestly labelled.
+  var hypLine = '';
+  if(delta.hypothesisChanged){
+    hypLine = '<div class="delta-hyp"><b>Hypothesis wording moved</b> (secondary — the numbers above are the real change; the LLM may reword even when nothing moved). Now: '+escapeHtml(delta.newHypothesis||'—')+'</div>';
+  } else if(delta.newHypothesis){
+    hypLine = '<div class="delta-hyp"><b>Hypothesis held:</b> '+escapeHtml(delta.newHypothesis)+'</div>';
+  }
+
+  var panel =
+    '<div class="delta-panel">'+
+      '<div class="delta-head"><span class="d-lbl">🔁 What changed since the last verdict</span>'+
+        '<span class="d-mat '+(delta.material?'changed':'same')+'">'+(delta.material?'material change':'no material change')+'</span></div>'+
+      '<div class="delta-nums">'+tiles+'</div>'+
+      '<div class="delta-fronts">'+frontRows+'</div>'+
+      faultLine +
+      '<div class="delta-sum">'+escapeHtml(delta.summary||'')+'</div>'+
+      hypLine +
+    '</div>';
+
+  var el = document.createElement('div');
+  el.className = 'msg';
+  el.innerHTML =
+    '<div class="msg-ico">🔁</div><div class="msg-main">'+
+    '<div class="msg-top"><span class="msg-who">Re-triage diff</span>'+
+    '<span class="badge tier-L4">'+escapeHtml(delta.incidentId||'')+'</span>'+
+    '<span class="msg-time">'+escapeHtml(nowClock())+'</span></div>'+panel+'</div>';
+  host.appendChild(el);
+  scrollStream();
+  $('msgCount').textContent = $('stream').querySelectorAll('.msg').length + ' posts';
+}
+function handleRetriageDelta(d){ renderRetriageDelta(d); }
+
+/* Re-run this triage — POST /api/triage/:id/retriage. The re-run reopens the
+   console via its own triage_opened; the delta lands via triage_retriage_delta
+   (and this fetch response as a backup). */
+$('rerunBtn').onclick = function(){
+  var id = currentTriageId; if(!id || DEMO) return;
+  var btn = this; btn.disabled = true; btn.textContent = '…re-running';
+  pushActivity('Re-triage', 'requested re-run of ' + (currentIncidentId||id), nowClock());
+  fetch('/api/triage/'+encodeURIComponent(id)+'/retriage', { method:'POST' })
+    .then(function(r){ return r.json().then(function(b){ return {ok:r.ok, body:b}; }); })
+    .then(function(res){
+      if(!res.ok){ pushActivity('Re-triage', (res.body&&res.body.error)||'re-run refused', nowClock()); return; }
+      // The WS triage_retriage_delta already painted the panel; render from the
+      // response only if it somehow didn't arrive (idempotent enough for a backup).
+      if(res.body && res.body.delta && !document.querySelector('.delta-panel')) renderRetriageDelta(res.body.delta);
+    })
+    .catch(function(err){ pushActivity('Re-triage', 're-run failed — ' + err.message, nowClock()); })
+    .finally(function(){ btn.disabled = false; btn.textContent = '🔁 Re-run this triage'; });
+};
+
+/* Export / ServiceNow — GET /api/triage/:id/servicenow → structured summary. */
+var snTextCache = '';
+function snField(k, vHtml, mono){ return '<div class="sn-field"><div class="sn-k">'+escapeHtml(k)+'</div><div class="sn-v'+(mono?' mono':'')+'">'+vHtml+'</div></div>'; }
+function renderServiceNow(sn, text){
+  snTextCache = text || '';
+  var body = $('snBody'); if(!body) return;
+  var af = sn.affectedFronts || {};
+  var chips = function(arr, extra){ return (arr&&arr.length) ? arr.map(function(x){ return '<span class="sn-chip'+(extra?(' '+extra):'')+'">'+escapeHtml(x)+'</span>'; }).join('') : '<span class="sn-chip">none</span>'; };
+  var cis = (sn.affectedCIs||[]).map(function(c){ return '<li>'+escapeHtml(c.ci)+' <span style="color:var(--ink3)">('+escapeHtml(c.class||'')+' · '+escapeHtml(c.front||'')+')</span></li>'; }).join('');
+  var findings = (sn.findings||[]).map(function(f){ return '<li><b>'+escapeHtml(f.front)+'</b> — '+escapeHtml(f.state)+': '+escapeHtml(f.detail||'')+'</li>'; }).join('');
+  var steps = (sn.nextSteps||[]).map(function(s){ return '<li>'+escapeHtml(s)+'</li>'; }).join('');
+  var h = sn.hypothesis;
+  var html = '';
+  html += snField('Incident', escapeHtml(sn.incidentId||'—'), true);
+  html += snField('Short description', escapeHtml(sn.shortDescription||''));
+  html += '<div class="sn-grid">'+
+    snField('Priority', escapeHtml(sn.priority||'—'))+
+    snField('Impact', escapeHtml(sn.impact||'—'))+
+    snField('Urgency', escapeHtml(sn.urgency||'—'))+
+    snField('State', escapeHtml(sn.state||'—'))+
+    snField('Category', escapeHtml(sn.category||'—'))+
+    snField('MTTR', escapeHtml((sn.mttr && sn.mttr.mttrHuman) || '—'))+
+  '</div>';
+  html += snField('Affected CIs', cis ? '<ul class="sn-list">'+cis+'</ul>' : 'none recorded');
+  html += snField('Affected fronts', '<div class="sn-chips">'+
+    '<span class="sn-chip">degraded: </span>'+chips(af.degraded)+
+    '<span class="sn-chip">unread: </span>'+chips(af.unread)+
+    '<span class="sn-chip">clean: </span>'+chips(af.clean)+
+    '<span class="sn-chip">blind: </span>'+chips(af.blindSpots)+'</div>');
+  if(findings) html += snField('Findings', '<ul class="sn-list">'+findings+'</ul>');
+  if(h){
+    var hy = '<b>Most likely:</b> '+escapeHtml(h.mostLikely||'—')+'<br><b>Next check:</b> '+escapeHtml(h.nextCheck||'—')+
+      '<br><b>Confidence:</b> '+escapeHtml(h.confidence||'—')+(h.why?(' — '+escapeHtml(h.why)):'');
+    html += snField('Hypothesis', hy);
+  } else if(sn.verdict){
+    html += snField('Verdict', escapeHtml(sn.verdict));
+  }
+  if(steps) html += snField('Next steps', '<ul class="sn-list">'+steps+'</ul>');
+  body.innerHTML = html;
+}
+$('snBtn').onclick = function(){
+  var id = currentTriageId; if(!id || DEMO) return;
+  var body = $('snBody'); if(body) body.innerHTML = '<p class="sess-empty">Loading ServiceNow export…</p>';
+  $('snCopied').classList.remove('on');
+  $('snModal').classList.add('on');
+  fetch('/api/triage/'+encodeURIComponent(id)+'/servicenow')
+    .then(function(r){ if(!r.ok) throw new Error('no record'); return r.json(); })
+    .then(function(d){ renderServiceNow(d.serviceNow||{}, d.text||''); })
+    .catch(function(){ if(body) body.innerHTML = '<p class="sess-empty">No persisted record to export yet — let the triage reach its verdict first.</p>'; });
+};
+$('snClose').onclick = function(){ $('snModal').classList.remove('on'); };
+$('snModal').onclick = function(e){ if(e.target === this) this.classList.remove('on'); };
+$('snCopy').onclick = function(){
+  var text = snTextCache || '';
+  function done(){ var c = $('snCopied'); c.classList.add('on'); setTimeout(function(){ c.classList.remove('on'); }, 1800); }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(function(){ fallbackCopy(text); done(); });
+  } else { fallbackCopy(text); done(); }
+};
+function fallbackCopy(text){
+  try{
+    var ta = document.createElement('textarea'); ta.value = text;
+    ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta);
+    ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+  }catch(e){}
+}
+
 /* ---------- in-chat command "screen share" (command_share) ----------
    During a Jarvis delegation / triage turn each engaged agent shares the exact
    check it runs IN THE CHAT: purpose · exact command · raw output · reasoning ·
@@ -1586,6 +2131,27 @@ function scrollStream(){ var s = $('stream'); s.scrollTop = s.scrollHeight; }
    Renders into whichever surface the conversation is on (bridge stream while a
    triage console is open, else the direct chat stream). Everything escaped;
    long raw output is collapsed to keep the chat readable. */
+/* Track the last-rendered command_share per (surface + agent + command) so a
+   RETRY of the same check (issue 8) collapses into the SAME row with an attempt
+   counter ("×N") instead of stacking an identical duplicate. Reset per triage. */
+var SHARE_ROWS = {};
+function buildShareCollapse(d){
+  var rawEsc = escapeHtml(String(d.raw == null ? '' : d.raw) || '(no output)');
+  var detail =
+    '<div class="cs-cmd"><span class="cs-lbl">Command</span>$ '+escapeHtml(d.command||'(no command)')+'</div>'+
+    (d.reasoning?'<div class="cs-why"><span class="cs-lbl">Reasoning</span>'+escapeHtml(d.reasoning)+'</div>':'')+
+    '<div class="cs-outwrap"><span class="cs-lbl">Output</span><pre class="cs-raw">'+rawEsc+'</pre></div>'+
+    (d.conclusion?'<div class="cs-conc"><span class="cs-lbl">Conclusion</span>'+escapeHtml(d.conclusion)+'</div>':'');
+  // Purpose without the backend's inline "×N" — the count badge carries that.
+  var purpose = String(d.purpose||'live check').replace(/\s*×\d+\s*$/,'');
+  var attempts = Number(d.attempts||1);
+  return makeCollapsible({
+    className: 'cs-collapse cmd-share',
+    summaryHTML: '<span class="cs-tag">check</span>'+escapeHtml(purpose),
+    count: attempts > 1 ? ('×'+attempts) : null,
+    detailHTML: detail
+  });
+}
 function renderCommandShare(d){
   if(!d) return;
   var inTriage = $('console').classList.contains('on');
@@ -1599,25 +2165,26 @@ function renderCommandShare(d){
   var tier = d.tier || '';
   var tierBadge = tier ? '<span class="badge '+tierClass(tier)+'">'+escapeHtml(tier)+'</span>' : '';
 
-  var raw = String(d.raw == null ? '' : d.raw);
-  var rawEsc = escapeHtml(raw || '(no output)');
-  // Output is always scroll-contained (the .cs-raw box caps its height and
-  // scrolls) — no nested "click to expand" word toggle, just the real bytes.
-  var rawBlock = '<pre class="cs-raw">'+rawEsc+'</pre>';
-
-  // The engineer view, deduped: Command → Reasoning → Output → Conclusion, one
-  // clean block per real check. Collapsed behind a chevron only (no word label);
-  // the summary shows the agent's short purpose.
-  var detail =
-    '<div class="cs-cmd"><span class="cs-lbl">Command</span>$ '+escapeHtml(d.command||'(no command)')+'</div>'+
-    (d.reasoning?'<div class="cs-why"><span class="cs-lbl">Reasoning</span>'+escapeHtml(d.reasoning)+'</div>':'')+
-    '<div class="cs-outwrap"><span class="cs-lbl">Output</span>'+rawBlock+'</div>'+
-    (d.conclusion?'<div class="cs-conc"><span class="cs-lbl">Conclusion</span>'+escapeHtml(d.conclusion)+'</div>':'');
-  var coll = makeCollapsible({
-    className: 'cs-collapse cmd-share',
-    summaryHTML: '<span class="cs-tag">check</span>'+escapeHtml(d.purpose||'live check'),
-    detailHTML: detail
-  });
+  // Collapse a repeat of the SAME check (same front / command) into the existing
+  // row with an attempt counter (issue 8) — even when a later tier's engineer runs
+  // it, so one front never stacks 2-3 near-identical rows. Keyed on the command
+  // (stable per front + source), not the agent.
+  var key = (inTriage?'t':'c')+'|'+(d.command||d.purpose||'');
+  var prev = SHARE_ROWS[key];
+  if(prev && prev.el && prev.el.parentNode === host){
+    var main = prev.el.querySelector('.msg-main');
+    var oldColl = main.querySelector('.cs-collapse');
+    var wasOpen = oldColl && oldColl.open;
+    var fresh = buildShareCollapse(d);
+    if(wasOpen) fresh.open = true;
+    if(oldColl) main.replaceChild(fresh, oldColl); else main.appendChild(fresh);
+    // Reflect the latest engineer + time on the collapsed row.
+    var whoEl = prev.el.querySelector('.msg-who'); if(whoEl) whoEl.textContent = who;
+    var icoEl = prev.el.querySelector('.msg-ico'); if(icoEl) icoEl.textContent = ico;
+    var tEl = prev.el.querySelector('.msg-time'); if(tEl) tEl.textContent = tsClock(d.ts);
+    host.scrollTop = host.scrollHeight;
+    return;
+  }
 
   var el = document.createElement('div');
   el.className = 'msg';
@@ -1625,8 +2192,9 @@ function renderCommandShare(d){
     '<div class="msg-ico">'+escapeHtml(ico)+'</div><div class="msg-main">'+
     '<div class="msg-top"><span class="msg-who">'+escapeHtml(who)+'</span>'+tierBadge+
     '<span class="msg-time">'+escapeHtml(tsClock(d.ts))+'</span></div></div>';
-  el.querySelector('.msg-main').appendChild(coll);
+  el.querySelector('.msg-main').appendChild(buildShareCollapse(d));
   host.appendChild(el);
+  SHARE_ROWS[key] = { el: el };
   host.scrollTop = host.scrollHeight;
   if(inTriage) $('msgCount').textContent = $('stream').querySelectorAll('.msg').length + ' posts';
 }
@@ -1649,13 +2217,43 @@ function handleOpened(d){
   resetConsole();
   openConsole();
   $('stageTitle').textContent = '🚨 Triage · ' + currentSeverity + ' · live';
+  setIncident(d.incidentId, d.openedAt, d.reTriageOf);
+  startMttrTick(d.openedAt);
   buildBoard(d.fronts);
   // Mark staffed engineers as on-bridge; blind ones stay off.
   (d.staffed||[]).forEach(function(s){ markOnBridge(s.agent); });
   addReporterMsg(d.description, currentSeverity, d.openedAt);
   setBridgeInput(true);
-  pushActivity('NOC Triage', 'opened ' + currentSeverity + ' triage — "' + (d.title||'') + '"', tsClock(d.openedAt));
+  pushActivity('NOC Triage', 'opened ' + currentSeverity + ' triage ' + (d.incidentId||'') + ' — "' + (d.title||'') + '"', tsClock(d.openedAt));
 }
+/* Symptom parse — the real window + scope the reads were filtered by, so the
+   operator sees WHY faults were counted or excluded. All fields are real. */
+function renderScopeBar(sym){
+  var bar = $('scopeBar'); if(!bar || !sym) return;
+  bar.hidden = false;
+  var chips = '';
+  if(sym.timeAnchor){
+    chips += '<span class="scope-chip win">🕑 Window: <b>since '+escapeHtml(tsClock(sym.timeAnchor))+'</b></span>';
+  } else {
+    chips += '<span class="scope-chip win">🕑 Window: <b>recent (no explicit time given)</b></span>';
+  }
+  if(sym.scope && sym.scope.length){
+    chips += '<span class="scope-chip scope">🎯 In scope: <b>'+escapeHtml(sym.scope.join(', '))+'</b></span>';
+  } else {
+    chips += '<span class="scope-chip scope">🎯 Scope: <b>all fronts (none named)</b></span>';
+  }
+  if(sym.cadence) chips += '<span class="scope-chip cadence">⚙ '+escapeHtml(sym.cadence)+'</span>';
+  var note = sym.timeAnchor
+    ? 'Faults and alarms raised before this window are shown as pre-existing — not blamed for this incident.'
+    : 'No time anchor parsed from the complaint, so recent state is used as-is.';
+  if(sym.note && sym.source && sym.source !== 'none') note = escapeHtml(sym.note);
+  else note = escapeHtml(note);
+  bar.innerHTML =
+    '<div class="scope-title">🔎 Parsed symptom — what the squad filtered by</div>'+
+    '<div class="scope-chips">'+chips+'</div>'+
+    '<div class="scope-note">'+note+'</div>';
+}
+function handleSymptom(d){ renderScopeBar(d); }
 function handleProgress(d){
   setStep(d.tier, d.status);
   if(d.status === 'active') showTyping(STEP_META[d.tier] ? STEP_META[d.tier].sub : d.tier);
@@ -1676,6 +2274,7 @@ function handleClosed(d){
   hideTyping();
   $('stageTitle').textContent = '✅ Triage · ' + currentSeverity + ' · verdict in';
   $('boardClock').textContent = 'settled';
+  settleMttr(d && d.mttr);
   // The bridge is over: every engineer returns to idle in the roster the moment
   // the triage closes (no-one is left "on bridge"), and the operator post box is
   // shut. The backend idles the real agent status in parallel (per-triage).
@@ -1690,10 +2289,12 @@ function dispatchTriageEvent(type, d){
   if(type === 'triage_opened'){ handleOpened(d); return; }
   if(currentTriageId && d.triageId && d.triageId !== currentTriageId) return;
   switch(type){
+    case 'triage_symptom':  handleSymptom(d);  break;
     case 'triage_progress': handleProgress(d); break;
     case 'triage_message':  handleMessage(d);  break;
     case 'triage_evidence': handleEvidence(d); break;
     case 'triage_verdict':  handleVerdict(d);  break;
+    case 'triage_retriage_delta': handleRetriageDelta(d); break;
     case 'triage_closed':   handleClosed(d);   break;
   }
 }
@@ -2367,7 +2968,10 @@ function repaintFromRecord(t){
   var live = t.status === 'open';
   $('stageTitle').textContent = (live ? '🚨 Triage · ' : '✅ Triage · ') + currentSeverity + (live ? ' · live' : ' · verdict in');
   if(!live) $('boardClock').textContent = 'settled';
+  setIncident(t.incidentId, t.openedAt, t.reTriageOf);
+  if(live){ startMttrTick(t.openedAt); } else { settleMttr(t.mttr); }
   buildBoard(t.fronts);
+  if(t.symptom) renderScopeBar(t.symptom);
   (t.staffed||[]).forEach(function(s){ markOnBridge(s.agent); });
   addReporterMsg(t.description, currentSeverity, t.openedAt);
   (t.messages||[]).forEach(function(m){
@@ -2375,10 +2979,16 @@ function repaintFromRecord(t){
     renderMsg(m);
   });
   (t.evidence||[]).forEach(function(e){ applyEvidence(e); });
+  // Ranked blind spots (high-risk highlighted) — not stored on the live evidence
+  // map, so re-apply them from the record so a refresh keeps the weighting.
+  (t.rankedBlindSpots||[]).forEach(function(b){
+    applyEvidence({ front: b.front, state: 'blind', detail: b.reason, risk: b.risk, why: b.why });
+  });
   (t.progress||[]).forEach(function(p){ setStep(p.tier, p.status); });
   if(t.verdict) renderVerdictCard(t.verdict);
+  if(t.reTriageDelta) renderRetriageDelta(t.reTriageDelta);
   setBridgeInput(live);
-  pushActivity('NOC Triage', 'restored ' + currentSeverity + ' triage — "' + (t.title||'') + '"', tsClock(t.openedAt));
+  pushActivity('NOC Triage', 'restored ' + currentSeverity + ' triage ' + (t.incidentId||'') + ' — "' + (t.title||'') + '"', tsClock(t.openedAt));
 }
 
 /* ============================================================
