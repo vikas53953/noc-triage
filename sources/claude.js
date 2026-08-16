@@ -10,6 +10,11 @@
 // skill permits raw HTTP when no official SDK is available for the project. The
 // wire shape below is the documented Messages API (POST /v1/messages).
 //
+// Model failures are surfaced generically and honestly by the caller (jarvis.js):
+// an API/network/timeout error, a safety-classifier refusal, or a missing key each
+// map to a spoken "I couldn't reason / declined" state — no fabricated plan or
+// answer, and no assumptions baked in about any one model's availability rules.
+//
 // KEY HANDLING (hard rule): ANTHROPIC_API_KEY is read from process.env (loaded by
 // sources/env.js from the gitignored .env.local). The key is placed ONLY in the
 // x-api-key request header. It is never written to a log, an error message, an
@@ -18,11 +23,13 @@
 
 const https = require('https');
 
-// Model: Jarvis is the L4 / Principal Engineer — the squad's orchestrator. Per
-// Vikas's standing "orchestrate up" law the orchestrator runs on the most capable
-// model (Claude Fable 5). Override with JARVIS_MODEL if you want a cheaper tier.
-// Model id verified against the `claude-api` skill's model catalogue.
-const MODEL = process.env.JARVIS_MODEL || 'claude-fable-5';
+// Model: Jarvis's job here is routing + summarising — deciding who to delegate to
+// and composing an answer from the gathered findings. That does not need the very
+// top tier, so the default is Claude Opus 5 (strong reasoning at a fraction of
+// Fable's cost). Override with JARVIS_MODEL to pick another tier without a code
+// change (e.g. claude-sonnet-5 for cheaper still). Model id verified against the
+// `claude-api` skill's model catalogue.
+const MODEL = process.env.JARVIS_MODEL || 'claude-opus-5';
 const API_VERSION = '2023-06-01';
 const HOST = 'api.anthropic.com';
 const PATH = '/v1/messages';
@@ -89,15 +96,23 @@ function textOf(resp) {
 
 // One reasoning call. Returns { text, stopReason, model, refused }.
 //
-// Notes on params (checked against the `claude-api` skill for claude-fable-5):
-//  - `thinking` is OMITTED entirely — thinking is always on for Fable 5 and an
-//    explicit config returns a 400.
-//  - No temperature/top_p (removed on this model tier — would 400).
-//  - `output_config.effort` tunes depth; `output_config.format` (json_schema)
-//    is used by the planner to guarantee a parseable plan.
-//  - Streaming is unnecessary here: both calls are small (a plan, a short
-//    synthesis) and well under any HTTP timeout at these max_tokens.
-async function reason({ system, messages, maxTokens = 1200, effort = 'high', format = null }) {
+// Notes on params (checked against the `claude-api` skill; model-aware, NOT tied
+// to any one model's quirks):
+//  - `thinking: {type:'adaptive'}` is set EXPLICITLY. Adaptive is valid on every
+//    current tier (Opus 5, Sonnet 5, Fable 5). Being explicit keeps reasoning ON
+//    even if JARVIS_MODEL is pointed at a model where omitting `thinking` would
+//    mean no thinking (e.g. Opus 4.8) — so the routing/synthesis never silently
+//    degrades to a non-reasoning call. We never send `{type:'disabled'}`, so the
+//    Opus 5 "disabled-only-at-≤high-effort" 400 cannot arise.
+//  - No temperature/top_p/top_k and no budget_tokens — all removed on the current
+//    tiers (Opus 5 / Sonnet 5 / Fable 5) and would 400.
+//  - `output_config.effort` tunes depth; `output_config.format` (json_schema) is
+//    used by the planner to guarantee a parseable plan (works with thinking on).
+//  - On Opus 5 / Sonnet 5 / Fable 5 thinking shares the `max_tokens` budget, so
+//    callers pass headroom above the raw plan/answer size to avoid truncation.
+//  - Streaming is unnecessary here: both calls are small and well under any HTTP
+//    timeout at these max_tokens.
+async function reason({ system, messages, maxTokens = 3000, effort = 'high', format = null }) {
   const outputConfig = { effort };
   if (format) outputConfig.format = format;
   const body = {
@@ -105,6 +120,7 @@ async function reason({ system, messages, maxTokens = 1200, effort = 'high', for
     max_tokens: maxTokens,
     system,
     messages,
+    thinking: { type: 'adaptive' },
     output_config: outputConfig,
   };
   const resp = await post(body);

@@ -24,6 +24,7 @@
 // rule-router pretending to reason, and it invents nothing.
 
 const claude = require('./claude');
+const session = require('./session-log');
 
 let ctx = null;
 // ctx: { say(agentId,text), status(agentId,state,label), log(line),
@@ -87,6 +88,9 @@ NOT CONNECTED if it is the right owner — it will honestly report that it has n
 If the request is not about the network this squad can see at all, return an empty
 delegation list and explain why in "note".
 
+First, in "intent", state in one or two plain sentences what the operator is actually
+asking for (the parsed intent). Then choose the delegations.
+
 Return ONLY the structured plan. Phrase each agent's question in plain, specific terms.`;
 
 const PLAN_FORMAT_BASE = {
@@ -126,8 +130,9 @@ async function ask(question) {
       schema: {
         type: 'object',
         additionalProperties: false,
-        required: ['delegations', 'note'],
+        required: ['intent', 'delegations', 'note'],
         properties: {
+          intent: { type: 'string' },
           delegations: {
             type: 'array',
             items: {
@@ -150,7 +155,9 @@ async function ask(question) {
         role: 'user',
         content: `Squad roster (the only things that can see the network):\n${rosterText()}\n\nOperator request:\n"${q}"`,
       }],
-      maxTokens: 2048,
+      // Headroom above the JSON plan itself: on the current tiers adaptive
+      // thinking shares this budget, so a tight cap could truncate the plan.
+      maxTokens: 6000,
       effort: 'high',
       format,
     });
@@ -175,6 +182,25 @@ async function ask(question) {
     return;
   }
 
+  // Jarvis makes no device calls, so its CLI would be empty. Capture its REAL
+  // reasoning as session records (agent:"jarvis", kind:"reasoning") so its CLI
+  // shows the full routing chain: INTENT → PLAN → DELEGATE →<agent> → SYNTHESIS.
+  // raw is the real detail the Claude call produced; interpretation is why.
+  if (plan.intent) {
+    session.recordReasoning({
+      command: 'INTENT',
+      raw: String(plan.intent),
+      interpretation: 'Parsed the operator’s plain-words request into a concrete intent before choosing who to task.',
+    });
+  }
+  session.recordReasoning({
+    command: 'PLAN',
+    raw: `Tasking ${valid.length} agent(s):\n` +
+      valid.map((d) => `→ ${ctx.nameOf(d.agentId)} (${d.agentId}): ${d.question}`).join('\n') +
+      (plan.note ? `\n\nWhy: ${String(plan.note)}` : ''),
+    interpretation: 'Chose the smallest set of agents whose combined sight covers the request, with the exact sub-question sent to each.',
+  });
+
   // Show the plan (real reasoning output, not a canned menu).
   ctx.say('jarvis',
     `🗺️ Plan — I'm pulling in ${valid.length} ${valid.length === 1 ? 'engineer' : 'engineers'}:\n${RULE}\n` +
@@ -185,6 +211,12 @@ async function ask(question) {
   // ── Execute the plan for REAL ──────────────────────────────────────────────
   const findings = [];
   for (const d of valid) {
+    // One reasoning record per routing hop, so the CLI shows each delegation.
+    session.recordReasoning({
+      command: `DELEGATE → ${d.agentId}`,
+      raw: `Sub-question to ${ctx.nameOf(d.agentId)}: ${d.question}`,
+      interpretation: `Routed this piece to ${ctx.nameOf(d.agentId)} because it is the owner that can actually see what the sub-question needs.`,
+    });
     ctx.say('jarvis', `📨 @${ctx.nameOf(d.agentId)} — ${d.question}`);
     const f = await ctx.gather(d.agentId, d.question);
     findings.push(f);
@@ -210,7 +242,8 @@ async function ask(question) {
           `Findings gathered from the squad (this is your ONLY source of network truth):\n${RULE}\n${findingsBlock}\n${RULE}\n\n` +
           `Give the operator your answer, using only the findings above.`,
       }],
-      maxTokens: 1200,
+      // Headroom for adaptive thinking + the composed answer (see plan call).
+      maxTokens: 4000,
       effort: 'high',
     });
     if (res.refused) return refusedToReason(q);
@@ -219,6 +252,11 @@ async function ask(question) {
     return reasoningError(q, err);
   }
 
+  session.recordReasoning({
+    command: 'SYNTHESIS',
+    raw: String(answer || ''),
+    interpretation: `Composed strictly from the ${findings.length} real finding(s) gathered above — no number, device, or status invented.`,
+  });
   ctx.say('jarvis', `🎖️ ${answer}`);
   ctx.status('jarvis', 'idle', 'Answered from live findings');
   ctx.log(`[Jarvis] Answered from ${findings.length} finding(s) — "${q.slice(0, 50)}"`);

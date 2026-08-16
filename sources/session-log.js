@@ -47,8 +47,10 @@ const RAW_CAP = 20000; // chars of raw output kept per record (device output can
 const records = [];
 let seq = 0;
 let onRecord = null; // server sets this to broadcast a session_record WS event
+let onCommandShare = null; // server sets this to broadcast a command_share WS event
 
 function setBroadcast(fn) { onRecord = typeof fn === 'function' ? fn : null; }
+function setCommandShareBroadcast(fn) { onCommandShare = typeof fn === 'function' ? fn : null; }
 
 // ── Secret scrubbing ────────────────────────────────────────────────────────
 // Belt-and-braces: even for non-auth endpoints, redact anything token-shaped so
@@ -245,6 +247,72 @@ function record({ host, method, path, res, durationMs }) {
   if (records.length > MAX_RECORDS) records.splice(0, records.length - MAX_RECORDS);
 
   if (onRecord) { try { onRecord(rec); } catch (e) { /* never let telemetry break a read */ } }
+
+  // command_share (transparency contract): for each REAL check an engaged agent
+  // runs during a delegation or triage turn, surface the exact command + the real
+  // raw output + why it ran + what it means, IN ADDITION to the summary chat line.
+  // The caller opts in by tagging its runWithContext with `share: true`; auth/login
+  // exchanges are not "checks", so they are excluded. raw here is already scrubbed
+  // + capped above, so no secret can reach the browser through this event.
+  if (onCommandShare && ctx.share && !info.auth) {
+    const share = {
+      agent: rec.agentId,
+      agentName: rec.agentName,
+      tier: ctx.tier || null,
+      purpose: ctx.purpose || rec.command,
+      command: rec.command,
+      raw: rec.raw,
+      reasoning: ctx.reasoning || rec.origin || '',
+      conclusion: rec.ok
+        ? rec.interpretation
+        : `unread/unreachable — ${rec.error || 'no response'}`,
+      ok: rec.ok,
+      triageId: rec.triageId,
+      ts: rec.ts,
+    };
+    try { onCommandShare(share); } catch (e) { /* never let telemetry break a read */ }
+  }
+  return rec;
+}
+
+// ── Jarvis reasoning as session records ─────────────────────────────────────
+// Jarvis makes no device calls, so it produces no wire-call records — its CLI
+// would be empty. Its REAL reasoning (the parsed intent, the plan + the exact
+// sub-questions it sent, each delegation, the final synthesis) is captured here
+// as session records tagged agent:"jarvis", kind:"reasoning", so the CLI/session
+// view shows Jarvis's full routing chain. `raw` is the real detail the Claude
+// call produced (scrubbed, same as any wire raw); nothing is fabricated.
+function recordReasoning({ agent = 'jarvis', agentName, command, raw, interpretation, ok = true, triageId = null }) {
+  const c = getContext();
+  const rec = {
+    id: `sess-${Date.now().toString(36)}-${(++seq).toString(36)}`,
+    seq,
+    ts: new Date().toISOString(),
+    durationMs: null,
+    source: agent,
+    sourceLabel: agentName || agent,
+    host: null,
+    path: '',
+    // Carry BOTH keys: `agentId` groups this under Jarvis's CLI like every other
+    // record; `agent` matches the transparency contract's jarvis-record shape.
+    agent,
+    agentId: agent,
+    agentName: agentName || agent,
+    triageId: triageId || c.triageId || null,
+    front: null,
+    origin: 'reasoning',
+    kind: 'reasoning',
+    command: String(command || ''),
+    login: null,
+    ok: !!ok,
+    status: null,
+    error: null,
+    raw: scrub(raw == null ? '' : String(raw)).slice(0, RAW_CAP),
+    interpretation: interpretation == null ? '' : String(interpretation),
+  };
+  records.push(rec);
+  if (records.length > MAX_RECORDS) records.splice(0, records.length - MAX_RECORDS);
+  if (onRecord) { try { onRecord(rec); } catch (e) { /* never let telemetry break reasoning */ } }
   return rec;
 }
 
@@ -260,4 +328,7 @@ function query({ agentId, source, triageId, limit } = {}) {
   return out;
 }
 
-module.exports = { runWithContext, getContext, record, setBroadcast, all, query };
+module.exports = {
+  runWithContext, getContext, record, recordReasoning,
+  setBroadcast, setCommandShareBroadcast, scrub, all, query,
+};
