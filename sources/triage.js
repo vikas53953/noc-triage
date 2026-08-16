@@ -834,6 +834,13 @@ async function runL4(triage, sym) {
 
   const verdictPayload = {
     verdict, impact, nextChecks,
+    // Window-aware front split (real, computed above) — carried so downstream
+    // consumers (ServiceNow state B2, SLT "what broke" B11) can tell an in-window
+    // cause from pre-existing noise without re-deriving or over-counting.
+    activeInWindow: active,       // fronts confirmed broken IN the incident window (cause candidates)
+    preExisting,                  // degraded fronts that PRE-DATE the window (called out, never blamed)
+    suspect,                      // fronts that could not be read this pass
+    clean,                        // fronts that read clean
     blindSpots: ranked,           // ranked/weighted (gap 6)
     hypothesis: hypo || null,     // committed ranked hypothesis + if/then + confidence (gap 7)
     window: sym ? { timeAnchor: sym.timeAnchor, scope: sym.scope, source: sym.source } : null,
@@ -1057,11 +1064,29 @@ function collectAffectedCIs(triage) {
       .forEach((d) => add(d.hostname || d.id, 'device', 'campus'));
   }
   // fabric — tenants/nodes carrying critical/major faults (in-window first).
+  // B3: the fault's `node` field is a BARE fabric id (e.g. "101") and `tenant`
+  // is "unknown" for infra faults that carry no tenant. Emitting those raw would
+  // give ServiceNow junk CIs ("101", "1", "unknown"). Resolve the bare node id to
+  // its REAL device name from the fabric inventory (getFabricNodes → {id,name}),
+  // and only emit a tenant CI when the fault actually named a real tenant.
   const fabric = reads.fabric;
   if (fabric && Array.isArray(fabric.faults)) {
+    // Real node-id → device-name map from the live fabric inventory.
+    const nodeNameById = new Map();
+    (fabric.nodes || []).forEach((n) => {
+      if (n && n.id != null && n.name) nodeNameById.set(String(n.id), String(n.name));
+    });
     fabric.faults.slice(0, 12).forEach((f) => {
-      if (f && f.tenant) add(f.tenant, 'tenant', 'fabric');
-      if (f && f.node) add(f.node, 'node', 'fabric');
+      // Tenant CI only when the source truly gave a tenant name — infra faults
+      // return 'unknown' (no tenant in the DN); never emit that as a CI.
+      if (f && f.tenant && f.tenant !== 'unknown') add(f.tenant, 'tenant', 'fabric');
+      // Node CI: keep the real device name intact. Resolve the bare id to the
+      // inventory name (e.g. "LF-101"); if the id isn't in inventory, keep a
+      // readable "node-<id>" rather than a bare split digit — never just "101".
+      if (f && f.node != null && f.node !== '') {
+        const id = String(f.node);
+        add(nodeNameById.get(id) || `node-${id}`, 'node', 'fabric');
+      }
     });
   }
   // wan — devices/hosts named on the active alarms.
@@ -1363,7 +1388,16 @@ function buildTriage(severity, description, opts = {}) {
     staffed,
     blindSpots: BLIND_SPOTS,
     fronts: FRONTS,
-    progress: { L1: 'pending', L2: 'pending', L3: 'pending', L4: 'pending' },
+    // Escalation strip seed (B12): a tier that this severity does not staff starts
+    // 'skipped' — a distinct state — NOT 'pending', so the strip never looks stalled
+    // waiting on a tier that is never coming (e.g. L3 at P3).
+    progress: (() => {
+      const p = {};
+      ['L1', 'L2', 'L3', 'L4'].forEach((tier) => {
+        p[tier] = staffedTiers.includes(tier) ? 'pending' : 'skipped';
+      });
+      return p;
+    })(),
     evidence: {},
     evidenceHistory: [],
     messages: [],
@@ -1411,9 +1445,10 @@ function emitOpened(triage) {
   // Blind cards go out immediately — they are known before any read.
   BLIND_FRONTS.forEach((front) =>
     emit('triage_evidence', id, { front, state: 'blind', detail: blindReason(front), source: null }));
-  // Initial escalation-strip state.
+  // Initial escalation-strip state — emit each tier's real seed (B12): staffed
+  // tiers are 'pending', tiers this severity never staffs are 'skipped'.
   ['L1', 'L2', 'L3', 'L4'].forEach((tier) =>
-    emit('triage_progress', id, { tier, status: 'pending' }));
+    emit('triage_progress', id, { tier, status: triage.progress[tier] }));
 
   log(`[Triage ${id}] opened — ${triage.severity} "${triage.title}" — incident ${triage.incidentId}` +
     (triage.reTriageOf ? ` (re-triage of ${triage.reTriageOf})` : '') +

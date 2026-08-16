@@ -235,6 +235,63 @@ function snImpactUrgency(severity) {
   return map[severity] || { severity: severity || 'unknown', impact: '3 - Low', urgency: '3 - Low', priority: '3 - Moderate' };
 }
 
+// B2 — ServiceNow State, derived from the REAL confidence + blind-spot data (never
+// a blind closed→Resolved map). A closed bridge is only "Resolved" when the verdict
+// committed a real IN-WINDOW root cause with medium/high confidence and does NOT
+// hinge on an unverified blind spot or an unread front. When the committed cause
+// rests on a blind spot / is unverified / is low-confidence, it is still open work:
+// "On Hold" when we are explicitly blocked on an unread or high-risk-blind lead we
+// must go verify, else "In Progress".
+function snowState(rec) {
+  if (rec.status !== 'closed') return 'In Progress';
+
+  const v = rec.verdict || null;
+  const hyp = v && v.hypothesis;
+  const confidence = hyp && hyp.confidence ? String(hyp.confidence).toLowerCase() : null;
+
+  // A real, in-scope root cause = at least one front confirmed active IN the
+  // incident window. Pre-existing degradations and blind spots do NOT count.
+  // Fall back to any degraded front only for older records that predate the
+  // activeInWindow field (never available → be conservative).
+  const active = v && Array.isArray(v.activeInWindow) ? v.activeInWindow : null;
+  const suspect = (v && Array.isArray(v.suspect)) ? v.suspect : [];
+  const confirmedCause = active ? active.length > 0 : classifyFronts(rec).degraded.length > 0;
+
+  // Ranked blind spots (with per-symptom risk) live on the verdict; the record's
+  // top-level blindSpots is the static roster without risk.
+  const rankedBlind = (v && Array.isArray(v.blindSpots) && v.blindSpots) || rec.blindSpots || [];
+  const highRiskBlind = rankedBlind.some((b) => String(b.risk || '').toLowerCase() === 'high');
+  const committed = !!(v && (hyp ? hyp.hypothesis : v.verdict));
+
+  if (committed && confirmedCause && confidence && confidence !== 'low'
+      && !highRiskBlind && suspect.length === 0) {
+    return 'Resolved';
+  }
+  if (highRiskBlind || suspect.length) return 'On Hold';
+  return 'In Progress';
+}
+
+// The reason a closed bridge is NOT marked Resolved — plain, honest, for ITSM work
+// notes. Empty string when the state IS Resolved.
+function snowOpenReason(rec, state) {
+  if (state === 'Resolved') return '';
+  const v = rec.verdict || null;
+  const hyp = v && v.hypothesis;
+  const confidence = hyp && hyp.confidence ? String(hyp.confidence).toLowerCase() : null;
+  const active = v && Array.isArray(v.activeInWindow) ? v.activeInWindow : null;
+  const suspect = (v && Array.isArray(v.suspect)) ? v.suspect : [];
+  const rankedBlind = (v && Array.isArray(v.blindSpots) && v.blindSpots) || rec.blindSpots || [];
+  const highBlind = rankedBlind.filter((b) => String(b.risk || '').toLowerCase() === 'high').map((b) => b.front);
+
+  const reasons = [];
+  if (!confidence) reasons.push('no committed confidence on the root cause');
+  else if (confidence === 'low') reasons.push('confidence in the committed root cause is LOW');
+  if (highBlind.length) reasons.push(`the leading cause rests on an unverified blind spot (${highBlind.join(', ')}) — no source is wired to confirm it`);
+  if (suspect.length) reasons.push(`front(s) unread this pass and must be verified: ${suspect.join(', ')}`);
+  if (active && active.length === 0) reasons.push('no front was confirmed broken inside the incident window');
+  return `NOT RESOLVED — ${reasons.join('; ') || 'root cause not confirmed'}. Verify before closing.`;
+}
+
 // Build the structured ServiceNow-ready object from the REAL record. Every field
 // traces to real triage data; nothing is a placeholder. Secrets never appear here
 // (the whole record is scrub()'d on write, and CIs are device/tenant names only).
@@ -263,6 +320,14 @@ function buildServiceNow(rec) {
   const shortDescription =
     `${rec.severity} ${rec.incidentId ? rec.incidentId + ' — ' : ''}${rec.title}`;
 
+  // B2 — honest State + work notes. When not Resolved, lead the work notes with
+  // WHY it is still open plus the ranked next-checks so ITSM sees the open work.
+  const state = snowState(rec);
+  const openReason = snowOpenReason(rec, state);
+  const workNotes = openReason
+    ? `${openReason}\nNext checks: ${(nextSteps || []).length ? nextSteps.join(' | ') : 'see verdict/hypothesis'}\n\n${rec.provenance}`
+    : rec.provenance;
+
   return {
     incidentId: rec.incidentId || null,
     internalId: rec.id,
@@ -273,7 +338,7 @@ function buildServiceNow(rec) {
     urgency: iu.urgency,
     priority: iu.priority,
     category: 'Network',
-    state: rec.status === 'closed' ? 'Resolved' : 'In Progress',
+    state,
     openedAt: rec.openedAt || null,
     closedAt: rec.closedAt || null,
     mttr: rec.mttr ? { mttrMs: rec.mttr.mttrMs, mttrHuman: rec.mttr.mttrHuman, verdictAt: rec.mttr.verdictAt } : null,
@@ -288,7 +353,7 @@ function buildServiceNow(rec) {
     verdict: (rec.verdict && rec.verdict.verdict) || null,
     hypothesis,
     nextSteps,
-    workNotes: rec.provenance,
+    workNotes,
   };
 }
 
@@ -328,6 +393,13 @@ function renderServiceNowText(rec, sn) {
   if (sn.nextSteps.length) sn.nextSteps.forEach((s) => L.push(`- ${s}`));
   else L.push('- No next-steps recorded.');
   L.push('');
+  // B2 — when the state is not Resolved, spell out WHY in the work notes so ITSM
+  // never reads a P1 as done while the root cause is unconfirmed.
+  if (sn.state !== 'Resolved') {
+    L.push('## Work notes');
+    L.push(sn.workNotes);
+    L.push('');
+  }
   L.push('---');
   L.push('*Generated from the real triage record. Every field traces to a live reading; credential values are redacted.*');
   return L.join('\n');
@@ -356,9 +428,37 @@ function renderSltDoc(rec) {
   L.push(`**What was reported:** ${rec.description || rec.title}`);
   L.push('');
 
-  // What broke
+  // What broke — B11: count/word only fronts that actually broke INSIDE the
+  // incident window. Pre-existing degradations (which the verdict labels NOT the
+  // cause) are named separately, never counted as newly broken. Driven off the
+  // verdict's real in-window vs pre-existing split; falls back to the degraded set
+  // only for older records that lack that split.
   L.push('## What broke');
-  if (c.degraded.length) {
+  const v = rec.verdict || null;
+  const activeFronts = v && Array.isArray(v.activeInWindow) ? v.activeInWindow : null;
+  const preExistingFronts = v && Array.isArray(v.preExisting) ? v.preExisting : null;
+  const evByFront = {};
+  (rec.evidenceFinal || []).forEach((e) => { evByFront[e.front] = e; });
+  const detailOf = (f) => (evByFront[f] ? evByFront[f].detail : '');
+
+  if (activeFronts) {
+    // New-schema record: trust the window-aware split.
+    if (activeFronts.length) {
+      L.push(`We found a live problem that started during this incident on ${activeFronts.length} area(s):`);
+      activeFronts.forEach((f) => L.push(`- **${frontLabel(f)}** — ${detailOf(f)}`));
+      if ((preExistingFronts || []).length) {
+        L.push('');
+        L.push(`For context, ${preExistingFronts.map(frontLabel).join(', ')} already had faults before this incident began — pre-existing, and not what broke here.`);
+      }
+    } else if ((preExistingFronts || []).length) {
+      L.push(`Nothing new broke during this incident. ${preExistingFronts.map(frontLabel).join(', ')} already had faults before it began (pre-existing) — they are not the cause.`);
+    } else if (c.suspect.length && !c.clean.length) {
+      L.push('We could not get a clear reading — the systems we needed to check did not respond (see "What we could not see"). We are not calling this either broken or fine.');
+    } else {
+      L.push('No live fault was found on any system we can see. Every connected area we checked came back healthy.');
+    }
+  } else if (c.degraded.length) {
+    // Legacy fallback (record predates the in-window split).
     L.push(`We found a live problem on ${c.degraded.length} area(s):`);
     c.degraded.forEach((e) => L.push(`- **${frontLabel(e.front)}** — ${e.detail}`));
   } else if (c.suspect.length && !c.clean.length) {
