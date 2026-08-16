@@ -115,6 +115,58 @@ async function runShowCommand(deviceIds, command) {
   throw new Error('Command Runner timed out waiting for output');
 }
 
+// Pull the real device CLI transcript out of a Command Runner file response.
+// Body shape: [{ commandResponses: { SUCCESS: { "show running-config": "..." } } }].
+// Returns { ok, text } or null — same buckets the live-agents extractor reads.
+function extractCli(file, command) {
+  try {
+    const entry = Array.isArray(file) ? file[0] : file;
+    const r = (entry && entry.commandResponses) || {};
+    const pick = (bucket) => {
+      const keys = Object.keys(bucket || {});
+      return keys.length ? bucket[keys[0]] : null;
+    };
+    const ok = pick(r.SUCCESS || r.success);
+    if (ok) return { ok: true, text: String(ok) };
+    const failed = pick(r.FAILURE || r.failure);
+    if (failed) return { ok: false, text: String(failed) };
+    const blocked = pick(r.BLOCKLISTED || r.blocklisted);
+    if (blocked) return { ok: false, text: `Catalyst Center blocklisted this command: ${blocked}` };
+  } catch (e) { /* fall through */ }
+  return null;
+}
+
+// Read a device's running-config live via Command Runner (read-only; the
+// guardrail allows "show running-config" — a show-class read). Feeds
+// config-store for change correlation (gap 5). Returns:
+//   { ok:true,  deviceId, command, text }              — real config text
+//   { ok:false, deviceId, command, text/error, ... }   — device rejected / unreachable
+// It never throws for an unreachable source: the honest failure is returned so
+// the caller can record "unreachable", not a fabricated "no change".
+async function getRunningConfig(deviceId) {
+  const command = 'show running-config';
+  if (!configured()) {
+    return { ok: false, deviceId, command, error: 'Catalyst Center not connected — DNAC_HOST/USER/PASS are not set' };
+  }
+  if (!deviceId) {
+    return { ok: false, deviceId: null, command, error: 'no device id given' };
+  }
+  try {
+    // runShowCommand re-checks the guardrail (assertReadOnly) before anything is sent.
+    const file = await runShowCommand([deviceId], command);
+    const out = extractCli(file, command);
+    if (!out) {
+      return { ok: false, deviceId, command, error: 'Command Runner returned no readable output' };
+    }
+    if (out.ok === false) {
+      return { ok: false, deviceId, command, error: 'device rejected the command', text: out.text };
+    }
+    return { ok: true, deviceId, command, text: out.text };
+  } catch (e) {
+    return { ok: false, deviceId, command, error: (e && e.message) || 'unreachable' };
+  }
+}
+
 module.exports = {
   id: 'catalyst-center',
   label: 'Cisco Catalyst Center',
@@ -125,4 +177,5 @@ module.exports = {
   getHealth,
   getIssues,
   runShowCommand,
+  getRunningConfig,
 };
