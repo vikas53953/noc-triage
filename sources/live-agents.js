@@ -551,6 +551,47 @@ function shortTopic(topic) {
   return `"${(space > 40 ? cut.slice(0, space) : cut)}…"`;
 }
 
+// EPGs live at uni/tn-<tenant>/ap-<appProfile>/epg-<name>. Pull the application
+// profile out of the dn so an EPG can be reported as tenant › AP › EPG.
+function appProfileOf(dn) {
+  const m = /\/ap-([^/]+)/.exec(dn || '');
+  return m ? m[1] : null;
+}
+
+// Turn the flat EPG list (aci.getEpgs) into a bounded, readable per-tenant
+// summary. It NEVER hides the count — always states "N EPG(s) across M
+// tenant(s)" — and caps the enumerated names so a 70-EPG fabric stays readable
+// while every tenant is still represented. Honest by construction: real names
+// only, and it says plainly when it is showing a subset.
+function summariseEpgs(epgs, cap = 40) {
+  if (!epgs.length) return 'No EPGs returned by the APIC.';
+  const byTenant = {};
+  for (const e of epgs) {
+    const t = e.tenant || 'unknown';
+    (byTenant[t] = byTenant[t] || []).push(e);
+  }
+  const tenants = Object.keys(byTenant).sort();
+  const lines = [];
+  let shown = 0;
+  for (const t of tenants) {
+    const list = byTenant[t];
+    const names = [];
+    for (const e of list) {
+      if (shown >= cap) break;
+      const ap = appProfileOf(e.dn);
+      names.push(ap ? `${ap}/${e.name}` : e.name);
+      shown += 1;
+    }
+    const extra = list.length - names.length;
+    lines.push(`  tenant ${t} (${list.length}): ${names.join(', ')}` + (extra > 0 ? `, +${extra} more` : ''));
+    if (shown >= cap) break;
+  }
+  const capped = shown < epgs.length;
+  const header = `${epgs.length} EPG(s) across ${tenants.length} tenant(s)` +
+    (capped ? ` — showing ${shown}` : '');
+  return `${header}:\n${lines.join('\n')}`;
+}
+
 function noDataContribution(agentId, topic) {
   const need = NO_BACKEND[agentId] || 'a live data source';
   return {
@@ -578,11 +619,23 @@ const DEBATE_BUILDERS = {
       const devices = await catalyst.getDevices();
       const health = await catalyst.getHealth().catch(() => null);
       const down = devices.filter((d) => d.reachability !== 'Reachable');
+      // Carry EVERY field getDevices() already returned that a delegated
+      // question could ask for — hostname, management IP, platform/model,
+      // software version, reachability — one device per line. The old summary
+      // dropped mgmt IP and version, so "list the mgmt IPs" and "what version is
+      // sw1" came back unanswerable even though this read holds both. Honesty is
+      // preserved: a field the API did not return is labelled "not reported",
+      // never invented.
+      const perDevice = devices.map((d) =>
+        `${d.hostname}: mgmt IP ${d.ip || 'not reported'}, ` +
+        `platform ${d.platform || 'not reported'}, ` +
+        `software ${d.software || 'version not reported'}, ` +
+        `${d.reachability}`);
       return `Live from ${catalyst.label} (${catalyst.host}) just now: ` +
-        `${devices.length - down.length}/${devices.length} devices reachable` +
-        (devices.length ? ` — ${devices.map((d) => `${d.hostname} (${d.platform}, ${d.reachability})`).join('; ')}` : '') +
-        (health ? `. Network health score ${health.score} (good ${health.good} / bad ${health.bad})` : '') +
-        `.\nThat is the campus state anyone planning ${shortTopic(topic)} is working against. ` +
+        `${devices.length - down.length}/${devices.length} devices reachable.` +
+        (devices.length ? `\n${perDevice.join('\n')}` : ' No devices returned.') +
+        (health ? `\nNetwork health score ${health.score} (good ${health.good} / bad ${health.bad}).` : '') +
+        `\nThat is the campus state anyone planning ${shortTopic(topic)} is working against. ` +
         (down.length
           ? `${down.map((d) => d.hostname).join(', ')} is not reachable right now, so that part I cannot vouch for.`
           : `Nothing in that inventory is currently unreachable.`);
@@ -636,11 +689,19 @@ const DEBATE_BUILDERS = {
         const nodes = await aci.getFabricNodes();
         const health = await aci.getFabricHealth().catch(() => ({ score: null }));
         const tenants = await aci.getTenants().catch(() => []);
+        // Enumerate the actual EPGs from the live APIC (fvAEPg via getEpgs), not
+        // just the tenant list. The old builder stopped at tenants, so "what
+        // EPGs do we have?" could never be answered from this finding. Left
+        // uncaught on purpose: if the APIC genuinely can't be read the whole
+        // contribution becomes an honest "source unreachable", same as the
+        // fabric-node read above — it never silently reports zero EPGs.
+        const epgs = await aci.getEpgs();
         return `Live from the APIC (${aci.host}): ${nodes.length} fabric node(s) — ` +
           `${nodes.map((n) => `${n.name} ${n.role} ${n.state}`).join('; ')}` +
           (health.score != null ? `. Fabric health ${health.score}` : '') +
           (tenants.length ? `. ${tenants.length} tenant(s): ${tenants.map((t) => t.name).join(', ')}` : '') +
-          `.\nThat is the fabric ${shortTopic(topic)} would land on. I have not measured convergence or ` +
+          `.\nEPGs (endpoint groups) live on the fabric now — ${summariseEpgs(epgs)}` +
+          `\nThat is the fabric ${shortTopic(topic)} would land on. I have not measured convergence or ` +
           `traffic, so I am not making a claim about either.`;
       }
       const devices = await sdwan.getDevices();
