@@ -596,6 +596,58 @@ pre.cli{
 .rec-md hr{border:none;border-top:1px solid var(--line);margin:.8rem 0}
 .rec-empty{font-size:.76rem;color:var(--ink3);font-style:italic;padding:1rem .3rem;line-height:1.6}
 
+/* ---------- roster live status light (agent_status) ---------- */
+.eng-light{
+  width:8px;height:8px;border-radius:50%;background:var(--ink3);opacity:.45;
+  flex-shrink:0;transition:background .15s,opacity .15s,box-shadow .15s
+}
+.eng.act-live .eng-light{
+  background:var(--ok);opacity:1;box-shadow:0 0 7px var(--ok);animation:pulse 1.8s infinite
+}
+.eng-state.st-active{background:var(--ok-bg);color:var(--ok)}
+
+/* ---------- Jarvis reasoning record (kind:"reasoning") ---------- */
+.sess-rec.reasoning{border-color:rgba(139,92,246,.42);background:var(--panel)}
+.sess-rec.reasoning .sr-src{color:var(--purple)}
+.sr-badge.reason{color:var(--purple);border-color:rgba(139,92,246,.5);background:rgba(139,92,246,.12)}
+.sess-rec .sr-step{
+  font-family:var(--mono);font-size:.74rem;font-weight:700;color:var(--purple);
+  padding:.4rem .7rem .1rem;word-break:break-word
+}
+.sess-rec .sr-interp.reason{background:rgba(139,92,246,.08);border-color:rgba(139,92,246,.3)}
+.sess-rec .sr-interp.reason b{color:var(--purple)}
+
+/* ---------- in-chat command "screen share" (command_share) ---------- */
+.cmd-share{
+  margin-top:.45rem;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel)
+}
+.cmd-share .cs-purpose{
+  padding:.42rem .6rem;font-size:.73rem;font-weight:700;color:var(--ink);
+  border-bottom:1px solid var(--line-soft);display:flex;gap:.4rem;align-items:center;flex-wrap:wrap
+}
+.cmd-share .cs-tag{
+  font-size:.55rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--info);
+  background:var(--info-bg);border:1px solid rgba(56,189,248,.4);border-radius:4px;padding:.1rem .34rem;flex-shrink:0
+}
+.cmd-share .cs-cmd{
+  font-family:var(--mono);font-size:.7rem;color:var(--accent);padding:.42rem .6rem;
+  word-break:break-all;border-bottom:1px solid var(--line-soft)
+}
+.cmd-share pre.cs-raw{
+  margin:0;font-family:var(--mono);font-size:.68rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;
+  background:#0b1020;color:#c9d5e6;padding:.5rem .6rem;max-height:260px;overflow:auto
+}
+.cmd-share details.cs-rawwrap{border-bottom:1px solid var(--line-soft)}
+.cmd-share details.cs-rawwrap>summary{
+  cursor:pointer;font-size:.66rem;font-weight:700;color:var(--ink3);padding:.42rem .6rem;user-select:none;list-style:none
+}
+.cmd-share details.cs-rawwrap>summary::-webkit-details-marker{display:none}
+.cmd-share details.cs-rawwrap>summary::before{content:'▸ ';color:var(--accent)}
+.cmd-share details.cs-rawwrap[open]>summary::before{content:'▾ '}
+.cmd-share .cs-why{font-size:.7rem;line-height:1.5;padding:.42rem .6rem;color:var(--ink2);border-bottom:1px solid var(--line-soft)}
+.cmd-share .cs-conc{font-size:.7rem;line-height:1.5;padding:.42rem .6rem;color:var(--ink);background:rgba(59,130,246,.06)}
+.cmd-share .cs-why b,.cmd-share .cs-conc b{color:var(--accent)}
+
 ::-webkit-scrollbar{width:7px;height:7px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
@@ -938,6 +990,7 @@ var ROSTER = [
       row.className = 'eng' + (e.live?'':' dark-src');
       row.id = 'eng-' + e.id;
       row.innerHTML =
+        '<span class="eng-light" title="idle"></span>'+
         '<div class="eng-ico">'+e.ico+'</div>'+
         '<div class="eng-txt"><div class="eng-name">'+escapeHtml(e.name)+'</div>'+
         '<div class="eng-src">'+escapeHtml(e.src)+'</div></div>'+
@@ -1044,6 +1097,42 @@ function pushActivity(who, msg, time){
     '<div class="act-msg">'+escapeHtml(msg)+'</div>';
   var list = $('actList'); list.insertBefore(el, list.firstChild);
   while(list.children.length > 80) list.removeChild(list.lastChild);
+}
+
+/* ---------- roster live status light (agent_status / agents_updated) ----------
+   Flips a green "active" light per roster agent the INSTANT the backend says the
+   agent is engaged / delegated-to, and back to idle when its turn ends. Accepts
+   both the contract shape {agentId,status} and the current backend shape (the
+   whole agent object {id,status,...}). Independent of the per-triage "on bridge"
+   marker so both can co-exist. */
+function setAgentLive(id, status){
+  if(!id) return;
+  var row = $('eng-'+id); if(!row) return;
+  // A not-connected engineer is a blind spot — never light it, honest by default.
+  if(row.classList.contains('dark-src')) return;
+  var active = status === 'active';
+  row.classList.toggle('act-live', active);
+  var light = row.querySelector('.eng-light');
+  if(light) light.title = active ? 'active' : 'idle';
+  // Reflect the word too — but never clobber the "on bridge" triage marker,
+  // and never light a not-connected (dark) engineer's state chip.
+  if(!row.classList.contains('on-bridge') && !row.classList.contains('dark-src')){
+    var st = row.querySelector('.eng-state');
+    if(st){
+      if(active){ st.className = 'eng-state st-active'; st.textContent = 'active'; }
+      else { st.className = 'eng-state st-idle'; st.textContent = 'idle'; }
+    }
+  }
+}
+function handleAgentStatus(d){
+  if(!d) return;
+  var id = d.agentId || d.id;      // contract: agentId · current backend: whole agent obj
+  if(id) setAgentLive(id, d.status);
+}
+function handleAgentsUpdated(d){
+  // contract: {agents:[...]} · current backend also emits a bare array
+  var arr = Array.isArray(d) ? d : (d && d.agents) || [];
+  arr.forEach(function(a){ if(a) setAgentLive(a.id || a.agentId, a.status); });
 }
 
 /* ---------- maximize / collapse ---------- */
@@ -1336,6 +1425,56 @@ function renderVerdictCard(v){
 }
 function scrollStream(){ var s = $('stream'); s.scrollTop = s.scrollHeight; }
 
+/* ---------- in-chat command "screen share" (command_share) ----------
+   During a Jarvis delegation / triage turn each engaged agent shares the exact
+   check it runs IN THE CHAT: purpose · exact command · raw output · reasoning ·
+   conclusion — a technical block so ANY tier watching sees what ran and why.
+   Renders into whichever surface the conversation is on (bridge stream while a
+   triage console is open, else the direct chat stream). Everything escaped;
+   long raw output is collapsed to keep the chat readable. */
+function renderCommandShare(d){
+  if(!d) return;
+  var inTriage = $('console').classList.contains('on');
+  var host = inTriage ? $('stream') : $('chatStream');
+  if(!host) return;
+  if(!inTriage){ var empty = host.querySelector('.chat-empty'); if(empty) empty.remove(); }
+  if(inTriage && d.agent) markOnBridge(d.agent);
+
+  var who = d.agentName || agentName(d.agent) || d.agent || 'Engineer';
+  var ico = d.agentIcon || agentIco(d.agent) || '🤖';
+  var tier = d.tier || '';
+  var tierBadge = tier ? '<span class="badge '+tierClass(tier)+'">'+escapeHtml(tier)+'</span>' : '';
+
+  var raw = String(d.raw == null ? '' : d.raw);
+  var rawEsc = escapeHtml(raw || '(no output)');
+  var rawBlock;
+  if(raw.length > 300 || raw.split('\n').length > 6){
+    rawBlock = '<details class="cs-rawwrap"><summary>raw output — '+raw.length+' chars (click to expand)</summary>'+
+      '<pre class="cs-raw">'+rawEsc+'</pre></details>';
+  } else {
+    rawBlock = '<pre class="cs-raw">'+rawEsc+'</pre>';
+  }
+
+  var card = '<div class="cmd-share">'+
+    '<div class="cs-purpose"><span class="cs-tag">check</span>'+escapeHtml(d.purpose||'live check')+'</div>'+
+    '<div class="cs-cmd">$ '+escapeHtml(d.command||'(no command)')+'</div>'+
+    rawBlock +
+    (d.reasoning?'<div class="cs-why"><b>Reasoning:</b> '+escapeHtml(d.reasoning)+'</div>':'')+
+    (d.conclusion?'<div class="cs-conc"><b>Conclusion:</b> '+escapeHtml(d.conclusion)+'</div>':'')+
+  '</div>';
+
+  var el = document.createElement('div');
+  el.className = 'msg';
+  el.innerHTML =
+    '<div class="msg-ico">'+escapeHtml(ico)+'</div><div class="msg-main">'+
+    '<div class="msg-top"><span class="msg-who">'+escapeHtml(who)+'</span>'+tierBadge+
+    '<span class="msg-time">'+escapeHtml(tsClock(d.ts))+'</span></div>'+
+    card + '</div>';
+  host.appendChild(el);
+  host.scrollTop = host.scrollHeight;
+  if(inTriage) $('msgCount').textContent = $('stream').querySelectorAll('.msg').length + ' posts';
+}
+
 function showTyping(who){
   hideTyping();
   var t = document.createElement('div');
@@ -1542,7 +1681,11 @@ var FRONT_SOURCE = { campus:'catalyst-center', fabric:'aci', wan:'sdwan', incide
 var SOURCE_LABEL = { 'catalyst-center':'Cisco Catalyst Center', 'aci':'Cisco ACI (APIC)', 'sdwan':'Cisco SD-WAN (vManage)' };
 
 function ingestRecord(rec){
-  if(!rec || !rec.id || SESSION_SEEN[rec.id]) return false;
+  if(!rec) return false;
+  // Reasoning records may arrive without an id — synthesise one so they are
+  // never silently dropped (device reads always carry one).
+  if(!rec.id) rec.id = (rec.kind||'rec')+'-'+(rec.ts||Date.now())+'-'+Math.random().toString(36).slice(2,7);
+  if(SESSION_SEEN[rec.id]) return false;
   SESSION_SEEN[rec.id] = 1;
   SESSION_RECORDS.push(rec);
   if(SESSION_RECORDS.length > 700) SESSION_RECORDS.splice(0, SESSION_RECORDS.length - 700);
@@ -1550,7 +1693,7 @@ function ingestRecord(rec){
 }
 function recMatches(rec){
   var f = SESSION_FILTER; if(!f) return true;
-  if(f.agentId) return rec.agentId === f.agentId;
+  if(f.agentId) return (rec.agentId || rec.agent) === f.agentId;
   if(f.front)   return rec.source === FRONT_SOURCE[f.front];
   if(f.source)  return rec.source === f.source;
   return true;
@@ -1561,6 +1704,22 @@ function seedSession(){
   }).catch(function(){});
 }
 function recCard(rec){
+  // Jarvis reasoning record — no device host / no wire command. Render the
+  // routing step (INTENT / PLAN / DELEGATE → x / SYNTHESIS) with its real
+  // detail + why, distinct from a device command card.
+  if(rec.kind === 'reasoning'){
+    return '<div class="sess-rec reasoning">'+
+      '<div class="sr-top">'+
+        '<span class="sr-src">🎖️ '+escapeHtml(rec.agentName||'Jarvis')+' · reasoning</span>'+
+        '<span class="sr-badge reason">step</span>'+
+        '<span class="sr-who">'+(rec.triageId?escapeHtml(rec.triageId):'routing')+(rec.origin?(' · '+escapeHtml(rec.origin)):'')+'</span>'+
+        '<span class="sr-time">'+escapeHtml(tsClock(rec.ts))+'</span>'+
+      '</div>'+
+      '<div class="sr-step">'+escapeHtml(rec.command||'(step)')+'</div>'+
+      '<pre class="sr-raw">'+escapeHtml(rec.raw||'(no detail)')+'</pre>'+
+      '<div class="sr-interp reason"><b>Why this step:</b> '+escapeHtml(rec.interpretation||'')+'</div>'+
+    '</div>';
+  }
   var ok = rec.ok;
   var badge = ok ? '<span class="sr-badge ok">ok'+(rec.status?(' · '+escapeHtml(String(rec.status))):'')+'</span>'
                  : '<span class="sr-badge fail">failed</span>';
@@ -1988,6 +2147,17 @@ function connectWS(){
       }
       return;
     }
+    // Roster live status light — flips the instant an agent is engaged / idled.
+    if(m.type === 'agent_status'){ handleAgentStatus(m.data); return; }
+    if(m.type === 'agents_updated'){ handleAgentsUpdated(m.data); return; }
+    // Live Activity feed — one line per meaningful event.
+    if(m.type === 'activity_new' && m.data){
+      var ad = m.data;
+      pushActivity(ad.source || ad.agent || 'Activity', ad.text || ad.message || '', tsClock(ad.ts || ad.timestamp));
+      return;
+    }
+    // In-chat command "screen share" — the exact check an agent ran + why.
+    if(m.type === 'command_share' && m.data){ renderCommandShare(m.data); return; }
     if(m.type === 'approval_new' || m.type === 'approval_update'){ if(m.data){ apprIngest(m.data); renderApprovals(); } return; }
     if(m.type === 'approval_mode'){ if(m.data && m.data.mode){ APPR.mode = m.data.mode; renderApprovals(); } return; }
     if(m.type.indexOf('triage_') === 0){ dispatchTriageEvent(m.type, m.data); return; }
