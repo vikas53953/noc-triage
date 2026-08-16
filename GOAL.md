@@ -41,3 +41,6 @@ identity + professional chat/collapse UX; XSS escaping on every sink; rate limit
 
 - 2026-08-17 ~01:xx: fix wave merged — PR#23 chat/activity persistence, PR#24 UI polish (reload-restore, UTC+local TZ, markdown, @mention, Send/spinner, P3 strip), PR#25 SNOW state+CI parsing, SLT wording, P3 staffing. Remaining: B10 actor mislabel (server.js:592, tiny backend). Integration review next.
 - 2026-08-17 ~01:xx: B10 actor-mislabel fixed+merged (PR #26). All qa-bugs-spec majors+minors now addressed; awaiting integration-review SHIP → then morning report.
+
+## MISSION COMPLETE 2026-08-17 ~01:xx — qa-bugs-spec CLEARED
+All majors+minors fixed+merged (PR#21 fields, #22 spec, #23 persistence, #24 UI, #25 SNOW/SLT/strip, #26 actor label). Integration review: SHIP, 0 blockers, 0 regressions, honesty intact. Morning report: https://claude.ai/code/artifact/a42d9e04-1103-43a7-b22b-a3c84659233d . Roadmap parked for Vikas.
