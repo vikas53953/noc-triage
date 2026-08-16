@@ -426,10 +426,6 @@ function handleCommandInner(data) {
   const agentName = agents[agent]?.name || agent;
   const agentIcon = agents[agent]?.icon || '🤖';
 
-  // Log command to activity
-  const logEntry = `[${timestamp}] [Dashboard] Command to ${agentName}: ${command}\n`;
-  appendToActivityLog(logEntry);
-
   // Add to command queue
   commandQueue.push({ agent, command, timestamp, status: 'pending' });
 
@@ -513,23 +509,9 @@ function handleCommandInner(data) {
     return;
   }
 
-  // Simulate agent receiving and processing the command
+  // No "Command received" echo: the user's own bubble already shows what they
+  // sent, and the agent's real answer follows. Hand straight to the read.
   setTimeout(() => {
-    const ackTime = new Date().toISOString();
-
-    // Agent acknowledgment
-    broadcast('chat_message', {
-      type: 'incoming',
-      agent,
-      agentName,
-      agentIcon,
-      text: `✅ Command received: "${command}"`,
-      timestamp: ackTime
-    });
-
-    appendToActivityLog(`[${ackTime}] [${agentName}] Received command: ${command}\n`);
-
-    // Simulate agent action based on command
     simulateAgentAction(agent, command);
   }, 500);
 }
@@ -768,7 +750,6 @@ function runAgentAction(agentId, command) {
   }
 
   const intent = detectAgentIntent(agentId, command);
-  appendToActivityLog(`[${new Date().toISOString()}] [${agent.name}] Intent: ${intent} — "${command.slice(0, 60)}"\n`);
 
   switch (intent) {
     // Read-only is enforced before anything reaches a device.
@@ -975,8 +956,6 @@ function detectJarvisIntent(input) {
 // untouched — it still works regardless of the key.)
 function simulateJarvisAction(agentId, command) {
   const intent = detectJarvisIntent(command);
-
-  appendToActivityLog(`[${new Date().toISOString()}] [Jarvis] Intent: ${intent.type}${intent.inferred ? ' (inferred)' : ''} — "${command.slice(0, 60)}"\n`);
 
   // Only unambiguous, explicitly-typed squad operations stay deterministic.
   if (!intent.inferred) {

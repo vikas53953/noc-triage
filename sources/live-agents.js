@@ -45,13 +45,22 @@ function notConnected(agentId) {
 // CLI command, the target, and why. Every read passes the permission gate: in
 // auto mode it auto-approves (and is logged); in ask mode it PAUSES until the
 // operator decides. A denied read never touches the wire and is reported honestly.
-async function runLive(agentId, taskTitle, busyLabel, worker, gateMeta) {
+async function runLive(agentId, taskTitle, busyLabel, worker, gateMeta, shareOpts) {
   const agent = ctx.agents[agentId];
   ctx.updateAgentStatus(agentId, 'active', busyLabel);
   const meta = Object.assign({
     agentId, agentName: agent.name,
     command: taskTitle, target: busyLabel, reason: taskTitle,
   }, gateMeta || {});
+  // A direct read is a real check too — screen-share it into the chat as a
+  // command_share (exact call · raw output · reasoning · conclusion), the SAME
+  // way a Jarvis delegation does. Callers that emit their own clean single block
+  // (e.g. Config-Keeper's "show version") opt out with shareOpts === false.
+  const shareCtx = shareOpts === false ? {} : {
+    share: true, tier: null,
+    purpose: (shareOpts && shareOpts.purpose) || taskTitle,
+    reasoning: (shareOpts && shareOpts.reasoning) || `${agent.name} ran a live read to answer directly.`,
+  };
   try {
     // Inside the try: a task-board problem must not abort the live read, and
     // must not escape as an unhandled rejection.
@@ -61,7 +70,7 @@ async function runLive(agentId, taskTitle, busyLabel, worker, gateMeta) {
     const g = await approvals.gate(meta, () =>
       // Tag every wire call this worker makes with the agent + task, so the
       // CLI/session view can show "who logged into what and ran which command".
-      session.runWithContext({ agentId, agentName: agent.name, label: taskTitle }, worker));
+      session.runWithContext(Object.assign({ agentId, agentName: agent.name, label: taskTitle }, shareCtx), worker));
 
     if (g.denied) {
       say(agentId,
@@ -71,7 +80,6 @@ async function runLive(agentId, taskTitle, busyLabel, worker, gateMeta) {
       ctx.appendToActivityLog(`[${new Date().toISOString()}] [${agent.name}] ${taskTitle} DENIED by operator — ran nothing\n`);
       ctx.updateAgentStatus(agentId, 'idle', 'Read denied — ran nothing');
     } else {
-      ctx.appendToActivityLog(`[${new Date().toISOString()}] [${agent.name}] ${taskTitle} — live data returned\n`);
       ctx.updateAgentStatus(agentId, 'idle', `${taskTitle} complete (live data)`);
     }
   } catch (err) {
@@ -359,6 +367,25 @@ async function configKeeper(agentId, command) {
       (out && out.ok === false
         ? `⚠️ The device rejected that command. Real output above — nothing was invented, and no configuration was sent.`
         : `Real output, read live. No configuration was sent.`));
+
+    // ONE clean command_share for this direct read: the exact CLI command the
+    // device ran, its real raw output, why it ran, and what it means. Emitted
+    // explicitly (not per HTTP hop) so the chat shows a single deduped engineer
+    // block — the real `show version`, not the four Command Runner API calls.
+    const rejected = out && out.ok === false;
+    session.emitCommandShare({
+      agent: agentId,
+      agentName: (ctx.agents[agentId] && ctx.agents[agentId].name) || agentId,
+      tier: null,
+      purpose: `read "${verdict.command}" on a live switch`,
+      command: verdict.command,
+      raw: out ? String(out.text) : body,
+      reasoning: `Operator asked: "${raw.slice(0, 100)}". Parsed to the read-only CLI "${verdict.command}" (guardrail passed) and ran it on ${target.hostname} via Catalyst Center Command Runner.`,
+      conclusion: rejected
+        ? `The device rejected "${verdict.command}" — real output above, nothing invented, no configuration sent.`
+        : `Real "${verdict.command}" output read live from ${target.hostname} (${target.ip}). Read-only; no configuration sent.`,
+      ok: !rejected,
+    });
   }, {
     // The permission record shows the REAL read-only CLI command the agent wants
     // to run, and cli:… re-checks it against the guardrail inside the gate.
@@ -366,7 +393,7 @@ async function configKeeper(agentId, command) {
     target: 'a reachable Catalyst Center switch (Command Runner)',
     reason: `operator asked: "${raw.slice(0, 80)}"`,
     cli: verdict.command,
-  });
+  }, false);
 }
 
 // Pull the actual CLI command out of plain English. People type
