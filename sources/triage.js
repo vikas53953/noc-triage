@@ -1178,13 +1178,20 @@ function diffRuns(prev, next) {
   const hypothesisChanged = !!(prev.hypothesis && next.hypothesis && prev.hypothesis.trim() !== next.hypothesis.trim())
     || (!prev.hypothesis !== !next.hypothesis);
 
-  const material = frontDeltas.some((d) => d.direction !== 'unchanged')
+  // A re-triage is "material" only when a HARD NUMBER moved — a front changed
+  // state, a fault was raised/cleared, WAN alarms shifted, or a config changed.
+  // A hypothesis re-word alone (Jarvis composing a fresh sentence over the SAME
+  // findings) is honest but is NOT a material change: counting it would flag a
+  // completely static estate as "changed" every re-run, which contradicts the
+  // spec's "foreground hard numbers, hypothesis-reword is secondary". It is still
+  // reported (hypothesisChanged is returned and shown), just not as the trigger.
+  const hardChange = frontDeltas.some((d) => d.direction !== 'unchanged')
     || (faultDiff && (faultDiff.new.length || faultDiff.cleared.length))
     || (wanDelta != null && wanDelta !== 0)
-    || configChanges.length > 0
-    || hypothesisChanged;
+    || configChanges.length > 0;
+  const material = hardChange;
 
-  return { frontDeltas, faultDiff, wanDelta, configChanges, hypothesisChanged, material };
+  return { frontDeltas, faultDiff, wanDelta, configChanges, hypothesisChanged, hardChange, material };
 }
 
 function diffCodes(prevCodes, nextCodes) {
@@ -1203,7 +1210,12 @@ function diffCodes(prevCodes, nextCodes) {
 function summarizeDelta(delta, prev, next) {
   if (!delta.material) {
     const since = prev.verdictAt ? ` since ${prev.verdictAt}` : ' since the last verdict';
-    return `No material change${since}: every connected front holds the same state and the same counts, no faults were raised or cleared, and the hypothesis did not move.`;
+    // Honest about the hypothesis: if the numbers held but Jarvis re-worded the
+    // hypothesis, say so plainly rather than claiming it "did not move".
+    const hypoNote = delta.hypothesisChanged
+      ? ' The hypothesis was re-worded, but no hard number moved behind it.'
+      : ' The hypothesis did not move.';
+    return `No material change${since}: every connected front holds the same state and the same counts, and no faults were raised or cleared.${hypoNote}`;
   }
   const bits = [];
   const moved = delta.frontDeltas.filter((d) => d.direction !== 'unchanged');
