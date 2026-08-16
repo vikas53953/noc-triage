@@ -89,7 +89,12 @@ If the request is not about the network this squad can see at all, return an emp
 delegation list and explain why in "note".
 
 First, in "intent", state in one or two plain sentences what the operator is actually
-asking for (the parsed intent). Then choose the delegations.
+asking for (the parsed intent). Then, in "symptom", extract the incident shape from the
+complaint: a TIME ANCHOR ("since 2pm" -> an ISO timestamp resolved against the current
+time you are given; null if none stated), a SCOPE (the fronts/sites the problem is IN —
+from campus, fabric, wan, incidents, firewall, loadbalancer, security — or named sites;
+null if not scoped), and the rawSymptom (the operator's own words for what is wrong).
+Then choose the delegations.
 
 Return ONLY the structured plan. Phrase each agent's question in plain, specific terms.`;
 
@@ -130,9 +135,19 @@ async function ask(question) {
       schema: {
         type: 'object',
         additionalProperties: false,
-        required: ['intent', 'delegations', 'note'],
+        required: ['intent', 'symptom', 'delegations', 'note'],
         properties: {
           intent: { type: 'string' },
+          symptom: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['timeAnchor', 'scope', 'rawSymptom'],
+            properties: {
+              timeAnchor: { type: ['string', 'null'] },
+              scope: { type: ['array', 'null'], items: { type: 'string' } },
+              rawSymptom: { type: 'string' },
+            },
+          },
           delegations: {
             type: 'array',
             items: {
@@ -153,7 +168,7 @@ async function ask(question) {
       system: PLAN_SYSTEM,
       messages: [{
         role: 'user',
-        content: `Squad roster (the only things that can see the network):\n${rosterText()}\n\nOperator request:\n"${q}"`,
+        content: `Current time (UTC, for resolving "since 2pm" style anchors): ${new Date().toISOString()}\n\nSquad roster (the only things that can see the network):\n${rosterText()}\n\nOperator request:\n"${q}"`,
       }],
       // Headroom above the JSON plan itself: on the current tiers adaptive
       // thinking shares this budget, so a tight cap could truncate the plan.
@@ -284,4 +299,214 @@ function reasoningError(q, err) {
   ctx.log(`[Jarvis] Reasoning error — ${msg}`);
 }
 
-module.exports = { init, ask, keyStatus };
+// ── Symptom extraction for a triage (gap 1) ─────────────────────────────────
+// A triage opens with just (severity, description). Before the bridge filters
+// evidence it needs the incident SHAPE: when did it start (timeAnchor) and where
+// is it (scope). This is the SAME real Claude reasoning the planner uses, run as
+// its own call so triage.js can await a structured result.
+//
+// Returns { timeAnchor: ISO|null, timeAnchorMs: number|null, scope: string[]|null,
+//           rawSymptom, note, source: 'claude'|'heuristic'|'none' }.
+// HONESTY: with no API key we do NOT invent an anchor with Claude — we fall back
+// to a small deterministic parse and label it source:'heuristic' so the bridge
+// says so out loud. If even that finds nothing, source:'none' and the bridge uses
+// a sensible recent default and says it did.
+const SYMPTOM_SYSTEM =
+`You extract the incident shape from a NOC operator's plain-words complaint.
+Return ONLY:
+- timeAnchor: an ISO-8601 timestamp for when the problem STARTED, resolved against the
+  current time you are given (e.g. "since 2pm" -> today at 14:00). null if none is stated.
+- scope: the array of fronts the problem is IN, chosen from exactly these keys —
+  campus, fabric, wan, incidents, firewall, loadbalancer, security — plus any named
+  sites. A front the operator says is FINE is NOT in scope. null if the complaint
+  names no scope. ("DC apps slow, campus fine" -> scope ["fabric","wan","incidents"],
+  campus excluded.)
+- rawSymptom: the operator's own words for what is wrong.
+Reason only about what is stated. Do not invent a time or a front that was not implied.`;
+
+async function extractSymptom(description) {
+  const desc = String(description || '').trim();
+  const base = { timeAnchor: null, timeAnchorMs: null, scope: null, rawSymptom: desc };
+
+  if (!claude.hasKey()) {
+    const h = heuristicSymptom(desc);
+    return { ...base, ...h, note: h.timeAnchor || h.scope
+      ? 'Parsed the complaint with a simple keyword pass (no API key for full reasoning).'
+      : 'No API key to reason about the complaint, and no obvious time/scope keywords — using a recent default window.',
+      source: h.timeAnchor || h.scope ? 'heuristic' : 'none' };
+  }
+
+  try {
+    const format = {
+      type: 'json_schema',
+      schema: {
+        type: 'object', additionalProperties: false,
+        required: ['timeAnchor', 'scope', 'rawSymptom'],
+        properties: {
+          timeAnchor: { type: ['string', 'null'] },
+          scope: { type: ['array', 'null'], items: { type: 'string' } },
+          rawSymptom: { type: 'string' },
+        },
+      },
+    };
+    const res = await claude.reason({
+      system: SYMPTOM_SYSTEM,
+      messages: [{ role: 'user', content:
+        `Current time (UTC): ${new Date().toISOString()}\n\nComplaint:\n"${desc}"` }],
+      maxTokens: 1500, effort: 'medium', format,
+    });
+    if (res.refused) { const h = heuristicSymptom(desc); return { ...base, ...h, note: 'Reasoning declined; used a keyword pass.', source: h.timeAnchor || h.scope ? 'heuristic' : 'none' }; }
+    const parsed = JSON.parse(res.text);
+    const ms = toMsSafe(parsed.timeAnchor);
+    const scope = Array.isArray(parsed.scope) && parsed.scope.length ? parsed.scope.map(String) : null;
+    return {
+      timeAnchor: parsed.timeAnchor || null,
+      timeAnchorMs: ms,
+      scope,
+      rawSymptom: parsed.rawSymptom || desc,
+      note: 'Extracted from the complaint by real reasoning.',
+      source: 'claude',
+    };
+  } catch (err) {
+    const h = heuristicSymptom(desc);
+    return { ...base, ...h, note: `Reasoning unavailable (${err && err.message ? err.message : 'error'}); used a keyword pass.`, source: h.timeAnchor || h.scope ? 'heuristic' : 'none' };
+  }
+}
+
+// Deterministic fallback: pull a clock time ("2pm", "14:00", "2:30pm") relative to
+// today, and a coarse scope from front keywords. Honest and clearly labelled.
+function heuristicSymptom(desc) {
+  const text = String(desc || '');
+  let timeAnchor = null, timeAnchorMs = null;
+  const m = /\b(?:since|from|around|at)?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i.exec(text);
+  if (m && /\b(since|from|around|at|pm|am|:)\b/i.test(text)) {
+    let hr = Number(m[1]); const min = m[2] ? Number(m[2]) : 0; const ap = (m[3] || '').toLowerCase();
+    if (ap === 'pm' && hr < 12) hr += 12;
+    if (ap === 'am' && hr === 12) hr = 0;
+    if (hr >= 0 && hr <= 23) {
+      const d = new Date();
+      d.setHours(hr, min, 0, 0);
+      if (d.getTime() > Date.now()) d.setDate(d.getDate() - 1); // "2pm" already passed today
+      timeAnchor = d.toISOString(); timeAnchorMs = d.getTime();
+    }
+  }
+  const scope = [];
+  const S = [
+    ['campus', /\b(campus|catalyst|switch|access|sw\d)\b/i],
+    ['fabric', /\b(fabric|aci|apic|leaf|spine|nexus|tenant|dc|data[\s-]?cent)\b/i],
+    ['wan', /\b(wan|sd-?wan|vmanage|overlay|vedge|circuit|branch)\b/i],
+    ['incidents', /\b(incident|fault|issue|outage)\b/i],
+    ['loadbalancer', /\b(load[\s-]?bal|f5|vip|pool|app|application|slow|latency)\b/i],
+    ['firewall', /\b(firewall|acl|vpn|tunnel|blocked|dropped)\b/i],
+    ['security', /\b(cve|breach|attack|threat|malware)\b/i],
+  ];
+  for (const [k, re] of S) if (re.test(text)) scope.push(k);
+  return { timeAnchor, timeAnchorMs, scope: scope.length ? scope : null };
+}
+
+function toMsSafe(ts) {
+  if (!ts) return null;
+  const ms = Date.parse(ts);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+// ── Blind-spot ranking by symptom relevance (gap 6) ─────────────────────────
+// For "DC apps slow" the load-balancer blind spot is the likely hiding place, not
+// a grey footer. This is a relevance HEURISTIC over the operator's own words — it
+// never states a network fact, so it fabricates nothing; it just says "check this
+// blind front FIRST for this symptom". Returns the blind spots with {risk, why},
+// high-risk first.
+const BLIND_RELEVANCE = {
+  loadbalancer: /\b(slow|latency|lag|app|apps|application|timeout|time[\s-]?out|degrad|perform|response|throughput|500|502|503|504|gateway|hang|unrespons)\b/i,
+  firewall: /\b(block|blocked|drop|dropped|deny|denied|reach|unreach|connection|connect|access|vpn|tunnel|ipsec|port|acl|reset|refused)\b/i,
+  security: /\b(breach|attack|attacked|cve|exploit|malware|threat|scan|scanning|intrusion|compromis|ddos|exfil|ransom|phish)\b/i,
+};
+
+function rankBlindSpots(blindSpots, symptomText) {
+  const text = String(symptomText || '');
+  const ranked = (blindSpots || []).map((b) => {
+    const re = BLIND_RELEVANCE[b.front];
+    const hit = re && re.test(text);
+    return {
+      front: b.front,
+      reason: b.reason,
+      risk: hit ? 'high' : 'low',
+      why: hit
+        ? `high-risk for this symptom — the "${b.front}" front can hide exactly this kind of problem, and it is a blind spot. Check it manually first.`
+        : `no direct match to this symptom, but still unmonitored — rule it out if the connected fronts come back clean.`,
+    };
+  });
+  // High-risk first, otherwise keep declared order.
+  return ranked.sort((a, b) => (a.risk === 'high' ? 0 : 1) - (b.risk === 'high' ? 0 : 1));
+}
+
+// ── Committed hypothesis for the L4 verdict (gap 7) ─────────────────────────
+// The synthesis Claude call turns the collected REAL findings into a ranked
+// hypothesis + a disambiguating if/then next check + confidence + why. Strictly
+// from the findings block passed in; honest & low-confidence when data is thin.
+// Returns { hypothesis, ranked:[{cause,likelihood}], ifThen, confidence, why } or
+// null when there is no key / the call fails — triage.js then keeps its honest
+// rule-built verdict rather than inventing one.
+const HYPOTHESIS_SYSTEM =
+`You are Jarvis, L4 / Principal Engineer, closing a live NOC triage bridge.
+You are given the REAL findings the bridge collected — in-window vs pre-existing fault
+counts, alarm groups (chronic vs new), per-front deltas vs baseline, a config-diff
+finding, ranked blind spots, and the operator's symptom (time window + scope).
+
+Commit to a diagnosis, using ONLY those findings:
+- hypothesis: the single most likely cause, in one plain sentence. If the data is thin
+  or every connected front is clean, say so honestly and point at the highest-risk blind
+  spot instead of inventing a fault.
+- ranked: the candidate causes in order, each with a short likelihood word (likely /
+  possible / unlikely).
+- ifThen: ONE disambiguating next check phrased as "check X — if clean, pivot to Y".
+- confidence: high / medium / low — low when the connected estate is clean or the
+  evidence is pre-window/out-of-scope.
+- why: one sentence grounding the call in the findings (e.g. "campus reads clean and the
+  fabric fault pre-dates the window").
+Never state a number or device that is not in the findings.`;
+
+async function synthesizeTriageVerdict(input) {
+  if (!claude.hasKey()) return null;
+  const { title, severity, symptom, findingsBlock } = input || {};
+  try {
+    const format = {
+      type: 'json_schema',
+      schema: {
+        type: 'object', additionalProperties: false,
+        required: ['hypothesis', 'ranked', 'ifThen', 'confidence', 'why'],
+        properties: {
+          hypothesis: { type: 'string' },
+          ranked: {
+            type: 'array',
+            items: {
+              type: 'object', additionalProperties: false,
+              required: ['cause', 'likelihood'],
+              properties: { cause: { type: 'string' }, likelihood: { type: 'string' } },
+            },
+          },
+          ifThen: { type: 'string' },
+          confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+          why: { type: 'string' },
+        },
+      },
+    };
+    const res = await claude.reason({
+      system: HYPOTHESIS_SYSTEM,
+      messages: [{ role: 'user', content:
+        `Triage: ${severity || ''} — "${title || ''}"\n` +
+        `Operator symptom: ${symptom && symptom.rawSymptom ? symptom.rawSymptom : '(none given)'}\n` +
+        `Incident window: ${symptom && symptom.timeAnchor ? `since ${symptom.timeAnchor}` : 'no explicit anchor (recent default)'}\n` +
+        `In-scope fronts: ${symptom && symptom.scope ? symptom.scope.join(', ') : 'not scoped'}\n\n` +
+        `Findings (your ONLY source of truth):\n${RULE}\n${findingsBlock || '(no findings collected)'}\n${RULE}\n\n` +
+        `Commit to a ranked hypothesis + if/then next check + confidence + why.` }],
+      maxTokens: 2500, effort: 'high', format,
+    });
+    if (res.refused) return null;
+    return JSON.parse(res.text);
+  } catch (err) {
+    return null;
+  }
+}
+
+module.exports = { init, ask, keyStatus, extractSymptom, rankBlindSpots, synthesizeTriageVerdict };
