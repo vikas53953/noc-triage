@@ -1954,7 +1954,16 @@ function renderVerdictCard(v){
   }
   $('verdictSub').textContent = v.verdict;
 }
-function scrollStream(){ var s = $('stream'); s.scrollTop = s.scrollHeight; }
+/* Find the nearest actually-scrollable ancestor (a set scrollTop on a non-
+   scrolling element is a silent no-op — the reason chat wasn't auto-scrolling). */
+function findScroller(from){
+  for(var n=from; n && n!==document.body; n=n.parentElement){
+    var o=getComputedStyle(n).overflowY;
+    if((o==='auto'||o==='scroll') && n.scrollHeight>n.clientHeight+2) return n;
+  }
+  return null;
+}
+function scrollStream(){ var s=$('stream'); if(!s) return; var sc=findScroller(s)||s; sc.scrollTop=sc.scrollHeight; }
 
 /* ============================================================
    RE-TRIAGE & DIFF + ServiceNow export (issue 11 — ops lifecycle)
@@ -2388,8 +2397,13 @@ function renderChat(d){
       '<span class="msg-time">'+escapeHtml(tsClock(d.timestamp))+'</span></div>'+
       '<div class="msg-text">'+escapeHtml(d.text)+'</div></div>';
   }
+  // Near-bottom-aware auto-scroll: always snap down on the user's own message;
+  // for incoming replies, only follow if they were already near the bottom (so
+  // scrolling up to read history isn't yanked away).
+  var sc0 = findScroller(host);
+  var nearBottom = !sc0 || (sc0.scrollHeight - sc0.scrollTop - sc0.clientHeight < 160);
   host.appendChild(el);
-  host.scrollTop = host.scrollHeight;
+  if(outgoing || nearBottom){ var sc = findScroller(host) || host; sc.scrollTop = sc.scrollHeight; }
 }
 
 /* Send a direct message to the selected agent (or an @mentioned one). */
