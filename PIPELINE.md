@@ -7,8 +7,10 @@ BL, investigating the issue with teams, handling tickets, or it could be anythin
 noc-soc operations."
 
 Existing product: the triage console (waves process, see HANDOFF.md). This pipeline covers the
-COPILOT expansion only. Three build agents are in flight on other features (CLI routing fix,
-Wave 4 correlation backend, SSH sidecar) — they land under the existing wave process, not here.
+COPILOT expansion only. Other features run in parallel under the existing wave process, not here —
+their live status is in HANDOFF.md ("IN FLIGHT / NEXT"), which is the source of truth for build
+state. (Wave 4 cross-domain correlation, listed here as in flight when this file was written, has
+since merged; the CLI routing fix and the SSH sidecar remain ahead.)
 
 ## Stage scoreboard
 
