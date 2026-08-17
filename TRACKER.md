@@ -33,7 +33,7 @@ Last updated: 2026-08-17 ~22:40 IST · driver: Fable session 7d4aaef3
 
 ## Build waves (copilot) — see docs/copilot-design.md
 - CW-1 desk + identity + capability honesty — MERGED + live 2026-08-17
-- CW-2 change engine + drift — BUILDING (UI PR #44 open; backend building)
+- CW-2 change engine + drift — BOTH HALVES BUILT (backend #45, UI #44), integrated review running. Finding: sandbox is observer-role, no write path — engine real, apply honestly frozen no-write-path.
 - CW-3 ticket queue · CW-4 Teams (needs webhook) · CW-5 SSH wiring · CW-6 ServiceNow (needs creds) — queued
 
 ## Open PRs / branches
