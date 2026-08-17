@@ -787,13 +787,23 @@ function runAgentAction(agentId, command) {
 
   updateAgentStatus(agentId, 'active', `Processing: ${command}`);
 
-  // Destructive intent is judged on the RAW request text, for EVERY agent —
-  // INCLUDING Jarvis. This runs BEFORE the Jarvis dispatch on purpose: routed to
-  // the reasoning model first, the only thing standing between "show version on
-  // sw1; reload" and the wire would be the model's own judgement, and a clause
-  // it silently drops is a request the operator never hears refused. A refusal
-  // is always spoken; nothing is ever quietly swapped for a different command.
-  const writeIntent = checkIntent(command);
+  // The deterministic write screen, judged on the RAW request text.
+  //
+  // WHO IT APPLIES TO is the whole subtlety. An engineer agent only ever does one
+  // thing with what you type — turn it into a read — so every request to one is
+  // screened, exactly as before. Jarvis is a CONVERSATION: incident prose is not
+  // a command, and STATE_CHANGING is full of ordinary English ("after the upgrade
+  // window", "set up a bridge", "clear picture", "copy the report"). Screening all
+  // of it refused the first sentence of a real outage report.
+  //
+  // So on the Jarvis surface the screen fires only for the DEVICE-CLI CLASS — a
+  // request that asks for a command to be run on a box, which is the only class
+  // that can end at the wire. "show version on sw1; reload" is that class and is
+  // still refused deterministically, before the model, on either route. Plain
+  // prose reaches the planner, where the choke point (executeDeviceCli) re-runs
+  // this same check on whatever is actually about to be executed.
+  const screenThis = agentId !== 'jarvis' || live.isDeviceCliRequest(command);
+  const writeIntent = screenThis ? checkIntent(command) : { destructive: false };
   if (writeIntent.destructive) {
     appendToActivityLog(`[${new Date().toISOString()}] [${agent.name}] Refused a state-changing request ("${writeIntent.keyword}") — "${command.slice(0, 60)}"\n`);
     return live.refuseWrite(agentId, command, writeIntent);
@@ -1593,6 +1603,10 @@ function getStanceBadge(stance) {
     case 'summary': return '📊 SUMMARY:';
     case 'evidence': return '📡 LIVE DATA:';
     case 'no-data': return '🔌 NO DATA:';
+    // Nothing reached the wire on these two, so they are NOT live data and are
+    // badged and counted apart from it.
+    case 'denied': return '🛑 DENIED — RAN NOTHING:';
+    case 'refused': return '🚫 NOT RUN:';
     default: return '';
   }
 }
@@ -1604,6 +1618,10 @@ function generateDebateSummary(thread) {
   const count = (s) => thread.messages.filter(m => m.stance === s).length;
   const evidence = count('evidence');
   const noData = count('no-data');
+  // A read the operator denied, or one the guardrail/device-resolution refused,
+  // touched no wire — counting it as a live reading would overstate the evidence
+  // base, and hiding it would understate what was attempted.
+  const blocked = count('denied') + count('refused');
   const agrees = count('agree');
   const refutes = count('refute');
   const alternatives = count('alternative');
@@ -1612,15 +1630,20 @@ function generateDebateSummary(thread) {
     .filter(m => m.stance === 'no-data')
     .map(m => m.agentName);
 
+  const blockedNote = blocked
+    ? ` ${blocked} read(s) ran nothing at all (denied at the permission gate, or refused before the wire) — those are not evidence.`
+    : '';
+
   let verdict;
-  if (evidence === 0 && noData === 0) {
+  if (evidence === 0 && noData === 0 && blocked === 0) {
     verdict = 'Nothing read yet.';
   } else if (evidence === 0) {
-    verdict = 'No live data at all behind this topic — every invited agent is unconnected or its source is down. There is nothing here to decide on.';
+    verdict = 'No live data at all behind this topic — every invited agent is unconnected, its source is down, ' +
+      'or its read never ran. There is nothing here to decide on.' + blockedNote;
   } else {
     verdict = `${evidence} agent(s) brought live readings; ${noData} had no source to read` +
       (silent.length ? ` (${silent.join(', ')})` : '') +
-      `. Weigh this only on the ${evidence} live reading(s) above — the rest is not evidence either way.`;
+      `. Weigh this only on the ${evidence} live reading(s) above — the rest is not evidence either way.` + blockedNote;
   }
 
   const opinions = (agrees + refutes + alternatives)
