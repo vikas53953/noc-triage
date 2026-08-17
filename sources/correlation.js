@@ -141,7 +141,15 @@ function clusterByTime(events) {
 
 // Collapse repeats so a 40-alarm burst reads as "interface-state-change ×40" and a
 // member list stays human-sized. Keeps the FIRST occurrence's real timestamp.
+//
+// CLASS RULE (review blocker 2): the display cap must NEVER decide which evidence
+// backs the claim. A cluster is only a correlation because several FRONTS took
+// part, so every front in it keeps at least one member row — the cap is applied
+// WITHIN fronts (round-robin), never across them. Without this, 20 distinct WAN
+// alarm types could push the single fabric fault out of the list and leave the UI
+// showing a "fabric" chip with no fabric evidence behind it.
 function condense(events) {
+  // 1. collapse identical front|type into one representative row (earliest ts).
   const byKey = new Map();
   for (const e of events) {
     const k = `${e.front}|${e.type}`;
@@ -150,13 +158,50 @@ function condense(events) {
     g._n += 1;
     if (e.ms < g.ms) { g.ms = e.ms; g.ts = e.ts; g.detail = e.detail; }
   }
-  return [...byKey.values()]
+  // 2. bucket the representatives per front, each bucket in time order.
+  const byFront = new Map();
+  for (const e of [...byKey.values()].sort((a, b) => a.ms - b.ms)) {
+    if (!byFront.has(e.front)) byFront.set(e.front, []);
+    byFront.get(e.front).push(e);
+  }
+  // 3. round-robin across fronts: every front gets its first row before any front
+  //    gets its second, so no front can ever be squeezed out by another's volume.
+  const fronts = [...byFront.keys()];
+  const picked = [];
+  for (let round = 0; picked.length < MAX_EVENTS_PER_CLUSTER; round += 1) {
+    let added = 0;
+    for (const f of fronts) {
+      const bucket = byFront.get(f);
+      if (round >= bucket.length) continue;
+      picked.push(bucket[round]);
+      added += 1;
+      if (picked.length >= MAX_EVENTS_PER_CLUSTER) break;
+    }
+    if (!added) break; // every bucket exhausted
+  }
+  return picked
     .sort((a, b) => a.ms - b.ms)
-    .slice(0, MAX_EVENTS_PER_CLUSTER)
     .map((e) => ({
       front: e.front, type: e.type, ts: e.ts,
       detail: e._n > 1 ? `${e.detail}  (×${e._n} in this window)` : e.detail,
     }));
+}
+
+// Shape a set of events into ONE contract cluster. `all` is the cluster's full
+// membership; `shown` is the portion this cluster is claiming (for the candidate
+// that is the IN-WINDOW portion only — see build()).
+function shapeCluster(shown, { inWindow, preWindowCount }) {
+  const startMs = Math.min(...shown.map((e) => e.ms));
+  const endMs = Math.max(...shown.map((e) => e.ms));
+  const fronts = [...new Set(shown.map((e) => e.front))];
+  return {
+    tsStart: iso(startMs), tsEnd: iso(endMs),
+    fronts, events: condense(shown),
+    strength: strengthOf(fronts.length, endMs - startMs),
+    // Extra fields; the pinned UI ignores what it doesn't know.
+    inWindow: !!inWindow,
+    preWindowEvents: preWindowCount || 0,
+  };
 }
 
 // How strongly a cluster co-occurs: more fronts and a tighter spread = stronger.
@@ -168,11 +213,33 @@ function strengthOf(frontCount, spreadMs) {
   return 'low';
 }
 
+// Elapsed, the way an operator says it: "4 minutes", "2h 31m".
 const human = (ms) => {
   const m = Math.round(ms / 60000);
   if (m <= 0) return 'the same minute';
-  return `${m} minute${m === 1 ? '' : 's'}`;
+  if (m < 60) return `${m} minute${m === 1 ? '' : 's'}`;
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  return r ? `${h}h ${r}m` : `${h}h`;
 };
+
+// The app's dual-clock convention, in words: "13:35 local · 08:05 UTC". The local
+// half is the OPERATOR's timezone (timezone law) — omitted, honestly, when the
+// bridge was opened without one rather than guessing the server's zone.
+function clock(ms, tz) {
+  const d = new Date(ms);
+  const utc = `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')} UTC`;
+  if (!tz) return utc;
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB',
+      { timeZone: tz, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(d);
+    const map = {};
+    parts.forEach((p) => { map[p.type] = p.value; });
+    return `${map.hour}:${map.minute} local · ${utc}`;
+  } catch (e) {
+    return utc;
+  }
+}
 
 // ── Step 3: the whole pass ───────────────────────────────────────────────────
 // triage: the live triage object (reads + configFindings). sym: the parsed symptom
@@ -203,6 +270,7 @@ function build(triage, sym) {
       note: `No timestamped events came back from the connected fronts, so no time correlation could be computed — nothing is being claimed.${undatedNote}` };
   }
 
+  const tz = (sym && sym.operatorTz) || null;
   const raw = clusterByTime(events);
   // Only multi-front clusters are correlations at all — one front bunching up is
   // just that front being busy.
@@ -215,68 +283,109 @@ function build(triage, sym) {
         ...c, fronts,
         spreadMs: c.tsEndMs - c.tsStartMs,
         inWindow: inWindowFronts.length >= 2,     // ≥2 fronts co-occurring INSIDE the window
+        inWindowEvents, inWindowFronts,
         inWindowCount: inWindowEvents.length,
       };
     })
     .filter((c) => c.fronts.length >= 2);
 
-  const shaped = multi
-    .slice()
-    .sort((a, b) => (b.fronts.length - a.fronts.length)
-      || (b.inWindowCount - a.inWindowCount)
-      || (a.spreadMs - b.spreadMs)
-      || (b.tsStartMs - a.tsStartMs))
-    .slice(0, MAX_CLUSTERS)
-    .map((c) => ({
-      tsStart: iso(c.tsStartMs), tsEnd: iso(c.tsEndMs),
-      fronts: c.fronts, events: condense(c.events),
-      strength: strengthOf(c.fronts.length, c.spreadMs),
-      inWindow: c.inWindow,                       // extra field; the UI ignores it
-    }));
-
   const totalFronts = [...new Set(events.map((e) => e.front))];
 
   if (!multi.length) {
-    return { clusters: [], topCandidate: null,
+    return finish({ clusters: [], topCandidate: null,
       note: `No cross-front correlation: ${events.length} timestamped event${events.length === 1 ? '' : 's'} across ` +
         `${totalFronts.length} front${totalFronts.length === 1 ? '' : 's'} (${totalFronts.join(', ')}), but none from different fronts ` +
-        `land within ${Math.round(WINDOW_MS / 60000)} minutes of each other. They look independent — no single root cause is claimed.${undatedNote}` };
+        `land within ${Math.round(WINDOW_MS / 60000)} minutes of each other. They look independent — no single root cause is claimed.${undatedNote}` });
   }
+
+  // Context ordering for the non-candidate clusters: in-window first, then most
+  // fronts, then tightest, then most recent.
+  const byContext = (a, b) => (Number(b.inWindow) - Number(a.inWindow))
+    || (b.fronts.length - a.fronts.length)
+    || (b.inWindowCount - a.inWindowCount)
+    || (a.spreadMs - b.spreadMs)
+    || (b.tsStartMs - a.tsStartMs);
 
   // The candidate must co-occur INSIDE the window. Everything else is chronic.
   const candidates = multi.filter((c) => c.inWindow);
   if (!candidates.length) {
-    const best = shaped[0];
-    return { clusters: shaped, topCandidate: null,
-      note: `Events do co-occur (${best.fronts.join(' + ')} within ${human(Date.parse(best.tsEnd) - Date.parse(best.tsStart))} around ` +
-        `${best.tsStart}), but that cluster PRE-DATES ${windowWord} — chronic, standing noise, not the trigger for this symptom. ` +
-        `No root-cause candidate is claimed.${undatedNote}` };
+    const ordered = multi.slice().sort(byContext);
+    const best = ordered[0];
+    return finish({
+      clusters: ordered.slice(0, MAX_CLUSTERS).map((c) => shapeCluster(c.events, { inWindow: false, preWindowCount: 0 })),
+      topCandidate: null,
+      note: `Events do co-occur (${best.fronts.join(' + ')} within ${human(best.spreadMs)} around ` +
+        `${clock(best.tsStartMs, tz)}), but that cluster PRE-DATES ${windowWord} — chronic, standing noise, not the trigger for this symptom. ` +
+        `No root-cause candidate is claimed.${undatedNote}` });
   }
 
-  const winner = candidates.slice().sort((a, b) => (b.fronts.length - a.fronts.length)
+  // ── Pick the winner FIRST, from the in-window portion only ──────────────────
+  // Class rule (review blockers 1 + 3): the candidate's evidence is never decided
+  // by a display cap, and never includes events from outside the window it claims.
+  // Rank on the IN-WINDOW portion; shape that portion; put it at clusters[0]
+  // unconditionally; only then fill the remaining display slots with context.
+  const winner = candidates.slice().sort((a, b) => (b.inWindowFronts.length - a.inWindowFronts.length)
     || (b.inWindowCount - a.inWindowCount)
-    || (a.spreadMs - b.spreadMs)
+    || (inSpread(a) - inSpread(b))
     || (b.tsStartMs - a.tsStartMs))[0];
 
-  // Per-front counts, straight from the real events — this is the sentence's spine.
-  const perFront = winner.fronts.map((f) => {
-    const n = winner.events.filter((e) => e.front === f).length;
+  const inEvents = winner.inWindowEvents;
+  const inFronts = winner.inWindowFronts;
+  const inStartMs = Math.min(...inEvents.map((e) => e.ms));
+  const inSpreadMs = inSpread(winner);
+  const preCount = winner.events.length - inEvents.length;
+
+  const winnerShaped = shapeCluster(inEvents, { inWindow: true, preWindowCount: preCount });
+  const rest = multi.filter((c) => c !== winner).sort(byContext)
+    .slice(0, MAX_CLUSTERS - 1)
+    .map((c) => shapeCluster(c.events, { inWindow: c.inWindow, preWindowCount: 0 }));
+  const clusters = [winnerShaped, ...rest];
+
+  // Per-front counts, straight from the real IN-WINDOW events — the sentence's spine.
+  const perFront = inFronts.map((f) => {
+    const n = inEvents.filter((e) => e.front === f).length;
     return `${n} ${f} event${n === 1 ? '' : 's'}`;
   }).join(', ');
-  const spreadTxt = winner.spreadMs === 0 ? 'the same moment' : `${human(winner.spreadMs)} of each other`;
-  const summary = `${perFront} all started within ${spreadTxt}, at ~${iso(winner.tsStartMs)} — inside ${windowWord}. ` +
-    `Ranked as ONE cross-domain event across ${winner.fronts.join(' + ')}, not ${winner.fronts.length} separate problems.`;
+  const spreadTxt = inSpreadMs === 0 ? 'the same moment' : `${human(inSpreadMs)} of each other`;
+  const preNote = preCount
+    ? preCount === 1
+      ? ' (1 further event in this cluster PRE-DATES the window and is excluded from the candidate)'
+      : ` (${preCount} further events in this cluster PRE-DATE the window and are excluded from the candidate)`
+    : '';
+  const summary = `${perFront} all started within ${spreadTxt}, at ~${clock(inStartMs, tz)} — inside ${windowWord}. ` +
+    `Ranked as ONE cross-domain event across ${inFronts.join(' + ')}, not ${inFronts.length} separate problems.${preNote}`;
 
-  // Make sure the cluster the UI matches to the candidate is the winner (the UI
-  // picks by tsStart..tsEnd containment first, and our ts is the cluster start).
-  const winnerShaped = shaped.find((c) => c.tsStart === iso(winner.tsStartMs) && c.tsEnd === iso(winner.tsEndMs));
-  const clusters = winnerShaped ? [winnerShaped, ...shaped.filter((c) => c !== winnerShaped)] : shaped;
-
-  return {
+  return finish({
     clusters,
-    topCandidate: { ts: iso(winner.tsStartMs), fronts: winner.fronts, summary, narrated: false },
-    note: `Correlated: ${winner.fronts.join(' + ')} co-occur within ${Math.round(WINDOW_MS / 60000)} minutes inside ${windowWord}.`,
-  };
+    topCandidate: { ts: iso(inStartMs), fronts: inFronts, summary, narrated: false },
+    note: `Correlated: ${inFronts.join(' + ')} co-occur within ${human(WINDOW_MS)} inside ${windowWord}.`,
+  });
 }
 
-module.exports = { correlate, collectEvents, clusterByTime, WINDOW_MS };
+// Spread of a cluster's IN-WINDOW portion (0 when it has fewer than 2 members).
+function inSpread(c) {
+  const ms = c.inWindowEvents.map((e) => e.ms);
+  return ms.length ? Math.max(...ms) - Math.min(...ms) : 0;
+}
+
+// Last gate before anything leaves this module: the note and the candidate summary
+// go through the shared secret scrubber too (not just the per-event details) — a
+// real alarm message can carry a credential, and these strings reach the record,
+// the docs and the browser.
+function finish(out) {
+  if (out.note) out.note = scrub(out.note);
+  if (out.topCandidate && out.topCandidate.summary) out.topCandidate.summary = scrub(out.topCandidate.summary);
+  return out;
+}
+
+// Apply an LLM narration to a finding this module already made. The narration is
+// scrubbed the same way the deterministic sentence is; the finding (fronts, ts,
+// clusters, note) is never touched. Returns true when a narration was applied.
+function applyNarration(corr, text) {
+  if (!corr || !corr.topCandidate || !text) return false;
+  corr.topCandidate.summary = scrub(String(text));
+  corr.topCandidate.narrated = true;
+  return true;
+}
+
+module.exports = { correlate, applyNarration, collectEvents, clusterByTime, condense, clock, human, WINDOW_MS };

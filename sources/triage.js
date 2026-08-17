@@ -981,10 +981,15 @@ async function runL4(triage, sym) {
       cluster: (corr.clusters || [])[0] || null,
       symptom: sym,
     }).catch(() => null);
-    if (narration) { corr.topCandidate.summary = narration; corr.topCandidate.narrated = true; }
+    // Applied through the module so the narration is secret-scrubbed exactly like
+    // the deterministic sentence — and so it can only ever replace the SENTENCE,
+    // never the finding (fronts / ts / clusters / note).
+    correlation.applyNarration(corr, narration);
     post(triage, {
       agent, tier: 'L4', round: 2,
-      text: `🔗 Cross-domain correlation — ${corr.topCandidate.fronts.join(' + ')} all started ~${corr.topCandidate.ts}: ` +
+      // Dual clock (operator tz · UTC), the same convention as every other card.
+      text: `🔗 Cross-domain correlation — ${corr.topCandidate.fronts.join(' + ')} all started ~` +
+        `${correlation.clock(Date.parse(corr.topCandidate.ts), sym && sym.operatorTz)}: ` +
         `${corr.topCandidate.summary}`,
     });
   } else if (corr) {
@@ -1892,6 +1897,9 @@ function getTriage(id) {
     rankedBlindSpots: t.rankedBlindSpots || null,
     configFindings: t.configFindings || [],
     cadence: t.cadence ? t.cadence.label : null,
+    // Wave 4 — the correlation pass, also at the top level so the UI's restore
+    // fallback (verdict.correlation ?? record.correlation) is live, not dead code.
+    correlation: t.correlation || null,
   };
 }
 
