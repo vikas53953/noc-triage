@@ -331,7 +331,10 @@ pre.cli{
 }
 .ev{
   border:1px solid var(--line);border-radius:11px;background:var(--card);overflow:hidden;
-  transition:border-color .3s,box-shadow .3s,transform .2s
+  /* A readout, not a control: no hover lift, default cursor — the card body is
+     never clickable. Real actions live in .ev-actions buttons (Retry / View). */
+  cursor:default;
+  transition:border-color .3s,box-shadow .3s
 }
 .ev-head{display:flex;align-items:center;gap:.45rem;padding:.55rem .65rem;border-bottom:1px solid var(--line-soft)}
 .ev-ico{font-size:.95rem}
@@ -1434,6 +1437,12 @@ function fmtUTCHM(d){ return pad2(d.getUTCHours())+':'+pad2(d.getUTCMinutes()); 
 /* Class-wide label used at every timestamp sink (chat, activity, records, scope). */
 function tsClock(ts){ var d = tsParse(ts); return fmtLocalHM(d)+' local · '+fmtUTCHM(d)+' UTC'; }
 function nowClock(){ return tsClock(); }
+/* Operator's IANA timezone (e.g. "Asia/Kolkata"), sent with a triage so the
+   backend reads "since 2pm" as 2pm LOCAL. Falls back to UTC if unavailable. */
+function operatorTz(){
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; }
+  catch(e){ return 'UTC'; }
+}
 /* Header clock keeps ticking seconds on local, UTC to the minute — same dual label. */
 function headerClock(){
   var d = new Date();
@@ -1686,7 +1695,9 @@ $('startBtn').onclick = function(){
   $('modalErr').classList.remove('on');
   fetch('/api/triage', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ severity: sev, description: desc })
+    // operatorTz lets the backend anchor absolute clock times ("since 2pm") in
+    // the operator's LOCAL zone, not UTC. IANA name from the browser.
+    body: JSON.stringify({ severity: sev, description: desc, operatorTz: operatorTz() })
   }).then(function(r){
     return r.json().then(function(body){ return {ok:r.ok, status:r.status, body:body}; });
   }).then(function(res){
