@@ -96,6 +96,27 @@ const CONFIG_MAX = Number(process.env.TRIAGE_CONFIG_MAX || 4);
 // legitimately slow config read.
 const CONFIG_READ_TIMEOUT_MS = Number(process.env.TRIAGE_CONFIG_TIMEOUT_MS || 120000);
 
+// ── SLA targets per severity (one config constant, easy to change) ───────────
+// Time-to-verdict budget per severity. The UI counts down against sla.targetMs
+// locally; the bridge computes the real breach on close from the verdict time.
+// P1 tight, P3 relaxed — change these numbers to re-tune every SLA at once.
+const SLA_TARGET_MS = {
+  P1: 15 * 60 * 1000, // 15 minutes
+  P2: 30 * 60 * 1000, // 30 minutes
+  P3: 60 * 60 * 1000, // 60 minutes
+};
+function slaTargetFor(severity) {
+  return SLA_TARGET_MS[String(severity || '').toUpperCase()] || SLA_TARGET_MS.P3;
+}
+
+// Accept only our real id shapes — a defensive path-safety guard so a weird or
+// path-y id can never be used as a lookup key. trg-… (internal) or the
+// operator-facing INC-YYYYMMDD-NNN. resolveTriage is an in-memory Map lookup
+// (it never touches the filesystem), but we still reject a malformed id early.
+function idLooksValid(id) {
+  return /^(trg-[a-z0-9._-]+|INC-\d{8}-\d+)$/i.test(String(id || ''));
+}
+
 // Resolve a promise, or a { __timeout:true } sentinel if it outruns `ms`. Never
 // rejects — a thrown reader surfaces as { __error }. This is the mechanism that
 // makes a P1 front read give up early instead of blocking the parallel sweep.
@@ -903,7 +924,14 @@ async function runL4(triage, sym) {
 
   triage.status = 'closed';
   triage.closedAt = now();
-  emit('triage_closed', triage.id, { incidentId: triage.incidentId || null, mttr: mttrOf(triage) });
+  // Wave 1 — settle the SLA breach (from the verdict time) and the lifecycle
+  // roll-up now, before the record is persisted in runBridge's finally.
+  finalizeSla(triage);
+  triage.lifecycle = buildLifecycle(triage);
+  emit('triage_closed', triage.id, {
+    incidentId: triage.incidentId || null, mttr: mttrOf(triage),
+    sla: triage.sla, lifecycle: triage.lifecycle,
+  });
   progress(triage, 'L4', 'done');
   // Human-facing activity line: label the elapsed value "Time to verdict" — it is
   // opened→verdict (time to diagnose), not full MTTR. The mttr payload/field stays.
@@ -1060,6 +1088,89 @@ function mttrOf(triage) {
     mttrMs: mttrMs != null ? Math.max(0, mttrMs) : null,
     mttrHuman: mttrMs != null ? humanizeMs(mttrMs) : (running ? 'running' : 'unknown'),
   };
+}
+
+// ── SLA breach + lifecycle roll-up (wave 1) ──────────────────────────────────
+// On close, settle the SLA from REAL timestamps: breachAt is openedAt+targetMs
+// (the deadline), and breached is true only when the time to VERDICT (the moment
+// Jarvis committed a ruling) exceeded the target. Falls back to closedAt if the
+// bridge closed with no verdict. Never fabricated — a missing timestamp → null.
+function finalizeSla(triage) {
+  if (!triage.sla) triage.sla = { targetMs: slaTargetFor(triage.severity), openedAt: triage.openedAt };
+  const openedMs = triage.openedAt ? Date.parse(triage.openedAt) : NaN;
+  const targetMs = triage.sla.targetMs;
+  triage.sla.breachAt = Number.isFinite(openedMs) ? new Date(openedMs + targetMs).toISOString() : null;
+  const verdictMs = triage.verdictAt ? Date.parse(triage.verdictAt) : NaN;
+  const closedMs = triage.closedAt ? Date.parse(triage.closedAt) : NaN;
+  const stopMs = Number.isFinite(verdictMs) ? verdictMs : closedMs;
+  triage.sla.breached = (Number.isFinite(openedMs) && Number.isFinite(stopMs))
+    ? (stopMs - openedMs) > targetMs
+    : null;
+  return triage.sla;
+}
+
+// The post-incident lifecycle roll-up: the four real timestamps plus the three
+// human elapsed strings — MTTA (acknowledge time), Time to verdict (open→verdict,
+// unchanged wording), and Total (open→close). A stage that never happened (no
+// acknowledge, no verdict) is labelled honestly, never zeroed.
+function buildLifecycle(triage) {
+  const openedMs = triage.openedAt ? Date.parse(triage.openedAt) : NaN;
+  const ackMs = triage.ackAt ? Date.parse(triage.ackAt) : NaN;
+  const verdictMs = triage.verdictAt ? Date.parse(triage.verdictAt) : NaN;
+  const closedMs = triage.closedAt ? Date.parse(triage.closedAt) : NaN;
+  const span = (a, b) => (Number.isFinite(a) && Number.isFinite(b) ? humanizeMs(b - a) : null);
+  return {
+    openedAt: triage.openedAt || null,
+    ackAt: triage.ackAt || null,
+    verdictAt: triage.verdictAt || null,
+    closedAt: triage.closedAt || null,
+    mttaHuman: span(openedMs, ackMs) || 'not acknowledged',
+    timeToVerdictHuman: span(openedMs, verdictMs) || 'unknown',
+    totalHuman: span(openedMs, closedMs) || 'unknown',
+  };
+}
+
+// ── Bridge roles (wave 1) ─────────────────────────────────────────────────────
+// Set any provided role fields on the triage (operator-entered strings — no auth
+// yet), then broadcast the whole roles object. Accepts trg-… or INC-… ids.
+function setRoles(idOrIncident, rolesInput) {
+  if (!idLooksValid(idOrIncident)) return { error: 'not_found', reason: 'No such triage.' };
+  const t = resolveTriage(idOrIncident);
+  if (!t) return { error: 'not_found', reason: 'No such triage.' };
+  const r = rolesInput || {};
+  const clean = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, 200);
+  if (!t.roles) t.roles = { commander: '', scribe: '', joiners: [], owner: '' };
+  if (r.commander !== undefined) t.roles.commander = clean(r.commander);
+  if (r.scribe !== undefined) t.roles.scribe = clean(r.scribe);
+  if (r.owner !== undefined) t.roles.owner = clean(r.owner);
+  if (r.joiners !== undefined) {
+    const arr = Array.isArray(r.joiners) ? r.joiners : String(r.joiners).split(',');
+    t.roles.joiners = arr.map(clean).filter(Boolean).slice(0, 50);
+  }
+  emit('triage_roles', t.id, { roles: t.roles });
+  log(`[Triage ${t.id}] roles set — commander:${t.roles.commander || '—'} · scribe:${t.roles.scribe || '—'} · ` +
+    `owner:${t.roles.owner || '—'} · joiners:${t.roles.joiners.join('/') || '—'}`);
+  return { ok: true, triageId: t.id, roles: t.roles };
+}
+
+// ── Acknowledge / MTTA (wave 1) ───────────────────────────────────────────────
+// Stamp ackAt ONCE (idempotent) and compute the mean-time-to-acknowledge from the
+// real openedAt. Broadcast triage_ack. A second call returns the existing stamp
+// unchanged. Accepts trg-… or INC-… ids.
+function acknowledge(idOrIncident) {
+  if (!idLooksValid(idOrIncident)) return { error: 'not_found', reason: 'No such triage.' };
+  const t = resolveTriage(idOrIncident);
+  if (!t) return { error: 'not_found', reason: 'No such triage.' };
+  if (t.ackAt) {
+    return { ok: true, triageId: t.id, ackAt: t.ackAt, mttaMs: t.mttaMs, already: true };
+  }
+  t.ackAt = now();
+  const openedMs = t.openedAt ? Date.parse(t.openedAt) : NaN;
+  const ackMs = Date.parse(t.ackAt);
+  t.mttaMs = (Number.isFinite(openedMs) && Number.isFinite(ackMs)) ? Math.max(0, ackMs - openedMs) : null;
+  emit('triage_ack', t.id, { ackAt: t.ackAt, mttaMs: t.mttaMs });
+  log(`[Triage ${t.id}] acknowledged — MTTA ${t.mttaMs != null ? humanizeMs(t.mttaMs) : 'unknown'}`);
+  return { ok: true, triageId: t.id, ackAt: t.ackAt, mttaMs: t.mttaMs };
 }
 
 // ── Real affected CIs (issue 11 / ServiceNow) ────────────────────────────────
@@ -1409,6 +1520,14 @@ function buildTriage(severity, description, opts = {}) {
     openedAt,
     closedAt: null,
     verdictAt: null,           // MTTR stop-clock, stamped when Jarvis commits
+    // ── Bridge roles (wave 1) — operator-entered strings, no auth yet ──
+    roles: { commander: '', scribe: '', joiners: [], owner: '' },
+    // ── Acknowledge / MTTA (wave 1) — stamped once by the ack action ──
+    ackAt: null,               // ISO of the first operator acknowledge
+    mttaMs: null,              // ackAt − openedAt (mean time to acknowledge)
+    // ── SLA clock (wave 1) — per-severity target; breach computed on close ──
+    sla: { targetMs: slaTargetFor(sev), openedAt, breachAt: null, breached: null },
+    lifecycle: null,           // open→ack→verdict→close roll-up, built on close
     staffed,
     blindSpots: BLIND_SPOTS,
     fronts: FRONTS,
@@ -1465,6 +1584,10 @@ function emitOpened(triage) {
     staffed: triage.staffed,
     blindSpots: BLIND_SPOTS,
     fronts: FRONTS,
+    // Wave 1 — the bridge roles (empty until the operator sets them) and the
+    // per-severity SLA target so the UI can count down locally from openedAt.
+    roles: triage.roles,
+    sla: { targetMs: triage.sla.targetMs, openedAt: triage.sla.openedAt },
   });
   // Blind cards go out immediately — they are known before any read.
   BLIND_FRONTS.forEach((front) =>
@@ -1520,6 +1643,13 @@ function getTriage(id) {
     status: t.status,
     openedAt: t.openedAt,
     closedAt: t.closedAt,
+    // Wave 1 — roles, acknowledge/MTTA, SLA clock + lifecycle roll-up, so a
+    // refresh/reconnect restores them exactly (FE ignores what it doesn't use).
+    roles: t.roles || { commander: '', scribe: '', joiners: [], owner: '' },
+    ackAt: t.ackAt || null,
+    mttaMs: t.mttaMs != null ? t.mttaMs : null,
+    sla: t.sla || null,
+    lifecycle: t.lifecycle || null,
     staffed: t.staffed,
     blindSpots: t.blindSpots,
     fronts: t.fronts,
@@ -1633,6 +1763,8 @@ module.exports = {
   getTriage,
   listTriages,
   postOperatorMessage,
+  setRoles,
+  acknowledge,
   retryFront,
   retriage,
   isNetworkSubject,
