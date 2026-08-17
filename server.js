@@ -1949,7 +1949,12 @@ app.post('/api/triage/:id/message', (req, res) => {
 // pure in-memory lookup (resolveTriage) and is shape-validated (trg-/INC- only),
 // so it never reaches the filesystem. Accepts either the trg- id or the INC- id.
 app.post('/api/triage/:id/roles', (req, res) => {
-  const { commander, scribe, joiners, owner } = req.body || {};
+  const b = req.body || {};
+  // Accept both key spellings so the UI (incidentCommander/currentOwner) and the
+  // canonical model (commander/owner) round-trip cleanly.
+  const commander = b.commander !== undefined ? b.commander : b.incidentCommander;
+  const owner = b.owner !== undefined ? b.owner : b.currentOwner;
+  const { scribe, joiners } = b;
   const result = triage.setRoles(req.params.id, { commander, scribe, joiners, owner });
   if (result.error) {
     const code = result.error === 'not_found' ? 404 : 422;
