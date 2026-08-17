@@ -1,6 +1,11 @@
 node_modules/
 npm-debug.log*
 
+# Python venv for the SSH sidecar (sources/ssh_sidecar.py)
+.venv/
+__pycache__/
+*.pyc
+
 # Credentials — never commit real values. .env.local is covered by .env.*
 .env
 .env.*
