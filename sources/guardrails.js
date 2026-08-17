@@ -21,7 +21,31 @@ const READ_VERBS = ['show', 'ping', 'traceroute', 'dir', 'more'];
 
 // Chaining / redirection characters. These are how a read command gets turned
 // into a write, so they are refused wherever they appear in a device command.
-const CHAIN_CHARS = /[;&|><`$\n\r]/;
+//
+// The LIST is the single source of truth and the regex is BUILT from it, so a
+// character can never be in one and not the other. The SSH sidecar mirrors this
+// list and the parity test compares against this exported array — not a copy of
+// it typed into the test, which is how a dropped character slipped through
+// before while the suite still reported green.
+const CHAIN_CHAR_LIST = [';', '&', '|', '>', '<', '`', '$', '\n', '\r'];
+const CHAIN_CHARS = new RegExp(
+  `[${CHAIN_CHAR_LIST.map((c) => c.replace(/[.*+?^${}()|[\]\\\-]/g, '\\$&')).join('')}]`
+);
+
+// Charset ALLOWLIST — printable ASCII only (space .. tilde).
+//
+// The chain-char list above is a blacklist: it only blocks characters we
+// thought of. Control and exotic-Unicode characters (NUL, ESC, VTAB, FORMFEED,
+// BACKSPACE, NEL \x85, U+2028/U+2029 line separators) sailed straight past it
+// and would have been written into the SSH channel. Rather than grow the
+// blacklist one discovered character at a time, the charset is now allowlisted:
+// anything outside printable ASCII is refused. Every real show-class command is
+// printable ASCII, so nothing legitimate is lost and the unknown-unknowns close.
+const PRINTABLE_ASCII_MIN = 0x20;
+const PRINTABLE_ASCII_MAX = 0x7e;
+const PRINTABLE_ASCII = new RegExp(
+  `^[\\u${PRINTABLE_ASCII_MIN.toString(16).padStart(4, '0')}-\\u${PRINTABLE_ASCII_MAX.toString(16).padStart(4, '0')}]+$`
+);
 
 // Verbs that change device state. These block only when they are the COMMAND
 // INTENT — the first real word of the request or of a chained clause — never
@@ -57,6 +81,15 @@ const FILLER = new Set([
 function checkCommand(command) {
   const cmd = String(command || '').trim();
   if (!cmd) return { allowed: false, reason: 'Empty command — nothing to run.' };
+
+  // Charset allowlist runs FIRST — a control character is refused before any
+  // other rule gets a chance to normalise it away.
+  if (!PRINTABLE_ASCII.test(cmd)) {
+    return {
+      allowed: false,
+      reason: 'Blocked: that command contains characters outside printable ASCII (control or exotic Unicode). Only plain printable text is allowed.',
+    };
+  }
 
   if (CHAIN_CHARS.test(cmd)) {
     return {
@@ -140,4 +173,12 @@ function assertReadOnly(command) {
   return verdict.command;
 }
 
-module.exports = { checkCommand, checkIntent, assertReadOnly, commandWord, READ_VERBS, STATE_CHANGING };
+module.exports = {
+  checkCommand, checkIntent, assertReadOnly, commandWord,
+  READ_VERBS, STATE_CHANGING,
+  // Exported so the SSH sidecar's mirrored rules can be parity-checked against
+  // these (sources/ssh-runner.smoke.js). Drift between the two layers must fail
+  // a test, not sit silently until someone tightens one side only.
+  PRINTABLE_ASCII, PRINTABLE_ASCII_MIN, PRINTABLE_ASCII_MAX,
+  CHAIN_CHARS, CHAIN_CHAR_LIST,
+};
