@@ -22,6 +22,7 @@ const chatStore = require('./sources/chat-store');
 const approvals = require('./sources/approvals');
 const artifacts = require('./sources/artifacts');
 const notifier = require('./sources/notifier');
+const capabilities = require('./sources/capabilities');
 const { checkIntent } = require('./sources/guardrails');
 
 // One module owns where the workspace is and how any caller-supplied path is
@@ -201,6 +202,98 @@ app.use('/api/', readLimit);
 app.use('/api/', (req, res, next) => (req.method === 'GET' ? next() : writeLimit(req, res, next)));
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ── CW-1: operator identity + capability honesty ────────────────────────────
+// (One contiguous block: a name-tag middleware and one read-only route. Nothing
+// else in this file changes shape, so this lifts out cleanly if it ever must.)
+//
+// Plain words: the desk asks the operator for their name once and sends it on
+// every request as the header `X-Operator-Name`. This middleware turns that
+// header into `req.operator`, and runs the rest of the request inside an
+// operator context so anything the request triggers — even work that finishes in
+// a later timer — knows who asked for it. No auth in v1 (Gate-1 decision): it is
+// a name tag, not a login.
+//
+// THE GATE: a state-changing call from the COPILOT SURFACE with no name is
+// refused with 428 "Tell me your name first." — every copilot action must be
+// attributable. Read-only GETs always pass, and the classic console
+// (public/index.html) is deliberately NOT part of the copilot surface, so every
+// existing route behaves EXACTLY as before for it. The surface is:
+//   • anything under /api/copilot/ (where CW-2+ capabilities land), or
+//   • a request whose Referer is the desk page (public/desk.html) — the browser
+//     sets Referer itself, so the classic console can never be mistaken for it.
+
+// A name is a name: keep printable ASCII only, collapse whitespace, cap at 64.
+// Anything else (control characters, tags, an over-long paste) is stripped
+// before the name can reach a log line, a record or the browser.
+function scrubOperatorName(raw) {
+  if (raw == null) return null;
+  const cleaned = String(raw)
+    .replace(/[^\x20-\x7E]/g, '')   // printable ASCII only
+    .replace(/[<>]/g, '')           // never let a tag start in a name
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 64);
+  return cleaned || null;
+}
+
+function isCopilotSurface(req) {
+  if (String(req.path || '').startsWith('/api/copilot/')) return true;
+  const ref = req.headers.referer || req.headers.referrer || '';
+  if (!ref) return false;
+  try {
+    return /^\/desk(?:\.html)?$/.test(new URL(String(ref)).pathname);
+  } catch (e) {
+    return false;
+  }
+}
+
+const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+app.use((req, res, next) => {
+  req.operator = scrubOperatorName(req.headers['x-operator-name']);
+
+  const stateChanging = !READ_ONLY_METHODS.has(req.method);
+  const copilot = isCopilotSurface(req);
+
+  if (stateChanging && copilot && !req.operator) {
+    session.audit({
+      who: 'unknown',
+      what: `${req.method} ${req.path}`,
+      result: 'refused (428) — no operator name on a copilot action',
+    });
+    return res.status(428).json({ error: 'Tell me your name first.' });
+  }
+
+  // Every copilot-surface action is audited at THIS boundary — one place, so no
+  // future route can forget to log itself. The result is the real outcome.
+  if (stateChanging && copilot) {
+    const device = (req.body && (req.body.device || req.body.hostname || req.body.deviceName)) || null;
+    res.on('finish', () => {
+      session.audit({
+        who: req.operator,
+        what: `${req.method} ${req.path}`,
+        device: device ? String(device) : undefined,
+        result: `HTTP ${res.statusCode}`,
+      });
+    });
+  }
+
+  session.runAsOperator(req.operator, next);
+});
+
+// What Jarvis can actually do — straight from the single source of truth
+// (sources/capabilities.js). Anything not available carries a plain-words reason.
+app.get('/api/capabilities', (req, res) => {
+  res.json({ abilities: capabilities.list() });
+});
+
+// The copilot audit trail: who did what, on which device, with what result.
+app.get('/api/copilot/audit', (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 100, 500);
+  res.json({ entries: session.auditAll({ limit }), file: session.AUDIT_FILE });
+});
+// ── end CW-1 block ──────────────────────────────────────────────────────────
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -1014,6 +1107,32 @@ function simulateJarvisAction(agentId, command) {
     }
   }
 
+  // CW-1 honest refusal. Before an open-ended ask reaches the reasoning engine,
+  // it is checked against the capability map (sources/capabilities.js — the
+  // single source of truth). An ask that matches NOTHING on the map, or matches
+  // an ability that is not built/connected yet, gets "I can't do that yet —
+  // here's what I can do", built FROM the map. Never a guess, never a silent
+  // dead-end, and nothing is sent to a device.
+  const check = capabilities.checkAsk(command);
+  if (!check.allowed) {
+    const a = agents[agentId];
+    broadcast('chat_message', {
+      type: 'incoming',
+      agent: agentId,
+      agentName: a ? a.name : 'Jarvis',
+      agentIcon: a ? a.icon : '🎖️',
+      text: check.text,
+      timestamp: new Date().toISOString(),
+    });
+    session.audit({
+      what: `ask: ${String(command).slice(0, 200)}`,
+      result: `honestly refused — ${check.ability ? `${check.ability.key} not available` : 'no capability covers this'} (zero device calls)`,
+    });
+    appendToActivityLog(`[${new Date().toISOString()}] [Jarvis] Honest refusal — nothing in my capability map covers "${String(command).slice(0, 60)}"\n`);
+    updateAgentStatus(agentId, 'idle', 'Answered honestly: not something I can do yet');
+    return;
+  }
+
   // Open-ended reasoning (triage/escalate/general/inferred) → REAL agentic Jarvis.
   return jarvis.ask(command);
 }
@@ -1214,14 +1333,25 @@ function updateAgentStatus(agentId, status, lastAction) {
 // event so the Live Activity panel updates the instant any meaningful thing
 // happens (agent engaged, ran X, Jarvis delegated to Y, verdict). One seam, so
 // every caller of appendToActivityLog feeds the feed with no per-site wiring.
+// CW-1: this one seam is also where the operator's name lands. If the request
+// that caused this line carried X-Operator-Name, the line (on disk AND on the
+// live feed) is stamped "— by <name>". No per-call-site wiring, and nothing
+// changes for a request with no name.
 function appendToActivityLog(entry) {
-  safeAppend(PATHS.activityLog, entry, 'activity log');
-  const line = String(entry || '').replace(/\n+$/, '');
+  const operator = session.currentOperator();
+  let text = String(entry || '');
+  if (operator) {
+    const trailing = /\n*$/.exec(text)[0];
+    const body = text.slice(0, text.length - trailing.length);
+    if (body && !body.includes(`— by ${operator}`)) text = `${body} — by ${operator}${trailing}`;
+  }
+  safeAppend(PATHS.activityLog, text, 'activity log');
+  const line = text.replace(/\n+$/, '');
   if (!line) return;
   const m = /^\[([^\]]+)\]\s*\[([^\]]+)\]\s*([\s\S]*)$/.exec(line);
   broadcast('activity_new', m
-    ? { source: m[2], text: m[3], ts: m[1] }
-    : { source: 'System', text: line, ts: new Date().toISOString() });
+    ? { source: m[2], text: m[3], ts: m[1], operator: operator || undefined }
+    : { source: 'System', text: line, ts: new Date().toISOString(), operator: operator || undefined });
 }
 
 // Get tasks from TASKS.md
