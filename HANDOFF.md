@@ -46,10 +46,11 @@ not-configured) + opt-in approval timeout (`APPROVAL_TIMEOUT_MS`, default off). 
 2. **Roadmap Wave 4 — cross-domain correlation** — DONE. PRs #39+#37 adversarially reviewed (2 blockers
    fixed at class level: candidate evidence never decided by a display cap), merged 2026-08-17, verified
    live on :3000 (honest null on the real estate; positive path proven with widened window). sources/correlation.js.
-3. **SSH/Netmiko backend** (Vikas approved) — a small Python sidecar (Scrapli/Netmiko) so agents can run
-   CLI over SSH to DIRECTLY-REACHABLE DevNet sandboxes (the always-on IOS-XE box). The DNAC switches
-   sw1–sw4 are NOT SSH-reachable (private behind DNAC) → they STAY on Command Runner. Read-only guardrail
-   on both. Use the public always-on IOS-XE sandbox creds (public) unless Vikas supplies another.
+3. **SSH/Netmiko backend** — DONE (PR #40, 3 adversarial review rounds incl. mutation-tested test suite,
+   merged 2026-08-17). sources/ssh_sidecar.py + ssh-runner.js; NOT yet wired into live-agents (deliberate —
+   that is copilot wave CW-5). DNAC sw1–sw4 stay on Command Runner (not SSH-reachable). A real SSH success
+   needs Vikas to reserve the DevNet always-on IOS-XE sandbox and paste creds (SSH_IOSXE_USER/PASS in
+   .env.local) — DevNet retired public static passwords; all failure paths verified honest.
 4. **Roadmap Wave 5 — change-context injection** — surface recent changes (reuse config-store diffs +
    maintenance/suppression windows) into the bridge; external sources (FortiManager) = interface + not-connected.
 5. **Roadmap Wave 6 — two-way ServiceNow** — real INC create/update via API + work notes + CMDB CI.

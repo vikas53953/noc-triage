@@ -824,6 +824,11 @@ function detectAgentIntent(agentId, command) {
        /\b(interface|loopback|lo\d+|gigabit|gig\b|vlan|trunk|route|ntp|snmp|bgp[\s-]?neighbor|ospf|eigrp|description|ip[\s-]?add)\b/.test(t))) {
     return 'configure_device';
   }
+  // NOTE: device-CLI routing ("run show version on sw1") is deliberately NOT an
+  // intent here. It lives in ONE place — live.handle(), the module choke point
+  // next to the code that executes it (sources/live-agents.js). A copy of the
+  // rule in this file could drift out of step with that one, and two routers
+  // disagreeing about what "a command" is would be worse than one.
   // Config / compliance
   if (/\b(config|backup|compliance|drift|change|diff|snapshot|baseline|audit|inventory)\b/.test(t)) {
     return 'config_check';
@@ -875,18 +880,31 @@ function runAgentAction(agentId, command) {
 
   updateAgentStatus(agentId, 'active', `Processing: ${command}`);
 
-  // Jarvis keeps its squad-coordination intents (standup, roll call, triage);
-  // anything network-shaped falls through to the live sources.
-  if (agentId === 'jarvis') return simulateJarvisAction(agentId, command);
-
-  // Destructive intent is judged on the RAW request text, for EVERY network
-  // agent — not just the one that talks to a device CLI. A refusal is always
-  // spoken; nothing is ever quietly swapped for a different command.
-  const writeIntent = checkIntent(command);
+  // The deterministic write screen, judged on the RAW request text.
+  //
+  // WHO IT APPLIES TO is the whole subtlety. An engineer agent only ever does one
+  // thing with what you type — turn it into a read — so every request to one is
+  // screened, exactly as before. Jarvis is a CONVERSATION: incident prose is not
+  // a command, and STATE_CHANGING is full of ordinary English ("after the upgrade
+  // window", "set up a bridge", "clear picture", "copy the report"). Screening all
+  // of it refused the first sentence of a real outage report.
+  //
+  // So on the Jarvis surface the screen fires only for the DEVICE-CLI CLASS — a
+  // request that asks for a command to be run on a box, which is the only class
+  // that can end at the wire. "show version on sw1; reload" is that class and is
+  // still refused deterministically, before the model, on either route. Plain
+  // prose reaches the planner, where the choke point (executeDeviceCli) re-runs
+  // this same check on whatever is actually about to be executed.
+  const screenThis = agentId !== 'jarvis' || live.isDeviceCliRequest(command);
+  const writeIntent = screenThis ? checkIntent(command) : { destructive: false };
   if (writeIntent.destructive) {
     appendToActivityLog(`[${new Date().toISOString()}] [${agent.name}] Refused a state-changing request ("${writeIntent.keyword}") — "${command.slice(0, 60)}"\n`);
     return live.refuseWrite(agentId, command, writeIntent);
   }
+
+  // Jarvis keeps its squad-coordination intents (standup, roll call, triage);
+  // anything network-shaped falls through to the live sources.
+  if (agentId === 'jarvis') return simulateJarvisAction(agentId, command);
 
   const intent = detectAgentIntent(agentId, command);
 
@@ -1715,6 +1733,10 @@ function getStanceBadge(stance) {
     case 'summary': return '📊 SUMMARY:';
     case 'evidence': return '📡 LIVE DATA:';
     case 'no-data': return '🔌 NO DATA:';
+    // Nothing reached the wire on these two, so they are NOT live data and are
+    // badged and counted apart from it.
+    case 'denied': return '🛑 DENIED — RAN NOTHING:';
+    case 'refused': return '🚫 NOT RUN:';
     default: return '';
   }
 }
@@ -1726,6 +1748,10 @@ function generateDebateSummary(thread) {
   const count = (s) => thread.messages.filter(m => m.stance === s).length;
   const evidence = count('evidence');
   const noData = count('no-data');
+  // A read the operator denied, or one the guardrail/device-resolution refused,
+  // touched no wire — counting it as a live reading would overstate the evidence
+  // base, and hiding it would understate what was attempted.
+  const blocked = count('denied') + count('refused');
   const agrees = count('agree');
   const refutes = count('refute');
   const alternatives = count('alternative');
@@ -1734,15 +1760,20 @@ function generateDebateSummary(thread) {
     .filter(m => m.stance === 'no-data')
     .map(m => m.agentName);
 
+  const blockedNote = blocked
+    ? ` ${blocked} read(s) ran nothing at all (denied at the permission gate, or refused before the wire) — those are not evidence.`
+    : '';
+
   let verdict;
-  if (evidence === 0 && noData === 0) {
+  if (evidence === 0 && noData === 0 && blocked === 0) {
     verdict = 'Nothing read yet.';
   } else if (evidence === 0) {
-    verdict = 'No live data at all behind this topic — every invited agent is unconnected or its source is down. There is nothing here to decide on.';
+    verdict = 'No live data at all behind this topic — every invited agent is unconnected, its source is down, ' +
+      'or its read never ran. There is nothing here to decide on.' + blockedNote;
   } else {
     verdict = `${evidence} agent(s) brought live readings; ${noData} had no source to read` +
       (silent.length ? ` (${silent.join(', ')})` : '') +
-      `. Weigh this only on the ${evidence} live reading(s) above — the rest is not evidence either way.`;
+      `. Weigh this only on the ${evidence} live reading(s) above — the rest is not evidence either way.` + blockedNote;
   }
 
   const opinions = (agrees + refutes + alternatives)

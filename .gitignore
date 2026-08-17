@@ -1,6 +1,11 @@
 node_modules/
 npm-debug.log*
 
+# Python venv for the SSH sidecar (sources/ssh_sidecar.py)
+.venv/
+__pycache__/
+*.pyc
+
 # Credentials — never commit real values. .env.local is covered by .env.*
 .env
 .env.*
@@ -10,6 +15,13 @@ npm-debug.log*
 scratchpad/
 # Default workspace, created on first run
 squad/
+# Logs — server.log and anything else a run leaves behind
 *.log
+# Captured command/run output kept while debugging
+*.output
+# Python virtual environment (the SSH sidecar)
+.venv/
+venv/
+__pycache__/
 .DS_Store
 Thumbs.db
