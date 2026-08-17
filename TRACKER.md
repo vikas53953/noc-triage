@@ -51,9 +51,18 @@ Last updated: 2026-08-17 ~22:40 IST · driver: Fable session 7d4aaef3
 - 5 QA persona agents on live :3000 (intent / stranger / adversarial / operator / wireup) → findings → spec
 - fix/ambiguous-device-asks builder · CW-2 backend builder · CW-2 UI done (#44)
 
+## QA RESULT (5 testers, ~120 live interactions, 2026-08-17)
+- Zero fabrications. Every safety law HELD under attack. Root cause = deterministic keyword/phrase shell
+  around a genuinely-good LLM planner that answers/refuses/guesses before intent.
+- Spec: docs/qa-findings-spec.md (10 fix classes). Visual verdict for Vikas:
+  https://claude.ai/code/artifact/2a90e159-c90e-47bf-9712-d7dd8658b497
+- Fix classes → tasks #6 (kill shell, blocked by ambiguity+CW-2), #7 (wire chat to own incidents+session
+  isolation), #8 (intake+guardrail homonyms), #9 (error/gate+dropped turns), #10 (correctness+docs).
+
 ## Next actions (autonomous queue)
-1. Collect 5 QA reports → compile ONE ranked spec report (visual page for Vikas) + machine spec file
-2. Review + merge the ambiguity fix (operator-experience pass)
-3. Integrate-review CW-2 backend + #44, merge, verify live
-4. Implement every QA finding by class, each as its own reviewed PR
-5. Keep TRACKER + HANDOFF + GitHub current every turn
+1. [DONE] Compile QA spec + visual verdict page
+2. Review + merge ambiguity fix (Class 2) — operator-experience pass — IN FLIGHT
+3. Integrate-review CW-2 (#45+#44), merge, verify live — IN FLIGHT
+4. Fold in stranger-UI sweep when it lands (Class 8)
+5. THEN Class 1 (kill shell) on clean master, then #7/#8/#9/#10 — each own PR, reviewed, live-verified
+6. Keep TRACKER + HANDOFF + GitHub current every turn
