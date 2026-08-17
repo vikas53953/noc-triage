@@ -19,9 +19,41 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const { checkCommand } = require('./guardrails');
+// Reuse the config-line secret redactor config-store already applies to running
+// configs, so a config pulled over SSH is redacted exactly like one pulled via
+// Command Runner — one rulebook, not two that can drift.
+const { scrubConfig } = require('./config-store');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const SIDECAR = path.join(__dirname, 'ssh_sidecar.py');
+
+// Node-side ceilings. The sidecar truncates device output at its own cap; these
+// are the belt-and-braces limits on what this process is willing to hold.
+const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
+const MAX_STDERR_BYTES = 64 * 1024;
+
+// The watchdog must be a small margin over the SSH timeout the sidecar was
+// given, not a flat +45s. With the old floor a caller asking for a 2s timeout
+// waited 47s — long enough to wreck the SLA clocks this app exists to keep.
+const WATCHDOG_MARGIN_MS = 8000;
+
+// Cap concurrent sidecar processes. Each dial is a Python interpreter plus an
+// SSH session; an unbounded fan-out (a P1 running every front in parallel)
+// would spawn as many as the queue holds.
+const MAX_CONCURRENT = Number(process.env.SSH_MAX_CONCURRENT || 4);
+let inFlight = 0;
+const waiting = [];
+
+function acquireSlot() {
+  if (inFlight < MAX_CONCURRENT) { inFlight++; return Promise.resolve(); }
+  return new Promise((resolve) => waiting.push(resolve));
+}
+
+function releaseSlot() {
+  const next = waiting.shift();
+  if (next) next();
+  else inFlight--;
+}
 
 // Resolve the venv Python created for the sidecar. Override with SSH_PYTHON.
 function resolvePython() {
@@ -102,12 +134,64 @@ function listSshDevices() {
     }));
 }
 
-function scrub(s) {
-  // Never let a stray credential ride out in an error string.
-  const parts = [process.env.SSH_IOSXE_PASS, process.env.SSH_NXOS_PASS].filter(Boolean);
-  let out = String(s || '');
-  for (const p of parts) out = out.split(p).join('****');
+// ── Secret scrubbing ────────────────────────────────────────────────────────
+// Derived from the REGISTRY, never a hand-typed list. The previous version
+// named two passwords while the registry declared three devices, so the third
+// device's password went out in cleartext on the error path — and straight into
+// chat, the activity log and chat-store persistence. A hand-list is guaranteed
+// to fall behind the registry the day a fourth device is added; deriving it
+// means every declared credential is covered automatically.
+const REDACTED = '«redacted»';
+// Values shorter than this are skipped: replacing them mangles unrelated text
+// ("s****awn ... ****ython.exe") and, worse, the mangling reveals the secret's
+// length. A credential that short is not protectable by scrubbing anyway.
+const MIN_SCRUBBABLE = 6;
+
+function secretValues() {
+  const out = new Set();
+  for (const device of Object.values(REGISTRY)) {
+    if (device.transport !== 'ssh') continue;
+    // Passwords AND usernames — a username is a credential half.
+    for (const get of [device.password, device.username]) {
+      if (typeof get !== 'function') continue;
+      const v = get();
+      if (v && String(v).length >= MIN_SCRUBBABLE) out.add(String(v));
+    }
+  }
   return out;
+}
+
+// Replace each secret by EXACT value match with a fixed-width token. The token
+// is constant, so it leaks no length information.
+function scrub(s) {
+  let out = String(s || '');
+  // Longest first, so a password that contains another value is redacted whole.
+  const values = [...secretValues()].sort((a, b) => b.length - a.length);
+  for (const v of values) out = out.split(v).join(REDACTED);
+  return out;
+}
+
+// Minimal env for the sidecar. It needs an interpreter environment and nothing
+// else — every credential it uses arrives on stdin. Handing it the parent's
+// whole env would put ANTHROPIC_API_KEY and the DNAC/ACI/SDWAN credentials
+// inside a process that dials an external host, for no reason at all. This is
+// an allowlist, so a secret added to .env.local later is excluded by default.
+function childEnvForSidecar() {
+  const env = {
+    PATH: process.env.PATH,
+    SYSTEMROOT: process.env.SYSTEMROOT,   // Windows: sockets fail without it
+    SystemRoot: process.env.SystemRoot,
+    TEMP: process.env.TEMP,
+    TMP: process.env.TMP,
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE, // locates ~/.ssh/known_hosts
+    PYTHONIOENCODING: 'utf-8',
+    PYTHONUNBUFFERED: '1',
+  };
+  for (const k of Object.keys(env)) {
+    if (env[k] === undefined) delete env[k];
+  }
+  return env;
 }
 
 // Spawn the sidecar once, feed the request on stdin, parse the one-line JSON.
@@ -122,14 +206,24 @@ function callSidecar(payload, timeoutMs) {
     let done = false;
     const finish = (obj) => { if (!done) { done = true; resolve(obj); } };
 
-    const child = spawn(python, [SIDECAR], { cwd: REPO_ROOT });
+    const child = spawn(python, [SIDECAR], { cwd: REPO_ROOT, env: childEnvForSidecar() });
     const timer = setTimeout(() => {
       try { child.kill(); } catch (e) { /* ignore */ }
       finish({ ok: false, error: 'SSH sidecar timed out', kind: 'unreachable' });
     }, timeoutMs);
 
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
+    // Cap what we accumulate. The sidecar already truncates device output, but
+    // Node must not be willing to grow an unbounded string on a runaway child.
+    child.stdout.on('data', (d) => {
+      if (stdout.length < MAX_STDOUT_BYTES) stdout += d;
+      else if (!done) {
+        try { child.kill(); } catch (e) { /* ignore */ }
+        finish({ ok: false, error: 'SSH sidecar produced more output than the cap allows', kind: 'error' });
+      }
+    });
+    child.stderr.on('data', (d) => {
+      if (stderr.length < MAX_STDERR_BYTES) stderr += d;
+    });
     child.on('error', (e) => {
       clearTimeout(timer);
       finish({ ok: false, error: `SSH sidecar failed to start: ${e.message}`, kind: 'error' });
@@ -188,14 +282,58 @@ async function runShow(deviceKey, command, opts = {}) {
     host, port: device.port(), username, password,
     platform: device.platform, command: verdict.command,
     timeout: Number(opts.timeout || process.env.SSH_TIMEOUT || 30),
+    // Host-key policy. Default 'auto': strict once a host is pinned in
+    // known_hosts, permissive on first contact so a throwaway public sandbox
+    // still works. Set SSH_STRICT_KEY=1 the moment a REAL device credential
+    // goes into .env.local — without it an on-path impostor harvests the
+    // password on the first dial.
+    strict_key: opts.strictKey || process.env.SSH_STRICT_KEY || 'auto',
+    known_hosts: opts.knownHosts || process.env.SSH_KNOWN_HOSTS || null,
+    max_output_bytes: Number(opts.maxOutputBytes || process.env.SSH_MAX_OUTPUT_BYTES || 1024 * 1024),
   };
-  const timeoutMs = (payload.timeout + 45) * 1000;
+  const timeoutMs = payload.timeout * 1000 + WATCHDOG_MARGIN_MS;
 
-  const res = await callSidecar(payload, timeoutMs);
+  await acquireSlot();
+  let res;
+  try {
+    res = await callSidecar(payload, timeoutMs);
+  } finally {
+    releaseSlot();
+  }
+
   if (res.ok) {
-    return { ok: true, device: deviceKey, command: verdict.command, text: res.output, engine: res.engine, elapsed: res.elapsed };
+    // Device output is scrubbed too, not just the error path. "show
+    // running-config" and "more nvram:startup-config" are allowed reads that
+    // return enable secrets, SNMP communities and pre-shared keys, and this
+    // text goes on to chat, the activity log and chat-store persistence.
+    // scrubConfig is the redactor config-store already uses for exactly this,
+    // so both paths redact identically rather than inventing a second rulebook.
+    const text = scrub(scrubConfig(res.output || ''));
+    return {
+      ok: true, device: deviceKey, command: verdict.command, text,
+      truncated: Boolean(res.truncated), strictKey: Boolean(res.strictKey),
+      engine: res.engine, elapsed: res.elapsed,
+    };
   }
   return { ok: false, device: deviceKey, command: verdict.command, error: scrub(res.error), kind: res.kind || 'error' };
+}
+
+// Spawn the sidecar interpreter with EXACTLY the env callSidecar uses and ask
+// it what it can see. Used by the smoke test to prove from the outside that no
+// parent secret (ANTHROPIC_API_KEY, DNAC/ACI/SDWAN creds) reaches the child.
+function probeChildEnv() {
+  return new Promise((resolve) => {
+    const python = resolvePython();
+    if (!python) return resolve({});
+    const child = spawn(python, ['-c', 'import os,json;print(json.dumps(dict(os.environ)))'],
+      { cwd: REPO_ROOT, env: childEnvForSidecar() });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.on('error', () => resolve({}));
+    child.on('close', () => {
+      try { resolve(JSON.parse(out.trim().split(/\r?\n/).pop())); } catch (e) { resolve({}); }
+    });
+  });
 }
 
 module.exports = {
@@ -205,4 +343,8 @@ module.exports = {
   getDevice,
   listSshDevices,
   runShow,
+  // Exported for the smoke test / reuse — not part of the calling surface.
+  scrub,
+  resolvePython,
+  probeChildEnv,
 };
