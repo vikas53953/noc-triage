@@ -50,6 +50,12 @@ PRINTABLE_ASCII_MAX = 0x7E
 # legal show-class read that runs to megabytes. Overridable per request.
 DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024
 
+# Grace added to the requested timeout for the slower phases of a session.
+# ssh-runner.js sets its watchdog ABOVE OPS_GRACE so Node never fires first;
+# SIDECAR_OPS_GRACE_S there must equal OPS_GRACE here.
+TRANSPORT_GRACE = 15
+OPS_GRACE = 30
+
 
 def is_printable_ascii(s):
     return bool(s) and all(PRINTABLE_ASCII_MIN <= ord(c) <= PRINTABLE_ASCII_MAX for c in s)
@@ -149,6 +155,16 @@ def strict_key_settings(req):
         return True, known_hosts
     if mode in ("0", "false", "no", "off"):
         return False, known_hosts
+    if mode not in ("auto", ""):
+        # FAIL CLOSED on anything we do not recognise. A typo ("ture") must not
+        # silently disable host-key verification — a security control that turns
+        # itself off on a misspelling is worse than no control, because the
+        # operator believes it is on.
+        raise ValueError(
+            f'SSH_STRICT_KEY has an unrecognised value "{mode}" — '
+            'use 1 (strict), 0 (off) or auto. Refusing to dial with an '
+            'ambiguous host-key policy.'
+        )
 
     # AUTO — strict only if this host is already pinned in known_hosts.
     path = known_hosts or os.path.join(os.path.expanduser("~"), ".ssh", "known_hosts")
@@ -185,8 +201,8 @@ def run_scrapli(req):
         transport="paramiko",
         **extra,
         timeout_socket=timeout,
-        timeout_transport=timeout + 15,
-        timeout_ops=timeout + 30,
+        timeout_transport=timeout + TRANSPORT_GRACE,
+        timeout_ops=timeout + OPS_GRACE,
     )
     conn.open()
     try:
@@ -240,14 +256,27 @@ def selftest():
     to the Node originals in sources/guardrails.js and FAILS on drift, so the
     two copies of the allowlist can no longer diverge unnoticed.
     """
+    # Probes are GENERATED from the rule lists, never hand-written. A
+    # hand-written list had no probe containing ` or $, so the parity check had
+    # zero coverage there and a character dropped from the Node list went
+    # unnoticed while the suite reported green. Generating them means every
+    # chain character is covered automatically, including ones added later.
     probes = [
+        # Baseline reads that must stay allowed.
         "show version", "ping 8.8.8.8", "dir", "more nvram:startup-config",
-        "configure terminal", "reload", "write erase", "show version; reload",
-        "show version | include x", "show ver\x00sion", "show ver\x1bsion",
-        "show ver\x0bsion", "show ver\x0csion", "show ver\x08sion",
-        "show ver\x01sion", "show ver\x85sion", "show ver\u2028sion",
-        "show ver\u2029sion",
+        "show ip interface brief", "traceroute 8.8.8.8",
+        # Non-read verbs that must stay blocked.
+        "configure terminal", "reload", "write erase", "no shutdown",
+        "copy run start",
     ]
+    # One probe per chain character \u2014 the coverage that was missing.
+    for ch in sorted(CHAIN_CHARS):
+        probes.append("show version" + ch + "reload")
+    # One probe per control / exotic character the review found.
+    for ch in ("\x00", "\x01", "\x08", "\x09", "\x0b", "\x0c", "\x1b",
+               "\x7f", "\x85", "\u2028", "\u2029", "\xe9", "\U0001f600"):
+        probes.append("show ver" + ch + "sion")
+
     print(json.dumps({
         "read_verbs": list(READ_VERBS),
         "chain_chars": sorted(CHAIN_CHARS),
@@ -280,6 +309,15 @@ def main():
     reason = check_read_only(req["command"])
     if reason:
         print(json.dumps({"ok": False, "error": f"Blocked: {reason}", "kind": "blocked"}))
+        return
+
+    # Resolve the host-key policy BEFORE dialling, so an unrecognised
+    # SSH_STRICT_KEY value refuses the connection outright instead of failing
+    # open somewhere inside a driver.
+    try:
+        strict_key_settings(req)
+    except ValueError as e:
+        print(json.dumps({"ok": False, "error": str(e), "kind": "blocked"}))
         return
 
     started = time.time()

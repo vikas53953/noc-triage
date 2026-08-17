@@ -32,10 +32,18 @@ const SIDECAR = path.join(__dirname, 'ssh_sidecar.py');
 const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
 const MAX_STDERR_BYTES = 64 * 1024;
 
-// The watchdog must be a small margin over the SSH timeout the sidecar was
-// given, not a flat +45s. With the old floor a caller asking for a 2s timeout
-// waited 47s — long enough to wreck the SLA clocks this app exists to keep.
-const WATCHDOG_MARGIN_MS = 8000;
+// Timeout layering. The sidecar derives its own allowances from the requested
+// timeout (socket = t, transport = t + TRANSPORT_GRACE, ops = t + OPS_GRACE),
+// so Node's watchdog has to sit ABOVE the largest of those or it always fires
+// first and the sidecar's own timeouts become unreachable — a slow-but-alive
+// big read would be killed and reported "unreachable", which it is not.
+// One number drives both sides; these two constants MUST match the sidecar's.
+const SIDECAR_OPS_GRACE_S = 30;      // ssh_sidecar.py: timeout_ops = timeout + 30
+const WATCHDOG_MARGIN_MS = 8000;     // headroom over the sidecar's own ceiling
+
+function watchdogMsFor(timeoutS) {
+  return (timeoutS + SIDECAR_OPS_GRACE_S) * 1000 + WATCHDOG_MARGIN_MS;
+}
 
 // Cap concurrent sidecar processes. Each dial is a Python interpreter plus an
 // SSH session; an unbounded fan-out (a P1 running every front in parallel)
@@ -161,10 +169,43 @@ function secretValues() {
   return out;
 }
 
-// Replace each secret by EXACT value match with a fixed-width token. The token
-// is constant, so it leaks no length information.
-function scrub(s) {
+// Credential-shaped FIELDS, redacted by structure regardless of their value.
+//
+// This is the primary layer, and it exists because scrubbing by VALUE cannot
+// protect short secrets: matching a 5-character password inside free text
+// mangles unrelated words and leaks the secret's length, so short values had to
+// be skipped — which carved the exception out exactly where the most common
+// real credentials live ("cisco", "admin"). Redacting the FIELD instead means
+// the value's length stops mattering entirely.
+//
+// Covers JSON ("password":"x"), key=value and key: value forms.
+const CREDENTIAL_FIELDS = 'password|passwd|pass|secret|username|user|auth_password|auth_username|token|api_key|apikey|key';
+// The field name must start cleanly — not be the tail of a longer name. Without
+// this, "strict_key" matched the `key` alternative and a harmless diagnostic
+// field was redacted, throwing away debugging information for no safety gain.
+const FIELD_START = '(?<![\\w-])';
+const STRUCTURAL_RULES = [
+  // JSON: "password": "anything"   (also single-quoted)
+  new RegExp(`(["']?${FIELD_START}(?:${CREDENTIAL_FIELDS})["']?\\s*:\\s*)(["'])(?:\\\\.|(?!\\2).)*\\2`, 'gi'),
+  // key=value / key = value, up to whitespace or a delimiter
+  new RegExp(`${FIELD_START}((?:${CREDENTIAL_FIELDS})\\s*=\\s*)(?!\\s)[^\\s,;&|]+`, 'gi'),
+];
+
+function scrubStructural(s) {
   let out = String(s || '');
+  out = out.replace(STRUCTURAL_RULES[0], (m, head, q) => `${head}${q}${REDACTED}${q}`);
+  out = out.replace(STRUCTURAL_RULES[1], (m, head) => `${head}${REDACTED}`);
+  return out;
+}
+
+// Two layers, in order:
+//   1. STRUCTURAL — redact credential-shaped fields whatever they contain.
+//      Length-independent, so "cisco" and "admin" are covered.
+//   2. VALUE — belt-and-braces for credentials appearing in free text, where
+//      there is no field name to key off. Still skips very short values, since
+//      matching those in prose mangles it; layer 1 is what protects them.
+function scrub(s) {
+  let out = scrubStructural(s);
   // Longest first, so a password that contains another value is redacted whole.
   const values = [...secretValues()].sort((a, b) => b.length - a.length);
   for (const v of values) out = out.split(v).join(REDACTED);
@@ -291,7 +332,7 @@ async function runShow(deviceKey, command, opts = {}) {
     known_hosts: opts.knownHosts || process.env.SSH_KNOWN_HOSTS || null,
     max_output_bytes: Number(opts.maxOutputBytes || process.env.SSH_MAX_OUTPUT_BYTES || 1024 * 1024),
   };
-  const timeoutMs = payload.timeout * 1000 + WATCHDOG_MARGIN_MS;
+  const timeoutMs = watchdogMsFor(payload.timeout);
 
   await acquireSlot();
   let res;

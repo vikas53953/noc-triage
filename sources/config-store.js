@@ -72,6 +72,12 @@ const CONFIG_SECRET_RULES = [
   // pre-shared-key / pre-shared-key address x.x.x.x key <secret>
   { re: /^(\s*(?:.*\s)?pre-shared-key\s+(?:\S+\s+)*?key\s+(?:\d+\s+)?)(\S.*)$/i, keep: 1 },
   { re: /^(\s*pre-shared-key\s+(?:\d+\s+)?)(\S.*)$/i, keep: 1 },
+  // crypto isakmp key <PSK> address x.x.x.x / hostname <h>  (IKEv1 form).
+  // The rules above only covered the IKEv2 "pre-shared-key" spelling, so an
+  // IKEv1 PSK survived in cleartext. The trailing address/hostname clause is
+  // NOT a secret and is kept, so a changed PSK still shows as a changed line.
+  { re: /^(\s*crypto\s+isakmp\s+key\s+(?:\d+\s+)?)(\S+)(\s+(?:address|hostname|ipv6)\s+.*)$/i, keep: 1, tail: 3 },
+  { re: /^(\s*crypto\s+isakmp\s+key\s+(?:\d+\s+)?)(\S.*)$/i, keep: 1 },
   // crypto ... authentication pre-share key <secret>  / set session-key ...
   { re: /^(\s*set\s+session-key\s+(?:inbound|outbound)\s+\S+\s+\S+\s+)(\S.*)$/i, keep: 1 },
   // radius/tacacs key <secret>
