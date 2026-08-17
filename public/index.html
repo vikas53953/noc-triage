@@ -842,6 +842,43 @@ pre.cli{
 .sla.breach .sla-val,.sla.breach .sla-lbl{color:var(--bad)}
 .sla.breach .sla-dot{background:var(--bad);animation:pulse 1s infinite}
 
+/* ---------- Alert-driven ingestion (Wave 2) ---------- */
+/* hidden must beat the inline-flex / grid display on these widgets */
+.alert-badge[hidden],.alert-fired[hidden],.hdr-alert[hidden]{display:none}
+/* ⚡ Alert-triggered pill on the incident ribbon (amber = fired externally) */
+.alert-badge{display:inline-flex;align-items:center;gap:.35rem;font-size:.6rem;font-weight:800;
+  letter-spacing:.05em;text-transform:uppercase;padding:.18rem .55rem;border-radius:999px;
+  border:1px solid var(--warn);background:var(--warn-bg);color:var(--warn);white-space:nowrap}
+.alert-badge .ab-src{color:var(--ink2);font-weight:700;text-transform:none;letter-spacing:0}
+/* header indicator — an alert-triggered incident is live */
+.hdr-alert{display:inline-flex;align-items:center;gap:.4rem;font-size:.66rem;font-weight:700;
+  padding:.24rem .55rem;border-radius:7px;border:1px solid var(--warn);background:var(--warn-bg);color:var(--warn)}
+.hdr-alert .ha-dot{width:7px;height:7px;border-radius:50%;background:var(--warn);animation:pulse 1.6s infinite}
+/* "what fired this" — the raw inbound alert, expandable */
+.alert-fired{margin:.6rem;border:1px solid var(--warn);border-left-width:3px;border-radius:10px;
+  background:var(--warn-bg)}
+.alert-fired>summary{cursor:pointer;list-style:none;padding:.5rem .7rem;font-size:.68rem;font-weight:800;
+  letter-spacing:.03em;color:var(--warn);display:flex;align-items:center;gap:.4rem}
+.alert-fired>summary::-webkit-details-marker{display:none}
+.alert-fired>summary .af-caret{transition:transform .15s;font-size:.66rem}
+.alert-fired[open]>summary .af-caret{transform:rotate(90deg)}
+.af-body{padding:.1rem .7rem .7rem;display:grid;grid-template-columns:auto 1fr;gap:.32rem .7rem}
+.af-k{font-size:.56rem;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink3);white-space:nowrap;padding-top:.12rem}
+.af-v{font-size:.72rem;color:var(--ink);line-height:1.5;word-break:break-word}
+.af-v.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.af-msg{grid-column:1 / -1;font-size:.74rem;color:var(--ink);background:var(--panel);
+  border:1px solid var(--line);border-radius:7px;padding:.45rem .55rem;line-height:1.55;margin-top:.15rem}
+/* alert marker on a History card */
+.rec-alert{display:inline-flex;align-items:center;gap:.25rem;font-size:.54rem;font-weight:800;
+  letter-spacing:.03em;text-transform:uppercase;padding:.1rem .4rem;border-radius:5px;
+  border:1px solid var(--warn);color:var(--warn);background:var(--warn-bg)}
+/* simulate-an-alert control (dev/demo test affordance) */
+.btn.sim-alert{background:transparent;color:var(--warn);border:1px dashed var(--warn);box-shadow:none}
+.btn.sim-alert:hover{background:var(--warn-bg);transform:translateY(-1px)}
+.btn.sim-alert:disabled{opacity:.55;cursor:default;transform:none}
+.sim-tag{font-size:.52rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+  padding:.05rem .3rem;border-radius:4px;border:1px solid var(--warn);color:var(--warn)}
+
 /* ---------- Acknowledge action + MTTA stamp ---------- */
 .ack-btn{font:inherit;font-size:.68rem;font-weight:800;padding:.3rem .6rem;border-radius:7px;
   border:1px solid var(--warn);background:var(--warn-bg);color:var(--warn);cursor:pointer;white-space:nowrap}
@@ -1062,6 +1099,7 @@ pre.cli{
     <span class="demotag" id="demoTag">Demo — sample data</span>
   </div>
   <div class="top-right">
+    <span class="hdr-alert" id="hdrAlert" hidden title="An alert-triggered incident is live"><span class="ha-dot"></span>⚡ Alert incident</span>
     <span class="chip" id="connChip"><span class="dot"></span>Connecting…</span>
     <span class="clock" id="clock">--:--:--</span>
     <button class="iconbtn appr-btn" id="apprBtn" title="Approvals — the permission gate">🛡<span class="appr-count" id="apprCount" hidden>0</span></button>
@@ -1125,7 +1163,9 @@ pre.cli{
                Principal Engineer writes the plain-words verdict at the end.</p>
             <div class="hero-actions">
               <button class="btn btn-primary" id="openTriageBtn">🚨 Open Triage</button>
+              <button class="btn sim-alert" id="simAlertBtn" title="Post a sample alert to POST /api/alerts/sample — auto-opens a triage so you can see the alert flow">⚡ Simulate an alert <span class="sim-tag">sample</span></button>
             </div>
+            <p class="sim-note">The sample button feeds one test alert into the inlet so you can watch a triage auto-open — it is a demo affordance, not a live data source. Real incidents open only when a real alert arrives.</p>
           </div>
           <div class="quick">
             <button class="quick-fill" data-sev="P2" data-desc="DC fabric health check — are the ACI leaf/spine and tenant contracts healthy?"><b>Fabric health</b><span>check the ACI fabric</span></button>
@@ -1154,6 +1194,7 @@ pre.cli{
         <div class="inc-ribbon" id="incRibbon" hidden>
           <span class="inc-id" id="incId">INC-—</span>
           <span class="inc-retag" id="incRetag" hidden>re-triage</span>
+          <span class="alert-badge" id="alertBadge" hidden title="This triage was auto-opened by an inbound alert">⚡ Alert-triggered<span class="ab-src" id="alertBadgeSrc"></span></span>
           <span class="mttr running" id="mttr" title="Open → verdict (time to diagnose)"><span class="mttr-dot"></span><span class="mttr-lbl">Time to verdict</span><span class="mttr-val" id="mttrVal">0s</span></span>
           <span class="sla" id="sla" hidden title="Live countdown to the severity SLA target"><span class="sla-dot"></span><span class="sla-lbl" id="slaLbl">SLA</span><span class="sla-val" id="slaVal">—</span></span>
           <button class="ack-btn" id="ackBtn" hidden title="Acknowledge this incident — stamps the response time (MTTA)">Acknowledge</button>
@@ -1186,6 +1227,10 @@ pre.cli{
           </div>
           <span class="roles-saved" id="rolesSaved">saved ✓</span>
         </div>
+        <details class="alert-fired" id="alertFired" hidden>
+          <summary><span class="af-caret">▸</span>⚡ What fired this — raw inbound alert</summary>
+          <div class="af-body" id="alertFiredBody"></div>
+        </details>
         <div class="split">
 
           <!-- bridge -->
@@ -2075,6 +2120,10 @@ $('closeTriageBtn').onclick = function(){
   stopSlaTick();
   resetRoles();
   var ribbon = $('incRibbon'); if(ribbon) ribbon.hidden = true;
+  // Wave 2 — clear the alert-triggered markers when returning to idle.
+  var ab = $('alertBadge'); if(ab) ab.hidden = true;
+  var af = $('alertFired'); if(af){ af.hidden = true; af.open = false; }
+  var ha = $('hdrAlert'); if(ha) ha.hidden = true;
   currentTriageId = null;
   currentIncidentId = null;
 };
@@ -2635,6 +2684,7 @@ function handleOpened(d){
   openConsole();
   $('stageTitle').textContent = '🚨 Triage · ' + currentSeverity + ' · live';
   setIncident(d.incidentId, d.openedAt, d.reTriageOf);
+  applyAlertOrigin(d);            // Wave 2 — ⚡ alert-triggered marker + raw alert (hidden for operator-opened)
   startMttrTick(d.openedAt);
   buildBoard(d.fronts);
   // Mark staffed engineers as on-bridge; blind ones stay off.
@@ -2648,6 +2698,89 @@ function handleOpened(d){
   renderLifecycle(null);          // roll-up stays hidden until close
   pushActivity('NOC Triage', 'opened ' + currentSeverity + ' triage ' + (d.incidentId||'') + ' — "' + (d.title||'') + '"', tsClock(d.openedAt));
 }
+/* ============================================================
+   WAVE 2 — ALERT-DRIVEN INGESTION (frontend markers)
+   Contract: triage_opened.data.source = 'alert' | 'operator';
+   triage_opened.data.alert = {source,type,severity,device,front,message,receivedAt}.
+   If source !== 'alert' (or the fields are absent — e.g. backend not merged),
+   every alert widget hides and an operator-opened triage looks exactly as before.
+   ============================================================ */
+function applyAlertOrigin(d){
+  var isAlert = d && d.source === 'alert';
+  var a = (d && d.alert) || null;
+  var badge = $('alertBadge'), fired = $('alertFired'), hdr = $('hdrAlert');
+  if(!isAlert){
+    if(badge) badge.hidden = true;
+    if(fired){ fired.hidden = true; fired.open = false; }
+    if(hdr) hdr.hidden = true;
+    return;
+  }
+  // Ribbon badge — with the alert source (e.g. "vManage") when known.
+  if(badge){
+    var src = a && a.source ? a.source : (a && a.type ? a.type : '');
+    $('alertBadgeSrc').textContent = src ? ('· ' + src) : '';
+    badge.hidden = false;
+  }
+  // Header indicator — an alert-triggered incident is live.
+  if(hdr) hdr.hidden = false;
+  // "What fired this" — the raw inbound alert, every field escaped.
+  if(fired){
+    if(a){
+      renderFiredAlert(a);
+      fired.hidden = false;
+    } else {
+      // Marked as alert-sourced but no raw payload provided — still show the origin,
+      // just say the detail wasn't included rather than inventing one.
+      $('alertFiredBody').innerHTML =
+        '<div class="af-msg">This triage was opened by an alert, but no raw alert detail was included in the event.</div>';
+      fired.hidden = false;
+    }
+  }
+}
+/* Map contract fields → labelled rows. Missing fields are simply skipped. */
+function renderFiredAlert(a){
+  var rows = [
+    ['Source',   a.source,   false],
+    ['Type',     a.type,     false],
+    ['Severity', a.severity, false],
+    ['Device',   a.device,   true],
+    ['Front',    a.front,    false],
+    ['Received', a.receivedAt ? tsClock(a.receivedAt) : '', true]
+  ];
+  var html = '';
+  rows.forEach(function(r){
+    if(r[1] == null || r[1] === '') return;
+    html += '<span class="af-k">'+escapeHtml(r[0])+'</span>'+
+            '<span class="af-v'+(r[2]?' mono':'')+'">'+escapeHtml(String(r[1]))+'</span>';
+  });
+  if(a.message){
+    html += '<div class="af-msg">'+escapeHtml(String(a.message))+'</div>';
+  }
+  $('alertFiredBody').innerHTML = html ||
+    '<div class="af-msg">Alert received with no further detail.</div>';
+}
+/* Simulate an alert (dev/demo) — POST a sample alert to the inlet; the backend
+   auto-opens a triage, which repaints the console via its own triage_opened. */
+(function wireSimulateAlert(){
+  var btn = $('simAlertBtn'); if(!btn) return;
+  btn.onclick = function(){
+    if(DEMO) return;
+    var orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '⚡ Sending sample…';
+    fetch('/api/alerts/sample', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'
+    }).then(function(r){
+      if(!r.ok) throw new Error('sample inlet returned ' + r.status);
+      // Success — the triage_opened WS event opens the console with the badge.
+    }).catch(function(err){
+      pushActivity('NOC Triage', 'sample alert could not be sent — ' + (err && err.message ? err.message : 'inlet unavailable'), nowClock());
+    }).then(function(){
+      btn.disabled = false;
+      btn.innerHTML = orig;
+    });
+  };
+})();
 /* Symptom parse — the real window + scope the reads were filtered by, so the
    operator sees WHY faults were counted or excluded. All fields are real. */
 function renderScopeBar(sym){
@@ -2705,6 +2838,7 @@ function handleClosed(d){
   clearBridge();
   setBridgeInput(false);
   stopSlaTick();   // the SLA clock stops when the bridge closes
+  var ha = $('hdrAlert'); if(ha) ha.hidden = true;  // "alert incident active" indicator clears on close (ribbon badge stays)
   // Post-incident roll-up: use the lifecycle on the close event if present, else
   // pull the persisted record so the durations show even on an older close payload.
   if(d && d.lifecycle){ renderLifecycle(d.lifecycle); }
@@ -3284,9 +3418,15 @@ function recStateChips(fronts){
   }).join('')+'</div>';
 }
 function recCardHtml(r){
+  // Wave 2 — mark alert-triggered records (contract: source==='alert', with optional .alert).
+  var alertSrc = r.alert && r.alert.source ? r.alert.source : (r.alert && r.alert.type ? r.alert.type : '');
+  var alertChip = (r.source === 'alert' || r.alert)
+    ? '<span class="rec-alert" title="Auto-opened by an inbound alert">⚡ Alert'+(alertSrc ? ' · '+escapeHtml(alertSrc) : '')+'</span>'
+    : '';
   return '<div class="rec-card" data-recid="'+escapeHtml(r.id)+'">'+
     '<div class="rec-card-top">'+
       '<span class="badge sev-'+escapeHtml(r.severity)+'">'+escapeHtml(r.severity)+'</span>'+
+      alertChip+
       '<span class="rec-card-title">'+escapeHtml(r.title||r.id)+'</span>'+
       '<span class="rec-card-time">'+escapeHtml(tsClock(r.openedAt))+'</span>'+
     '</div>'+
@@ -3586,6 +3726,9 @@ function repaintFromRecord(t){
   $('stageTitle').textContent = (live ? '🚨 Triage · ' : '✅ Triage · ') + currentSeverity + (live ? ' · live' : ' · verdict in');
   if(!live) $('boardClock').textContent = 'settled';
   setIncident(t.incidentId, t.openedAt, t.reTriageOf);
+  // Wave 2 — restore the alert-triggered marker + raw alert (header "active" dot only while live).
+  applyAlertOrigin(t);
+  if(!live){ var ha=$('hdrAlert'); if(ha) ha.hidden = true; }
   if(live){ startMttrTick(t.openedAt); } else { settleMttr(t.mttr); }
   buildBoard(t.fronts);
   if(t.symptom) renderScopeBar(t.symptom);
