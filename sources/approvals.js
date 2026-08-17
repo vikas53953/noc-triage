@@ -14,7 +14,23 @@
 //
 // Nothing here fabricates a result. On denial the caller runs nothing and says so.
 
+const { AsyncLocalStorage } = require('async_hooks');
 const { checkCommand } = require('./guardrails');
+
+// ── Re-entrancy ──────────────────────────────────────────────────────────────
+// The gate belongs at the CHOKE POINT — the place a command actually reaches the
+// wire — so no caller (present or future) can route around it. But an outer
+// caller may already have gated the same operator request (a Jarvis delegation
+// gates the whole sub-question; Config-Keeper gates the direct read). Prompting
+// twice for one operator action would train the operator to click through.
+//
+// So an approved gate publishes itself on this async context. A gate that opens
+// INSIDE an approved gate is already covered by that operator decision: it does
+// NOT prompt again, it still re-checks the raw CLI against the read-only
+// guardrail, and it still writes its own record — stamped `covered-by <id>` —
+// so the approval log always shows the EXACT command that ran, under the
+// decision that authorised it. Nothing runs that no one approved.
+const gateCtx = new AsyncLocalStorage();
 
 // ── Mode ─────────────────────────────────────────────────────────────────────
 // 'auto' (default): safe reads auto-approve, still fully logged.
@@ -130,6 +146,18 @@ async function gate(meta, executeFn) {
     }
   }
 
+  // Already inside an approved gate → covered by that decision (see the
+  // re-entrancy note at the top). Logged in full, never re-prompted.
+  const outer = gateCtx.getStore();
+  if (outer) {
+    rec.state = 'approved';
+    rec.decidedBy = `covered-by ${outer.id}`;
+    rec.decidedAt = new Date().toISOString();
+    push(rec);
+    emit('approval_new', view(rec));
+    return runApproved(rec, executeFn);
+  }
+
   const autoNow = mode === 'auto' || (rec.triageId && allReadsForTriage.has(rec.triageId));
 
   if (autoNow) {
@@ -194,7 +222,9 @@ async function gate(meta, executeFn) {
 // propagate so the caller's own honest failure handling still fires.
 async function runApproved(rec, executeFn) {
   try {
-    const result = await executeFn();
+    // Publish this approved decision to everything it runs, so a nested gate is
+    // covered by it instead of prompting the operator a second time.
+    const result = await gateCtx.run({ id: rec.id, command: rec.command }, executeFn);
     rec.outcomeOk = true;
     const detail = result && typeof result === 'object' && result.detail ? String(result.detail) : null;
     rec.outcome = detail ? `ran — ${detail}` : 'ran — read completed';
