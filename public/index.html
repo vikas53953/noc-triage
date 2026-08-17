@@ -1026,6 +1026,57 @@ pre.cli{
 .hypo-cfg .cfg-in{color:var(--warn);font-weight:700}
 .hypo-cfg .cfg-clean{color:var(--ok)}
 
+/* ---------- Cross-domain correlation (Wave 4) ----------
+   Lives INSIDE the purple hypothesis card. The whole point is to say
+   "these N fronts are ONE event, not N separate problems", so it earns a
+   distinct cyan link-accent (var(--info)) and a left bar that reads as a
+   thread pulling the fronts together — harmonious with, but not lost in,
+   the purple hypothesis rows around it. The null case is deliberately quiet
+   (muted ink, no colour) so "no correlation" never reads as an alarm. */
+.corr{
+  border-top:1px solid rgba(139,92,246,.15);
+  border-left:3px solid var(--info);
+  background:var(--info-bg);
+  padding:.55rem .7rem;
+}
+.corr-head{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+.corr-lbl{font-size:.58rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--info)}
+.corr-strength{
+  margin-left:auto;font-size:.53rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--info);background:rgba(56,189,248,.12);border:1px solid rgba(56,189,248,.4);
+  border-radius:999px;padding:.08rem .42rem;flex-shrink:0
+}
+.corr-one{font-size:.82rem;font-weight:700;color:var(--ink);margin-top:.4rem;line-height:1.45}
+.corr-fronts{display:flex;flex-wrap:wrap;align-items:center;gap:.3rem;margin:.45rem 0 .1rem}
+.corr-chip{
+  display:inline-flex;align-items:center;font-size:.66rem;font-weight:700;text-transform:capitalize;
+  padding:.16rem .55rem;border-radius:999px;border:1px solid var(--info);
+  color:var(--info);background:rgba(56,189,248,.1)
+}
+.corr-join{color:var(--info);font-size:.8rem;font-weight:800;opacity:.6}
+.corr-when{font-family:var(--mono);font-size:.68rem;color:var(--ink2);margin:.4rem 0 .1rem}
+.corr-when b{color:var(--info);font-weight:700}
+.corr-sum{font-size:.75rem;line-height:1.5;color:var(--ink2);margin-top:.25rem}
+.corr-ev{margin-top:.5rem}
+.corr-evrow{
+  display:flex;flex-wrap:wrap;gap:.4rem .5rem;align-items:baseline;
+  padding:.42rem .6rem;border-top:1px solid var(--line-soft);font-size:.7rem
+}
+.corr-evrow:first-child{border-top:none}
+.corr-evrow .ce-front{font-weight:800;color:var(--info);text-transform:capitalize}
+.corr-evrow .ce-type{
+  font-size:.55rem;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--ink3);
+  background:rgba(148,163,184,.14);border-radius:4px;padding:.07rem .38rem
+}
+.corr-evrow .ce-ts{font-family:var(--mono);font-size:.62rem;color:var(--ink3);margin-left:auto;white-space:nowrap}
+.corr-evrow .ce-detail{flex-basis:100%;color:var(--ink2);line-height:1.45}
+.corr-none{
+  border-top:1px solid rgba(139,92,246,.15);
+  padding:.5rem .7rem;font-size:.72rem;line-height:1.5;color:var(--ink3);
+  display:flex;gap:.5rem;align-items:flex-start
+}
+.corr-none .cn-ico{flex-shrink:0;opacity:.7;font-size:.85rem;line-height:1.3}
+
 /* ---------- re-triage delta panel (hard numbers foregrounded) ---------- */
 .delta-panel{
   margin-top:.45rem;border:1px solid var(--accent);border-radius:12px;overflow:hidden;background:var(--card);width:100%
@@ -2455,6 +2506,89 @@ function configFindingHtml(findings){
   }
   return '<div class="hypo-cfg"><span class="r-lbl">📋 Config-Keeper finding</span><span class="'+cls+'">'+txt+'</span></div>';
 }
+/* Cross-domain correlation (Wave 4) — render the L4 co-occurrence pass carried
+   on the verdict/record as correlation:{clusters,topCandidate,note}.
+     topCandidate present -> the "these N fronts are ONE event" block.
+     topCandidate null     -> the honest note, quiet (never an alarm).
+     absent (backend not merged) -> nothing at all.
+   Every event detail, summary, front and note is escaped. */
+function correlationHtml(corr){
+  if(!corr) return '';
+  var tc = corr.topCandidate;
+  if(!tc){
+    var note = corr.note || 'No cross-front correlation — the events look independent.';
+    return '<div class="corr-none"><span class="cn-ico" aria-hidden="true">🔎</span>'+
+      '<span>'+escapeHtml(note)+'</span></div>';
+  }
+  var fronts = Array.isArray(tc.fronts) ? tc.fronts.filter(Boolean) : [];
+  var clusters = Array.isArray(corr.clusters) ? corr.clusters : [];
+  var cluster = pickCorrCluster(clusters, tc);
+  var strength = (cluster && cluster.strength != null) ? cluster.strength : null;
+
+  var out = '<div class="corr">';
+  out += '<div class="corr-head"><span class="corr-lbl">🔗 Correlated root-cause candidate</span>'+
+    (strength != null ? '<span class="corr-strength" title="How strongly these events co-occur">strength: '+escapeHtml(String(strength))+'</span>' : '')+
+    '</div>';
+  if(fronts.length >= 2){
+    out += '<div class="corr-one">One event across '+fronts.length+' fronts — not '+fronts.length+' separate problems.</div>';
+  } else {
+    out += '<div class="corr-one">One correlated event.</div>';
+  }
+  if(fronts.length){
+    var chips = fronts.map(function(f){ return '<span class="corr-chip">'+escapeHtml(f)+'</span>'; })
+      .join('<span class="corr-join" aria-hidden="true">+</span>');
+    out += '<div class="corr-fronts">'+chips+'</div>';
+  }
+  if(tc.ts){
+    out += '<div class="corr-when">all started ~ <b>'+escapeHtml(tsClock(tc.ts))+'</b></div>';
+  }
+  if(tc.summary){
+    out += '<div class="corr-sum">'+escapeHtml(tc.summary)+'</div>';
+  }
+  var events = (cluster && Array.isArray(cluster.events)) ? cluster.events : [];
+  if(events.length){
+    var rows = events.map(function(e){
+      e = e || {};
+      return '<div class="corr-evrow">'+
+        '<span class="ce-front">'+escapeHtml(e.front||'—')+'</span>'+
+        (e.type ? '<span class="ce-type">'+escapeHtml(e.type)+'</span>' : '')+
+        (e.ts ? '<span class="ce-ts">'+escapeHtml(tsClock(e.ts))+'</span>' : '')+
+        (e.detail ? '<div class="ce-detail">'+escapeHtml(e.detail)+'</div>' : '')+
+      '</div>';
+    }).join('');
+    out += '<details class="collapse corr-ev">'+
+      '<summary><span class="collapse-chev" aria-hidden="true">▸</span>'+
+      '<span class="collapse-sumtext">Member events<span class="collapse-count">'+events.length+'</span></span>'+
+      '<span class="collapse-more">show</span></summary>'+
+      '<div class="collapse-body">'+rows+'</div>'+
+    '</details>';
+  }
+  return out + '</div>';
+}
+/* The member cluster behind the top candidate: window match → most shared fronts → first. */
+function pickCorrCluster(clusters, tc){
+  if(!clusters || !clusters.length) return null;
+  var t = (tc && tc.ts) ? tsParse(tc.ts).getTime() : null;
+  if(t != null){
+    for(var i=0;i<clusters.length;i++){
+      var c = clusters[i] || {};
+      var a = c.tsStart ? tsParse(c.tsStart).getTime() : null;
+      var b = c.tsEnd ? tsParse(c.tsEnd).getTime() : null;
+      if(a != null && b != null && t >= a && t <= b) return c;
+    }
+  }
+  var want = (tc && Array.isArray(tc.fronts)) ? tc.fronts : [];
+  if(want.length){
+    var best=null, bestScore=-1;
+    clusters.forEach(function(c){
+      var cf = (c && Array.isArray(c.fronts)) ? c.fronts : [];
+      var score = cf.filter(function(f){ return want.indexOf(f) !== -1; }).length;
+      if(score > bestScore){ bestScore = score; best = c; }
+    });
+    if(best) return best;
+  }
+  return clusters[0];
+}
 /* The verdict card, re-imagined as the committed HYPOTHESIS (gap 7): ranked
    most-likely + the if/then next check + confidence + why — not a status line. */
 function hypoCardHtml(v){
@@ -2480,6 +2614,7 @@ function hypoCardHtml(v){
   out += configFindingHtml(v.configFindings);
   if(v.impact) out += '<div class="hypo-row"><span class="r-lbl">Impact</span>'+mdInline(v.impact)+'</div>';
   if(h && h.why) out += '<div class="hypo-why"><b>Why: </b>'+mdInline(h.why)+'</div>';
+  out += correlationHtml(v.correlation);   // Wave 4 — cross-domain co-occurrence, or the honest note
   var bs = v.blindSpots || [];
   if(bs.length){
     var bl = bs.map(function(b){
@@ -3691,10 +3826,13 @@ function renderRecVerdict(rec){
   if(!v) return '<p class="rec-empty">No L4 verdict was recorded for this triage — the docs summarise from the real evidence instead.</p>';
   var checks = (v.nextChecks||[]).map(function(c){ return '<li>'+escapeHtml(c)+'</li>'; }).join('');
   var blinds = (v.blindSpots||[]).map(function(b){ return '<li>'+escapeHtml(b.front)+' — '+escapeHtml(b.reason)+'</li>'; }).join('');
+  // Wave 4 — correlation may live on the verdict or at the record top level.
+  var corr = v.correlation || rec.correlation || null;
   return '<div class="rec-md">'+
     '<h4>Verdict</h4><p>'+escapeHtml(v.verdict||'')+'</p>'+
     (v.impact?'<h4>Impact</h4><p>'+escapeHtml(v.impact)+'</p>':'')+
     (checks?'<h4>Next checks</h4><ul>'+checks+'</ul>':'')+
+    (corr?'<h4>Cross-domain correlation</h4>'+correlationHtml(corr):'')+
     (blinds?'<h4>Blind spots</h4><ul>'+blinds+'</ul>':'')+
   '</div>';
 }
@@ -4093,6 +4231,9 @@ function repaintFromRecord(t){
     applyEvidence({ front: b.front, state: 'blind', detail: b.reason, risk: b.risk, why: b.why });
   });
   (t.progress||[]).forEach(function(p){ setStep(p.tier, p.status); });
+  // Wave 4 — correlation may be persisted on the record top level; make sure the
+  // restored verdict card sees it whichever place the backend wrote it.
+  if(t.verdict && t.correlation && t.verdict.correlation == null) t.verdict.correlation = t.correlation;
   if(t.verdict) renderVerdictCard(t.verdict);
   if(t.reTriageDelta) renderRetriageDelta(t.reTriageDelta);
   // Wave 1 — restore roles, ack/MTTA, the live SLA clock (open triages) and, on a
