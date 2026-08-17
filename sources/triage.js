@@ -28,6 +28,7 @@ const configStore = require('./config-store');
 const incidentStore = require('./incident-store');
 const alerts = require('./alerts');
 const notifier = require('./notifier');
+const correlation = require('./correlation');   // Wave 4 — deterministic cross-domain co-occurrence
 
 // The host app injects broadcast + status plumbing here so this module stays
 // free of server internals — the same seam live-agents.js uses.
@@ -959,15 +960,46 @@ async function runL4(triage, sym) {
   const nextChecks = buildNextChecks(triage, ev, active, suspect);
   const ranked = triage.rankedBlindSpots && triage.rankedBlindSpots.length ? triage.rankedBlindSpots : jarvis.rankBlindSpots(BLIND_SPOTS, (sym && sym.rawSymptom) || triage.description);
 
+  // ── Wave 4 — cross-domain correlation (deterministic) ──────────────────────
+  // Computed from the REAL timestamps on this bridge's live reads + config diffs.
+  // Runs with or without an API key. It is computed BEFORE the hypothesis so the
+  // hypothesis reasons over the same measured co-occurrence the operator sees.
+  const corr = correlation.correlate(triage, sym);
+
   // ── Committed hypothesis (gap 7) — strictly from the real findings ──
   post(triage, { agent, tier: 'L4', round: 2, text: '🧠 Correlating the collected findings into a committed hypothesis…' });
-  const findingsBlock = buildFindingsBlock(triage, ev, active, preExisting, suspect, clean, ranked, sym);
+  const findingsBlock = buildFindingsBlock(triage, ev, active, preExisting, suspect, clean, ranked, sym, corr);
   const hypo = await jarvis.synthesizeTriageVerdict({
     title: triage.title, severity: triage.severity, symptom: sym, findingsBlock,
   }).catch(() => null);
 
+  // When a key is live Jarvis only NARRATES the finding this pass already made —
+  // it can never create, move or erase one.
+  if (corr && corr.topCandidate) {
+    const narration = await jarvis.narrateCorrelation({
+      topCandidate: corr.topCandidate,
+      cluster: (corr.clusters || [])[0] || null,
+      symptom: sym,
+    }).catch(() => null);
+    // Applied through the module so the narration is secret-scrubbed exactly like
+    // the deterministic sentence — and so it can only ever replace the SENTENCE,
+    // never the finding (fronts / ts / clusters / note).
+    correlation.applyNarration(corr, narration);
+    post(triage, {
+      agent, tier: 'L4', round: 2,
+      // Dual clock (operator tz · UTC), the same convention as every other card.
+      text: `🔗 Cross-domain correlation — ${corr.topCandidate.fronts.join(' + ')} all started ~` +
+        `${correlation.clock(Date.parse(corr.topCandidate.ts), sym && sym.operatorTz)}: ` +
+        `${corr.topCandidate.summary}`,
+    });
+  } else if (corr) {
+    post(triage, { agent, tier: 'L4', round: 2, text: `🔎 Cross-domain correlation — ${corr.note}` });
+  }
+  triage.correlation = corr;
+
   const verdictPayload = {
     verdict, impact, nextChecks,
+    correlation: corr,            // Wave 4 — {clusters, topCandidate, note} (pinned contract)
     // Window-aware front split (real, computed above) — carried so downstream
     // consumers (ServiceNow state B2, SLT "what broke" B11) can tell an in-window
     // cause from pre-existing noise without re-deriving or over-counting.
@@ -1076,7 +1108,7 @@ function buildImpact(triage, active, preExisting, suspect, clean, sym) {
 
 // The findings block the hypothesis call reasons over — REAL numbers only, laid
 // out so Jarvis can commit without inventing anything.
-function buildFindingsBlock(triage, ev, active, preExisting, suspect, clean, ranked, sym) {
+function buildFindingsBlock(triage, ev, active, preExisting, suspect, clean, ranked, sym, corr) {
   const L = [];
   L.push(`SYMPTOM: ${sym && sym.rawSymptom ? sym.rawSymptom : triage.description}`);
   L.push(`WINDOW: ${sym && sym.timeAnchor ? `since ${sym.timeAnchor}` : 'no explicit anchor — recent default'}` +
@@ -1105,6 +1137,19 @@ function buildFindingsBlock(triage, ev, active, preExisting, suspect, clean, ran
     L.push(`- ${x.device || 'device'}: ${x.error ? 'error ' + x.error : (x.firstSnapshot ? 'first snapshot (no prior to diff)' : (x.changed ? `CHANGED at ${x.when}${x.inWindow ? ' [IN WINDOW]' : ' [pre-window]'}` : `no change since ${x.when || 'last snapshot'}`))}`);
   });
   if (!(triage.configFindings || []).length) L.push('- no config diff collected this pass');
+  L.push('');
+  // Wave 4 — the measured cross-domain co-occurrence (deterministic, already
+  // computed). Given to the hypothesis as a FINDING, never as a suggestion to
+  // invent a link: when there is no correlation the honest note is passed instead.
+  L.push('CROSS-DOMAIN CORRELATION (measured from real event timestamps):');
+  if (corr && corr.topCandidate) {
+    L.push(`- CORRELATED: ${corr.topCandidate.fronts.join(' + ')} all started ~${corr.topCandidate.ts}`);
+    L.push(`  ${corr.topCandidate.summary}`);
+    ((corr.clusters || [])[0] || { events: [] }).events.forEach((e) =>
+      L.push(`  · ${e.front} | ${e.type} | ${e.ts} | ${e.detail}`));
+  } else {
+    L.push(`- ${(corr && corr.note) || 'correlation pass did not run'}`);
+  }
   L.push('');
   L.push('BLIND SPOTS (ranked by relevance to this symptom):');
   (ranked || []).forEach((b) => L.push(`- ${b.front} [${b.risk}-risk]: ${b.reason}`));
@@ -1852,6 +1897,9 @@ function getTriage(id) {
     rankedBlindSpots: t.rankedBlindSpots || null,
     configFindings: t.configFindings || [],
     cadence: t.cadence ? t.cadence.label : null,
+    // Wave 4 — the correlation pass, also at the top level so the UI's restore
+    // fallback (verdict.correlation ?? record.correlation) is live, not dead code.
+    correlation: t.correlation || null,
   };
 }
 
