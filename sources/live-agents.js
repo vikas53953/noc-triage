@@ -306,94 +306,266 @@ async function routerExpertSdwan(agentId) {
   });
 }
 
-// ── Config-Keeper — real show output via Catalyst Center Command Runner ──────
-// This is the one path that touches a device CLI, so it is the strictest:
-// the guardrail allowlist runs before the request is built.
-async function configKeeper(agentId, command) {
-  const raw = String(command || '');
+// ── THE CHOKE POINT — the ONE place a command reaches a device ───────────────
+// Every route that can run CLI on a box (a direct Config-Keeper read, a Jarvis
+// delegation, a debate contribution, any future caller) comes through here, and
+// this function — not its callers — owns all four guarantees:
+//
+//   1. WRITE REFUSAL on the FULL RAW request. Judged on the operator's whole
+//      sentence, never on an extracted fragment, so "show version on sw1;
+//      reload" is refused OUT LOUD instead of having the reload quietly trimmed
+//      away and the show run in its place (guardrails.js exists to stop exactly
+//      that silent substitution).
+//   2. READ-ONLY GUARDRAIL, run TWICE: once on the RAW matched fragment (before
+//      any whitespace normalisation, so a "\n" or "|" separator still trips the
+//      chaining check) and once on the canonicalised command.
+//   3. THE NAMED DEVICE. The device the operator named is resolved against the
+//      live inventory and the command runs on THAT box. An unknown name is
+//      refused honestly — it NEVER silently falls back to the first reachable
+//      device, because answering "sw3's running-config" with sw1's config is a
+//      wrong answer wearing a right answer's clothes.
+//   4. THE PERMISSION GATE, wrapped around the wire calls themselves. Putting it
+//      here rather than in each caller is what makes "deny = zero wire calls"
+//      true for every caller, including ones written after this line. Gates
+//      nest re-entrantly (see approvals.js), so an outer caller that already
+//      gated the same request does not prompt the operator twice.
+//
+// Returns a structured result; callers only render it.
+//   { refused, kind, text }            — nothing ran (write intent / no command /
+//                                        guardrail / unknown or unreachable device)
+//   { denied: true, command }          — the operator denied it; zero wire calls
+//   { ok, command, target, body, note} — it ran; body is the REAL device output
+async function executeDeviceCli({ agentId, request, purpose, announce }) {
+  const raw = String(request || '');
+  const agentName = (ctx.agents[agentId] && ctx.agents[agentId].name) || agentId;
 
-  // 1. Destructive intent is judged on the RAW text, not on an extracted
-  //    fragment — so "erase startup-config and reload" and "show version;
-  //    write erase" are both refused OUT LOUD instead of being trimmed away.
+  // 1. Write intent, on the whole raw request.
   const intent = checkIntent(raw);
-  if (intent.destructive) {
-    refuseWrite(agentId, raw, intent);
-    return;
-  }
+  if (intent.destructive) return { refused: true, kind: 'write', intent, command: null };
 
-  // 2. No read command in the request → say so. Never guess, never substitute.
+  // 2. Parse a read command out of the plain English.
   const read = readCommandFrom(raw);
-  if (!read.command) {
-    say(agentId,
-      `${read.note ? '🔌 I cannot answer that one.' : '🤔 I could not find a read command in that.'}\n${RULE}\n` +
-      `You asked: "${raw.slice(0, 140)}"\n\n` +
-      (read.note ? `${read.note}\n\n` : '') +
-      `I will not answer a different question than the one you asked, so I have run nothing.\n` +
-      `I can only run read commands against real kit: ${READ_VERBS.join(' / ')}.\n` +
-      `Tell me which one — for example "show version", "show running-config", ` +
-      `"show ip interface brief" or "ping 10.10.20.48".`);
-    ctx.updateAgentStatus(agentId, 'idle', 'Asked for a read command — ran nothing');
-    return;
-  }
+  if (!read.command) return { refused: true, kind: 'no-command', note: read.note || null };
 
+  // 2a. Guardrail on the RAW fragment first — chaining/redirection characters
+  //     ("; & | > < ` $" and newlines) are still present at this point. The
+  //     canonicalised string below has had its whitespace flattened, so a
+  //     newline-separated second command would have been invisible to it.
+  const rawVerdict = checkCommand(read.rawFragment || read.command);
+  if (!rawVerdict.allowed) return { refused: true, kind: 'guardrail', reason: rawVerdict.reason };
   const verdict = checkCommand(read.command);
-  if (!verdict.allowed) {
-    say(agentId,
-      `🚫 ${verdict.reason}\n${RULE}\n` +
-      `You asked: "${raw.slice(0, 140)}"\n\n` +
-      `Nothing was sent to any device. This squad is read-only against real kit by design — ` +
-      `I can run ${READ_VERBS.join(' / ')} and nothing else.`);
-    ctx.updateAgentStatus(agentId, 'idle', 'Blocked a non-read-only command');
-    return;
-  }
+  if (!verdict.allowed) return { refused: true, kind: 'guardrail', reason: verdict.reason };
 
-  await runLive(agentId, 'Config read', `Running "${verdict.command}"`, async () => {
+  // 3. Which box did the operator name? Parsed from the text alone (no wire
+  //    call yet) so the approval record can name the target before anything runs.
+  const named = namedDeviceIn(raw);
+
+  if (announce) {
     say(agentId,
       `📋 You asked: "${raw.slice(0, 140)}"\n` +
       `I read that as the read-only command: "${verdict.command}" — guardrail passed.\n` +
+      (named ? `Target named in your request: ${named}.\n` : `No device named in your request.\n`) +
       `Submitting to Catalyst Center Command Runner — ${catalyst.host}...`);
+  }
 
-    const devices = await catalyst.getDevices();
-    const target = devices.find((d) => d.reachability === 'Reachable');
-    if (!target) throw new Error('no reachable device to read from');
-
-    say(agentId, `🎯 Target: ${target.hostname} (${target.ip}, ${target.platform}). Sandbox Command Runner is slow — this can take up to a minute.`);
-
-    const file = await catalyst.runShowCommand([target.id], verdict.command);
-    const out = extractCommandOutput(file, verdict.command);
-    const body = out ? String(out.text).slice(0, 2000) : JSON.stringify(file).slice(0, 1200);
-    say(agentId,
-      `📡 ${target.hostname} — ${verdict.command}\n${RULE}\n${body}\n${RULE}\n` +
-      (out && out.ok === false
-        ? `⚠️ The device rejected that command. Real output above — nothing was invented, and no configuration was sent.`
-        : `Real output, read live. No configuration was sent.`));
-
-    // ONE clean command_share for this direct read: the exact CLI command the
-    // device ran, its real raw output, why it ran, and what it means. Emitted
-    // explicitly (not per HTTP hop) so the chat shows a single deduped engineer
-    // block — the real `show version`, not the four Command Runner API calls.
-    const rejected = out && out.ok === false;
-    session.emitCommandShare({
-      agent: agentId,
-      agentName: (ctx.agents[agentId] && ctx.agents[agentId].name) || agentId,
-      tier: null,
-      purpose: `read "${verdict.command}" on a live switch`,
-      command: verdict.command,
-      raw: out ? String(out.text) : body,
-      reasoning: `Operator asked: "${raw.slice(0, 100)}". Parsed to the read-only CLI "${verdict.command}" (guardrail passed) and ran it on ${target.hostname} via Catalyst Center Command Runner.`,
-      conclusion: rejected
-        ? `The device rejected "${verdict.command}" — real output above, nothing invented, no configuration sent.`
-        : `Real "${verdict.command}" output read live from ${target.hostname} (${target.ip}). Read-only; no configuration sent.`,
-      ok: !rejected,
-    });
-  }, {
-    // The permission record shows the REAL read-only CLI command the agent wants
-    // to run, and cli:… re-checks it against the guardrail inside the gate.
+  // 4. The gate wraps every wire call below: inventory read, command submit,
+  //    task poll and output fetch. A denial runs none of them.
+  const g = await approvals.gate({
+    agentId, agentName,
     command: verdict.command,
-    target: 'a reachable Catalyst Center switch (Command Runner)',
-    reason: `operator asked: "${raw.slice(0, 80)}"`,
+    target: named
+      ? `${named} (named in the request) via Catalyst Center Command Runner`
+      : 'the first reachable Catalyst Center switch (no device named) via Command Runner',
+    reason: purpose || `operator asked: "${raw.slice(0, 80)}"`,
     cli: verdict.command,
-  }, false);
+  }, async () => {
+    const devices = await catalyst.getDevices();
+    const pick = resolveTargetDevice(devices, named);
+    if (pick.error) return { unknownDevice: pick.error, detail: pick.error };
+
+    if (announce) {
+      say(agentId, `🎯 Target: ${pick.target.hostname} (${pick.target.ip}, ${pick.target.platform})` +
+        (pick.note ? ` — ${pick.note}` : '') +
+        `. Sandbox Command Runner is slow — this can take up to a minute.`);
+    }
+
+    const file = await catalyst.runShowCommand([pick.target.id], verdict.command);
+    const out = extractCommandOutput(file, verdict.command);
+    // Scrub at the source: this string is about to become chat text, debate
+    // text and a Jarvis finding. Anything credential-shaped in a device's own
+    // output is redacted here, not at some later sink.
+    const body = session.scrub(out ? String(out.text) : JSON.stringify(file)).slice(0, 2000);
+    return {
+      target: pick.target, note: pick.note || null, body,
+      ok: !(out && out.ok === false),
+      detail: `${verdict.command} on ${pick.target.hostname}`,
+    };
+  });
+
+  if (g.denied) return { denied: true, command: verdict.command };
+  const r = g.result || {};
+  if (r.unknownDevice) return { refused: true, kind: 'unknown-device', reason: r.unknownDevice, command: verdict.command };
+  return { ok: true, command: verdict.command, target: r.target, note: r.note, body: r.body, deviceOk: r.ok };
+}
+
+// Plain-words rendering of a choke-point result. Shared by every caller so the
+// same refusal reads the same way in chat, in a debate and in a Jarvis finding.
+function cliResultText(res, raw) {
+  if (!res) return 'Nothing ran.';
+  if (res.denied) {
+    return `Read denied by the operator — ran nothing. The command "${res.command}" was not approved, ` +
+      `so nothing was sent to any device and I will not invent a result.`;
+  }
+  if (res.refused) {
+    if (res.kind === 'write') {
+      return `Refused — that is a change, and I am read-only. What I refused: "${res.intent.keyword}"` +
+        (res.intent.clause ? ` — in "${String(res.intent.clause).slice(0, 80)}"` : '') +
+        `. Nothing was sent to any device, and I did NOT run something else in its place.`;
+    }
+    if (res.kind === 'guardrail') return `${res.reason} Nothing was sent to any device.`;
+    if (res.kind === 'unknown-device') return res.reason;
+    return (res.note ? `${res.note} ` : '') +
+      `I could not find a read command in that, so I ran nothing — I will not answer a different ` +
+      `question than the one you asked. I can run ${READ_VERBS.join(' / ')} against real kit.`;
+  }
+  return `Ran "${res.command}" live on ${res.target.hostname} (${res.target.ip}, ${res.target.platform}) ` +
+    `via ${catalyst.label} Command Runner` + (res.note ? ` — ${res.note}` : '') + `:\n${res.body}\n` +
+    (res.deviceOk === false
+      ? `(The device rejected the command — real output above, nothing invented, no configuration sent.)`
+      : `(Real output, read-only; no configuration was sent.)`);
+}
+
+// ── Which box did the operator name? ────────────────────────────────────────
+// Only a DEVICE-POSITION phrase counts — "on sw2", "of sw3", "from 10.10.20.176"
+// — because the address in "ping 10.10.20.48" is the ping TARGET, not the box
+// the command runs on. A token must look like kit (an IPv4 address, or a name
+// containing a digit: sw2, core-rtr1) so generic English ("on the switches",
+// "on the box") is correctly read as "no device named".
+const DEVICE_MENTION = /\b(?:on|of|from|against)\s+(?:the\s+)?(?:device\s+|switch\s+|router\s+|host\s+|box\s+)?((?:\d{1,3}(?:\.\d{1,3}){3})|[a-z][a-z0-9_-]*\d[a-z0-9._-]*)\b/ig;
+
+function namedDeviceIn(text) {
+  const raw = String(text || '');
+  DEVICE_MENTION.lastIndex = 0;
+  let m;
+  const hits = [];
+  while ((m = DEVICE_MENTION.exec(raw)) !== null) hits.push(m[1]);
+  return hits.length ? hits[0] : null;
+}
+
+// Resolve the named device against the LIVE inventory. Honest on every miss:
+// an unknown name is refused with the names that do exist, an unreachable box is
+// refused as unreachable — never silently swapped for a different device.
+// With nothing named, the first reachable device is used and SAYS so.
+function resolveTargetDevice(devices, named) {
+  const list = Array.isArray(devices) ? devices : [];
+  if (named) {
+    const want = String(named).toLowerCase();
+    const match = list.find((d) => {
+      const host = String(d.hostname || '').toLowerCase();
+      return host === want || host.split('.')[0] === want || String(d.ip || '').toLowerCase() === want;
+    });
+    if (!match) {
+      return { error:
+        `There is no device called "${named}" in the live inventory, so I ran nothing. ` +
+        `Catalyst Center (${catalyst.host}) currently knows: ` +
+        `${list.map((d) => `${d.hostname} (${d.ip})`).join(', ') || 'no devices at all'}. ` +
+        `I will not run your command on a different box and pass it off as the answer.` };
+    }
+    if (match.reachability !== 'Reachable') {
+      return { error:
+        `${match.hostname} (${match.ip}) is in the inventory but Catalyst Center reports it as ` +
+        `"${match.reachability}", so I ran nothing. No output is better than another device's output.` };
+    }
+    return { target: match, note: `the device you named` };
+  }
+  const target = list.find((d) => d.reachability === 'Reachable');
+  if (!target) throw new Error('no reachable device to read from');
+  return { target, note: `you named no device, so I used the first reachable one` };
+}
+
+// ── Config-Keeper — real show output via Catalyst Center Command Runner ──────
+// The direct chat path. All the safety lives in executeDeviceCli above; this
+// function is presentation plus the task board.
+async function configKeeper(agentId, command) {
+  const raw = String(command || '');
+  const agentName = (ctx.agents[agentId] && ctx.agents[agentId].name) || agentId;
+  const taskTitle = 'Config read';
+
+  ctx.updateAgentStatus(agentId, 'active', 'Reading a device via Command Runner');
+  try { ctx.addTaskToBoard('inProgress', { title: taskTitle, agent: agentName }); } catch (e) { /* board must never block a read */ }
+
+  try {
+    const res = await executeDeviceCli({
+      agentId, request: raw, announce: true,
+      purpose: `operator asked: "${raw.slice(0, 80)}"`,
+    });
+
+    if (res.refused && res.kind === 'write') {
+      refuseWrite(agentId, raw, res.intent);
+    } else if (res.refused && res.kind === 'no-command') {
+      say(agentId,
+        `${res.note ? '🔌 I cannot answer that one.' : '🤔 I could not find a read command in that.'}\n${RULE}\n` +
+        `You asked: "${raw.slice(0, 140)}"\n\n` +
+        (res.note ? `${res.note}\n\n` : '') +
+        `I will not answer a different question than the one you asked, so I have run nothing.\n` +
+        `I can only run read commands against real kit: ${READ_VERBS.join(' / ')}.\n` +
+        `Tell me which one — for example "show version", "show running-config", ` +
+        `"show ip interface brief" or "ping 10.10.20.48".`);
+      ctx.updateAgentStatus(agentId, 'idle', 'Asked for a read command — ran nothing');
+    } else if (res.refused && res.kind === 'guardrail') {
+      say(agentId,
+        `🚫 ${res.reason}\n${RULE}\n` +
+        `You asked: "${raw.slice(0, 140)}"\n\n` +
+        `Nothing was sent to any device. This squad is read-only against real kit by design — ` +
+        `I can run ${READ_VERBS.join(' / ')} and nothing else.`);
+      ctx.updateAgentStatus(agentId, 'idle', 'Blocked a non-read-only command');
+    } else if (res.refused && res.kind === 'unknown-device') {
+      say(agentId, `🛑 I did not run that.\n${RULE}\n${res.reason}`);
+      ctx.updateAgentStatus(agentId, 'idle', 'Named device not resolvable — ran nothing');
+    } else if (res.denied) {
+      say(agentId,
+        `🛑 Read denied by the operator — ran nothing.\n${RULE}\n` +
+        `The command "${escapeForSay(res.command)}" was not approved, so I sent nothing to any device ` +
+        `and I am not going to invent a result. Approve it in the approval panel and ask again to run it for real.`);
+      ctx.appendToActivityLog(`[${new Date().toISOString()}] [${agentName}] ${taskTitle} DENIED by operator — ran nothing\n`);
+      ctx.updateAgentStatus(agentId, 'idle', 'Read denied — ran nothing');
+    } else {
+      say(agentId,
+        `📡 ${res.target.hostname} — ${res.command}\n${RULE}\n${res.body}\n${RULE}\n` +
+        (res.deviceOk === false
+          ? `⚠️ The device rejected that command. Real output above — nothing was invented, and no configuration was sent.`
+          : `Real output, read live from ${res.target.hostname} (${res.target.ip}). No configuration was sent.`));
+
+      // ONE clean command_share for this direct read: the exact CLI command the
+      // device ran, its real raw output, why it ran, and what it means. Emitted
+      // explicitly (not per HTTP hop) so the chat shows a single deduped engineer
+      // block — the real `show version`, not the four Command Runner API calls.
+      session.emitCommandShare({
+        agent: agentId,
+        agentName,
+        tier: null,
+        purpose: `read "${res.command}" on ${res.target.hostname}`,
+        command: res.command,
+        raw: res.body,
+        reasoning: `Operator asked: "${raw.slice(0, 100)}". Parsed to the read-only CLI "${res.command}" ` +
+          `(guardrail passed) and ran it on ${res.target.hostname} via Catalyst Center Command Runner.`,
+        conclusion: res.deviceOk === false
+          ? `The device rejected "${res.command}" — real output above, nothing invented, no configuration sent.`
+          : `Real "${res.command}" output read live from ${res.target.hostname} (${res.target.ip}). Read-only; no configuration sent.`,
+        ok: res.deviceOk !== false,
+      });
+      ctx.updateAgentStatus(agentId, 'idle', `${taskTitle} complete (live data)`);
+    }
+  } catch (err) {
+    say(agentId,
+      `⚠️ Source unreachable.\n${RULE}\n${err.message}\n\n` +
+      `No data to show. I am not going to guess what the network looks like.`);
+    ctx.appendToActivityLog(`[${new Date().toISOString()}] [${agentName}] ${taskTitle} FAILED — ${err.message}\n`);
+    ctx.updateAgentStatus(agentId, 'idle', 'Source unreachable');
+  }
+
+  try { ctx.moveTaskOnBoard(taskTitle, 'inProgress', 'done'); }
+  catch (err) { console.error('[live] Could not tidy the task board:', err.message); }
 }
 
 // Pull the actual CLI command out of plain English. People type
@@ -425,7 +597,30 @@ function readCommandFrom(text) {
   }
 
   const m = /\b((?:show|ping|traceroute|dir|more)\b[\w\s|:/.\-]*)/i.exec(raw);
-  if (!m) return { command: null };
+  if (!m) {
+    // No read verb typed. A canonical device-read noun still names exactly one
+    // command ("the running config of sw3" → show running-config), so map it
+    // rather than dead-ending on a request whose meaning is not in doubt.
+    // Refused outright if the sentence carries any chaining/redirection
+    // character: with no typed fragment there is nothing safe to hand the
+    // guardrail's chain check, and guessing past a "|" or a newline is exactly
+    // how a second command gets smuggled in.
+    if (/[;&|><`$\n\r]/.test(raw)) {
+      return { command: null, note: 'That request chains or redirects (; & | > < ` $), so I ran nothing.' };
+    }
+    const low = raw.toLowerCase();
+    if (/\brun(?:ning)?[\s-]?config/.test(low)) return { rawFragment: 'show running-config', command: 'show running-config' };
+    if (/\bstart(?:up)?[\s-]?config/.test(low)) return { rawFragment: 'show startup-config', command: 'show startup-config' };
+    if (/\bversion\b/.test(low)) return { rawFragment: 'show version', command: 'show version' };
+    return { command: null };
+  }
+
+  // The fragment EXACTLY as it was typed. The caller runs the read-only
+  // guardrail on this first, because the normalisation below flattens every
+  // newline into a space — and a newline is one of the chaining characters the
+  // guardrail exists to refuse ("show ip arp\nreload" must never become the
+  // single allowed line "show ip arp reload").
+  const rawFragment = m[1];
 
   let frag = m[1]
     .replace(/\s+(on|for|from|of|across|in|please)\b.*$/i, '')
@@ -451,14 +646,14 @@ function readCommandFrom(text) {
   // real CLI command. The reply always states which command was run, so the
   // mapping is visible rather than silent.
   if (/^show\b/.test(t)) {
-    if (/running[\s-]?conf(ig)?/.test(t)) return { command: 'show running-config' };
-    if (/start(up)?[\s-]?conf(ig)?/.test(t)) return { command: 'show startup-config' };
-    if (/\b(version|software|ios|firmware)\b/.test(t)) return { command: 'show version' };
-    if (/\binterface/.test(t)) return { command: 'show ip interface brief' };
-    if (/\binventor(y|ies)\b/.test(t)) return { command: 'show inventory' };
+    if (/running[\s-]?conf(ig)?/.test(t)) return { rawFragment, command: 'show running-config' };
+    if (/start(up)?[\s-]?conf(ig)?/.test(t)) return { rawFragment, command: 'show startup-config' };
+    if (/\b(version|software|ios|firmware)\b/.test(t)) return { rawFragment, command: 'show version' };
+    if (/\binterface/.test(t)) return { rawFragment, command: 'show ip interface brief' };
+    if (/\binventor(y|ies)\b/.test(t)) return { rawFragment, command: 'show inventory' };
   }
 
-  return { command: frag };
+  return { rawFragment, command: frag };
 }
 
 // ── The class: "run a command on a device" ──────────────────────────────────
@@ -470,17 +665,28 @@ function readCommandFrom(text) {
 // one shared Command Runner path (Config-Keeper) instead of dead-ending on an
 // agent that has no CLI session.
 //
-// Deliberately NARROW so ordinary domain asks still route to their owner:
-//   • ping/traceroute only count with a real target (a bare "ping" is an agent
+// Deliberately NARROW so ordinary domain asks still route to their owner. A
+// request counts as device-CLI only when it names an ACTUAL COMMAND:
+//   • ping/traceroute with a real target (a bare "ping" is an agent
 //     responsiveness check, not a device ping);
-//   • show/dir/more count when aimed at a device ("… on sw1 / on 10.0.0.1"), or
-//   • when they are a canonical IOS config/version read (running-config, version,
-//     show ip …) even without an explicit target.
-// "inventory" and "health" are intentionally NOT canonical triggers — those are
-// domain questions NetOps/Monitor-Eye answer from their own live source.
-const DEVICE_TARGET = /\bon\s+(?:the\s+)?(?:sw\d+|switch(?:es)?|routers?|devices?|nodes?|\d{1,3}(?:\.\d{1,3}){3}|[a-z][\w-]*\d[\w.-]*)\b/i;
-const CANON_SHOW = /\bshow\s+(?:run(?:ning)?[\s-]?config|start(?:up)?[\s-]?config|version|ip\s+\w|interfaces?\b|mac[\s-]?address|cdp\b|lldp\b|vlan\b|arp\b|processes\b|logging\b)/i;
+//   • a read verb followed by a real IOS subject ("show running-config",
+//     "show ip interface brief", "show version on sw2");
+//   • or an explicit execution verb — "run"/"execute" <read verb …> — which is
+//     the operator saying outright that they want it run on the box.
+// What is NOT enough: any sentence that merely contains "show … on <device>".
+// "show me the alarms on sw1" is a Monitor-Eye question about its own source
+// ("alarms" is not an IOS subject) and must reach Monitor-Eye, not the runner.
+// "inventory" and "health" are likewise NOT triggers — those are NetOps domain
+// questions; asked as "run show inventory on sw1" the explicit verb carries it.
+const IOS_SUBJECT =
+  '(?:run(?:ning)?[\\s-]?config|start(?:up)?[\\s-]?config|version|software|ip\\s+\\w|' +
+  'interfaces?\\b|int\\s+\\w|mac[\\s-]?address|cdp\\b|lldp\\b|vlan\\b|arp\\b|processes\\b|' +
+  'logging\\b|clock\\b|users\\b|license|module|environment|power|spanning[\\s-]?tree|' +
+  'platform|redundancy|flash|bootflash|standby|tech[\\s-]?support)';
+const CANON_SHOW = new RegExp(`\\bshow\\s+(?:me\\s+|us\\s+)?(?:the\\s+|my\\s+|our\\s+|all\\s+)?${IOS_SUBJECT}`, 'i');
+const EXPLICIT_RUN = /\b(?:run|execute)\b[^.;]{0,40}?\b(?:show|ping|traceroute|dir|more)\b/i;
 const PING_TRACE = /\b(?:ping|traceroute|trace)\b\s+(?:\d{1,3}(?:\.\d{1,3}){3}|sw\d+|[a-z][\w.-]*\.[\w.-]+|[a-z][\w-]*\d[\w-]*)/i;
+const DIR_MORE = /\b(?:dir|more)\s+(?:flash|bootflash|disk\d|nvram|\/|[\w-]+:)/i;
 
 function isDeviceCliRequest(command) {
   const raw = String(command || '');
@@ -489,10 +695,22 @@ function isDeviceCliRequest(command) {
   // out loud it holds no such store (readCommandFrom handles that honestly).
   if (NO_STORE.test(raw)) return false;
   if (PING_TRACE.test(t)) return true;
-  if (/\b(show|dir|more)\b/i.test(t) && DEVICE_TARGET.test(t)) return true;
   if (CANON_SHOW.test(t)) return true;
+  if (DIR_MORE.test(t)) return true;
+  if (EXPLICIT_RUN.test(t)) return true;
+  // No read verb typed at all, but a canonical device read aimed at a NAMED box
+  // — "can you check the running config of sw3", "what version is on sw2". The
+  // named device is what keeps this narrow: the same nouns with no device named
+  // stay domain questions for their owner.
+  if (DEVICE_READ_NOUN.test(t) && namedDeviceIn(raw)) return true;
   return false;
 }
+
+// Canonical device-read nouns — the ones that map onto exactly one IOS command.
+// Kept deliberately short: every entry here must have a mapping in
+// readCommandFrom, or the request would be classified as CLI and then refused
+// for having no command in it.
+const DEVICE_READ_NOUN = /\b(?:run(?:ning)?[\s-]?config(?:uration)?|start(?:up)?[\s-]?config(?:uration)?|(?:ios|software|code)?\s*version)\b/i;
 
 // Route a device-CLI request to the shared Command Runner path. Config-Keeper
 // owns that path; every other engineer hands it off OUT LOUD rather than
@@ -771,32 +989,21 @@ const DEBATE_BUILDERS = {
   'config-keeper': {
     source: () => `${catalyst.label} (${catalyst.host})`,
     async build(topic) {
-      // When Jarvis delegates an ACTUAL device CLI command ("run show version on
-      // sw1", "show running-config", "ping <ip>"), execute it on the box through
-      // the Command Runner and return the REAL output — the same runner a direct
-      // Config-Keeper read uses. build() already runs inside Jarvis's permission
-      // gate + session context (gatherForJarvis), so it does not re-gate here.
-      // A non-read command is refused; nothing is ever sent to change a device.
+      // A device CLI command ("run show version on sw1", "show running-config",
+      // "ping <ip>") goes through executeDeviceCli — the SAME choke point the
+      // direct chat path uses, which owns the write refusal, the read-only
+      // guardrail, resolving the named device, the permission gate and the
+      // secret scrub. That is what makes this branch safe for EVERY caller of
+      // build(), including the debate path, which does no gating of its own.
       if (isDeviceCliRequest(topic)) {
-        const read = readCommandFrom(topic);
-        if (read.command) {
-          const verdict = checkCommand(read.command);
-          if (!verdict.allowed) {
-            return `That is not a read-only command, so I did not run it: ${verdict.reason}. ` +
-              `Nothing was sent to any device.`;
-          }
-          const devices = await catalyst.getDevices();
-          const target = devices.find((d) => d.reachability === 'Reachable');
-          if (!target) throw new Error('no reachable device to read from');
-          const file = await catalyst.runShowCommand([target.id], verdict.command);
-          const out = extractCommandOutput(file, verdict.command);
-          const body = out ? String(out.text).slice(0, 2000) : JSON.stringify(file).slice(0, 1200);
-          return `Ran "${verdict.command}" live on ${target.hostname} (${target.ip}, ${target.platform}) ` +
-            `via ${catalyst.label} Command Runner:\n${body}\n` +
-            (out && out.ok === false
-              ? `(The device rejected the command — real output above, nothing invented, no configuration sent.)`
-              : `(Real output, read-only; no configuration was sent.)`);
-        }
+        const res = await executeDeviceCli({
+          agentId: 'config-keeper', request: topic,
+          purpose: `run the command asked for in: "${String(topic || '').slice(0, 80)}"`,
+        });
+        // Whatever happened — ran, refused, denied — say THAT. Never quietly
+        // fall through to an inventory read: answering a command with a
+        // different reading is the substitution this file exists to prevent.
+        return cliResultText(res, topic);
       }
       const devices = await catalyst.getDevices();
       const versions = devices.map((d) => `${d.hostname}: ${d.software || 'version not reported'} (${d.reachability})`);
@@ -906,6 +1113,10 @@ async function gatherForJarvis(agentId, question) {
   // finally. This is the delegation engagement path the roster light was missing.
   ctx.updateAgentStatus(agentId, 'active', `Jarvis delegation: ${String(question || '').slice(0, 60)}`);
   try {
+    // The handoff note rides on EVERY outcome (ran, denied, unreachable, not
+    // connected) — an operator whose question was re-pointed must be told so
+    // even when the re-pointed read came back with nothing.
+    const finding = await (async () => {
     // Not-connected agents never invent a report — Jarvis is told so plainly.
     if (NO_BACKEND[agentId]) {
       const need = NO_BACKEND[agentId];
@@ -953,7 +1164,7 @@ async function gatherForJarvis(agentId, question) {
           text: 'Read denied by the operator — ran nothing, and I will not invent a result.',
         };
       }
-      return { agentId, name, connected: true, stance: 'evidence', text: handoffNote + String(g.result || '').trim() };
+      return { agentId, name, connected: true, stance: 'evidence', text: String(g.result || '').trim() };
     } catch (err) {
       const src = typeof builder.source === 'function' ? builder.source() : 'the source';
       return {
@@ -961,6 +1172,8 @@ async function gatherForJarvis(agentId, question) {
         text: `Source unreachable — ${src} did not answer: ${err.message}. No readings, so nothing to report.`,
       };
     }
+    })();
+    return handoffNote ? { ...finding, text: handoffNote + finding.text } : finding;
   } finally {
     ctx.updateAgentStatus(agentId, 'idle', 'Delegation turn ended');
   }

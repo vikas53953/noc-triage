@@ -731,17 +731,11 @@ function detectAgentIntent(agentId, command) {
        /\b(interface|loopback|lo\d+|gigabit|gig\b|vlan|trunk|route|ntp|snmp|bgp[\s-]?neighbor|ospf|eigrp|description|ip[\s-]?add)\b/.test(t))) {
     return 'configure_device';
   }
-  // Device CLI — "run show version on sw1", "show running-config", "ping 10.0.0.1".
-  // CLASS FIX (CLI routing): this is a command the operator wants EXECUTED on a
-  // box, not a domain question an agent answers from its own source. It is
-  // detected here, AFTER configure_device (so a config change is still refused
-  // first) and BEFORE the domain intents, so it can never be classified as a
-  // NetOps inventory read and dead-end on "no CLI/SSH session to the box".
-  // The single owner of that path is Config-Keeper (Catalyst Center Command
-  // Runner); live.runDeviceCli hands off out loud when another agent was asked.
-  if (live.isDeviceCliRequest(command)) {
-    return 'device_cli';
-  }
+  // NOTE: device-CLI routing ("run show version on sw1") is deliberately NOT an
+  // intent here. It lives in ONE place — live.handle(), the module choke point
+  // next to the code that executes it (sources/live-agents.js). A copy of the
+  // rule in this file could drift out of step with that one, and two routers
+  // disagreeing about what "a command" is would be worse than one.
   // Config / compliance
   if (/\b(config|backup|compliance|drift|change|diff|snapshot|baseline|audit|inventory)\b/.test(t)) {
     return 'config_check';
@@ -793,36 +787,27 @@ function runAgentAction(agentId, command) {
 
   updateAgentStatus(agentId, 'active', `Processing: ${command}`);
 
-  // Jarvis keeps its squad-coordination intents (standup, roll call, triage);
-  // anything network-shaped falls through to the live sources.
-  if (agentId === 'jarvis') return simulateJarvisAction(agentId, command);
-
-  // Destructive intent is judged on the RAW request text, for EVERY network
-  // agent — not just the one that talks to a device CLI. A refusal is always
-  // spoken; nothing is ever quietly swapped for a different command.
+  // Destructive intent is judged on the RAW request text, for EVERY agent —
+  // INCLUDING Jarvis. This runs BEFORE the Jarvis dispatch on purpose: routed to
+  // the reasoning model first, the only thing standing between "show version on
+  // sw1; reload" and the wire would be the model's own judgement, and a clause
+  // it silently drops is a request the operator never hears refused. A refusal
+  // is always spoken; nothing is ever quietly swapped for a different command.
   const writeIntent = checkIntent(command);
   if (writeIntent.destructive) {
     appendToActivityLog(`[${new Date().toISOString()}] [${agent.name}] Refused a state-changing request ("${writeIntent.keyword}") — "${command.slice(0, 60)}"\n`);
     return live.refuseWrite(agentId, command, writeIntent);
   }
 
-  // Class-level CLI routing (works with the reasoning LLM offline): a "run a
-  // command on a device" request — "show version on sw1", "show running-config",
-  // "ping 10.0.0.1", "traceroute …" — reaches the shared Command Runner path,
-  // whichever engineer it was aimed at. Config-Keeper owns that path; any other
-  // agent hands off to it rather than dead-ending with "no CLI session". State
-  // changes are already refused above, so only read-only verbs get here.
-  if (live.isDeviceCliRequest(command)) {
-    return live.runDeviceCli(agentId, command);
-  }
+  // Jarvis keeps its squad-coordination intents (standup, roll call, triage);
+  // anything network-shaped falls through to the live sources.
+  if (agentId === 'jarvis') return simulateJarvisAction(agentId, command);
 
   const intent = detectAgentIntent(agentId, command);
 
   switch (intent) {
     // Read-only is enforced before anything reaches a device.
     case 'configure_device': return live.refuseWrite(agentId, command);
-    // Any engineer can be handed a device CLI command; only one path executes it.
-    case 'device_cli':       return live.runDeviceCli(agentId, command);
     case 'ping':             return simulatePing(agentId);
     case 'help':             return showAgentHelp(agentId);
     default:                 return live.handle(agentId, command);
