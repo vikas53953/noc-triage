@@ -39,10 +39,11 @@ not-configured) + opt-in approval timeout (`APPROVAL_TIMEOUT_MS`, default off). 
 (timezone anchor, retry-404, silent-422, dup activity, MTTR→"time to verdict", etc.).
 
 ## IN FLIGHT / NEXT (sequence; shared files → mostly one at a time)
-1. **CLI routing fix** (branch fix/cli-routing) — route any "run <show/ping> on <device>" to the Command
-   Runner path (Config-Keeper) so it never dead-ends on NetOps/inventory ("no command-runner path").
-   Class fix in server.js `detectAgentIntent` + jarvis routing + live-agents. Verify: ask JARVIS
-   "show version on sw1" → real device output. (Was relaunched 2026-08-17.)
+1. **CLI routing fix** — DONE (PR #38, 4 adversarial review rounds, merged 2026-08-17, verified live on
+   :3000: Jarvis "run show version on sw2" → real sw2 output). One choke point `executeDeviceCli()` in
+   live-agents.js owns write-refusal, guardrail (raw fragment), named-device resolution, re-entrant
+   permission gate (AsyncLocalStorage), scrub. Known backlog (reviewer-logged, fails safe): checkIntent
+   judges a delegated sub-question's RATIONALE ("after the upgrade") and can refuse a legit read.
 2. **Roadmap Wave 4 — cross-domain correlation** — DONE. PRs #39+#37 adversarially reviewed (2 blockers
    fixed at class level: candidate evidence never decided by a display cap), merged 2026-08-17, verified
    live on :3000 (honest null on the real estate; positive path proven with widened window). sources/correlation.js.
