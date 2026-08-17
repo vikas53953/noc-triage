@@ -45,20 +45,36 @@ const ABILITIES = [
     available: true,
   },
   {
+    // CW-2 REALITY, and the map has to tell it. The change engine is BUILT and
+    // every step of its wrap runs for real — the permission gate, the
+    // before-capture, the after-capture, the diff, the validation, the rollback
+    // plan. What does not exist is a WRITE TRANSPORT to the kit we are actually
+    // connected to: Catalyst Center answers 403 "Role does not have valid
+    // permissions" to every configuration-write API on this sandbox account
+    // (Command Runner is a read-only endpoint by design), and the SSH path stays
+    // read-only until CW-5.
+    //
+    // So `available` stays FALSE — because "make a change on a device" is what
+    // the operator would be promised, and that promise cannot be kept on any
+    // device we can currently reach. Marking it true because the engine exists
+    // would be the map lying about the estate. `engineBuilt` says the other half
+    // of the truth, so the desk can show the wrap and the honest freeze.
     key: 'change',
     label: 'Make a change on a device',
-    plain: 'Push a config change with the full safety wrap — before/after capture, diff, validation and a rollback plan.',
-    example: 'add a loopback interface on sw2',
+    plain: 'Push a config change with the full safety wrap — approval, before/after capture, diff, validation and a rollback plan.',
+    example: 'set the description on GigabitEthernet1/0/3 on sw2',
     available: false,
-    reason: 'The change engine arrives in CW-2 — until then I am read-only and will not touch a device configuration.',
+    engineBuilt: true,
+    reason: 'The change engine is built and every safety step runs for real, but there is no write path to any device I am connected to: '
+      + 'the Catalyst Center sandbox account is read-only (it answers 403 "Role does not have valid permissions" to every configuration-write API), '
+      + 'and the SSH path stays read-only until CW-5. I will run the whole wrap and freeze honestly at the apply step rather than pretend a change landed.',
   },
   {
     key: 'drift',
     label: 'Check a device against its baseline',
-    plain: 'Compare a device\'s live config against its saved baseline and report every deviation.',
-    example: 'check sw1 against its baseline',
-    available: false,
-    reason: 'Drift and deviation reports arrive in CW-2, alongside the change engine.',
+    plain: 'Compare a device\'s live config against its saved baseline and report every deviation — including which recorded change explains it.',
+    example: 'check sw2 against its baseline',
+    available: true,
   },
   {
     key: 'tickets',
@@ -165,6 +181,10 @@ function isQuestionAboutState(text) {
 function publicShape(a) {
   const out = { key: a.key, label: a.label, plain: a.plain, example: a.example, available: !!a.available };
   if (!a.available) out.reason = a.reason;
+  // Half-built is a real state and the map must be able to say it: the change
+  // engine exists and runs, but there is no write path to reach a device with.
+  // Hiding that would make the desk unable to show a wrap it can genuinely run.
+  if (a.engineBuilt) out.engineBuilt = true;
   return out;
 }
 

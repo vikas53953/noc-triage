@@ -69,6 +69,51 @@ const SOFT_VERBS = {
   write: /^(a|an|me|us|up|out|report|reports|doc|docs|document|documentation|summary|notes|note|file|markdown|md|inventory|down)\b/i,
 };
 
+// ── Nouns that look like verbs (CW-2 pre-work, class fix) ───────────────────
+// Reviewer-logged bug (PR #38): checkIntent judged FREE PROSE as if it were a
+// command. A delegated read whose justification read "…confirm the image after
+// the upgrade" split at "after", left the clause "the upgrade", stripped the
+// article as filler, and refused a legitimate show because the NOUN "upgrade"
+// sat on the state-changing list.
+//
+// The class is: a word on STATE_CHANGING is only a COMMAND when it is used as a
+// VERB. Several of those words are also ordinary English NOUNS naming an event
+// that already happened or is planned ("the upgrade", "since the last reload",
+// "after restart"). Two structural signals separate the two uses, and both look
+// at the clause BEFORE conversational filler is stripped:
+//
+//   (a) DETERMINER TEST — a determiner or possessive immediately in front of the
+//       word makes it a noun phrase ("the upgrade", "last reload", "its reboot").
+//       A real instruction never says "the reload sw1".
+//   (b) BARE-EVENT TEST — the clause is nothing but the word, and it arrived
+//       after a TIME separator ("…after restart"). That is a point in time being
+//       referred to, not an order.
+//
+// Both tests apply ONLY to the event-noun list below. Words with no noun life
+// on a device ("erase", "wipe", "shut") are never excused, so "; erase" and
+// "then wipe the config" are refused exactly as before. And the tests need the
+// SEPARATOR that produced the clause, which is why clausesOf now returns it.
+const EVENT_NOUNS = new Set([
+  'upgrade', 'downgrade', 'reload', 'reboot', 'restart', 'change', 'deploy',
+  'rollback', 'commit', 'install', 'patch', 'provision', 'copy', 'reset',
+  'boot', 'archive', 'config', 'configuration', 'maintenance',
+]);
+
+// Determiners / possessives / quantifiers. In front of an event noun they make
+// it a noun phrase. NOT pronoun subjects ("you", "we") — "after you reload the
+// router" is still a real instruction and must still be refused.
+const DETERMINERS = new Set([
+  'the', 'a', 'an', 'this', 'that', 'these', 'those', 'my', 'your', 'our',
+  'its', 'their', 'his', 'her', 'last', 'latest', 'next', 'previous', 'recent',
+  'any', 'each', 'every', 'some', 'one', 'another', 'scheduled', 'planned',
+  'emergency', 'unplanned', 'first', 'second', 'no', 'both', 'said',
+]);
+
+// Separators that introduce a POINT IN TIME rather than a fresh instruction.
+// Used only by the bare-event test — ";" "&&" "then" are NOT here, so
+// "show version; reload" and "show version then reload" stay refusals.
+const TEMPORAL_SEPS = /^(?:after|before|once|while|since|until|during|following|afterwards?|subsequently|later|thereafter|eventually|meanwhile)$/i;
+
 // Words people put in front of the real verb. Stripped before we decide what
 // the command intent actually is, so "please erase startup-config" is caught.
 const FILLER = new Set([
@@ -135,24 +180,70 @@ function checkCommand(command) {
 // naturally reach for ("afterwards", "subsequently", "later", "finally",
 // "next"). Each one is a joint between two commands, and any joint this misses
 // is a second command nobody is judging.
+// The separator that produced each clause is KEPT (capturing group), because
+// "after restart" and "; restart" are different English and must be judged
+// differently — see the EVENT_NOUNS block above.
+const CLAUSE_SPLIT = /([;&|,\n\r]+|\band then\b|\bafter that\b|\bthen\b|\band\b|\bbefore\b|\bafter\b|\bonce\b|\bwhile\b|\bunless\b|\bbut\b|\bso\b|\balso\b|\bafterwards?\b|\bsubsequently\b|\blater\b|\bthereafter\b|\bfinally\b|\bnext\b|\beventually\b|\bmeanwhile\b|\blastly\b|\bfollowed by\b)/i;
+
+// Clauses WITH the separator that introduced each one: [{ text, sep }].
+// `sep` is null for the first clause (nothing introduced it).
+function clauseParts(text) {
+  const pieces = String(text || '').split(new RegExp(CLAUSE_SPLIT.source, 'gi'));
+  const out = [];
+  let sep = null;
+  for (let i = 0; i < pieces.length; i++) {
+    const piece = String(pieces[i] || '');
+    if (i % 2 === 1) { sep = piece.trim(); continue; } // captured separator
+    const t = piece.trim();
+    if (t) out.push({ text: t, sep });
+  }
+  return out;
+}
+
+// Back-compatible: the clause strings only.
 function clausesOf(text) {
-  return String(text || '')
-    .split(/[;&|,\n\r]+|\band then\b|\bafter that\b|\bthen\b|\band\b|\bbefore\b|\bafter\b|\bonce\b|\bwhile\b|\bunless\b|\bbut\b|\bso\b|\balso\b|\bafterwards?\b|\bsubsequently\b|\blater\b|\bthereafter\b|\bfinally\b|\bnext\b|\beventually\b|\bmeanwhile\b|\blastly\b|\bfollowed by\b/i)
-    .map((c) => c.trim())
+  return clauseParts(text).map((c) => c.text);
+}
+
+function tokensOf(clause) {
+  return String(clause || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s'-]/g, ' ')
+    .split(/\s+/)
     .filter(Boolean);
 }
 
 // First meaningful word of a clause, with conversational filler stripped.
 function commandWord(clause) {
-  const words = String(clause || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s'-]/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean);
-  for (const w of words) {
+  for (const w of tokensOf(clause)) {
     if (!FILLER.has(w)) return w;
   }
   return '';
+}
+
+// The first meaningful word PLUS the structure around it, which is what tells a
+// verb from a noun. `prev` is the raw word in front of it (filler NOT stripped —
+// the article is the evidence), and `bare` means the clause ends there.
+function commandShape(clause) {
+  const words = tokensOf(clause);
+  for (let i = 0; i < words.length; i++) {
+    if (FILLER.has(words[i])) continue;
+    return {
+      word: words[i],
+      prev: i > 0 ? words[i - 1] : null,
+      bare: i === words.length - 1,
+    };
+  }
+  return { word: '', prev: null, bare: true };
+}
+
+// Is this occurrence a NOUN (an event being referred to) rather than a command?
+// Only ever true for the event-noun list; see the block above for the two tests.
+function isEventReference(shape, sep) {
+  if (!EVENT_NOUNS.has(shape.word)) return false;
+  if (shape.prev && DETERMINERS.has(shape.prev)) return true;          // (a)
+  if (shape.bare && sep && TEMPORAL_SEPS.test(sep)) return true;       // (b)
+  return false;
 }
 
 // Does this plain-English request ASK for a state change?
@@ -160,8 +251,9 @@ function commandWord(clause) {
 // refusal message quotes back, so the user is told exactly what was refused.
 function checkIntent(text) {
   const raw = String(text || '');
-  for (const clause of clausesOf(raw)) {
-    const word = commandWord(clause);
+  for (const { text: clause, sep } of clauseParts(raw)) {
+    const shape = commandShape(clause);
+    const word = shape.word;
     if (!word) continue;
     if (READ_VERBS.includes(word)) continue; // a read clause is a read clause
     // A clause that is nothing but the word "no" is the English "no", not the
@@ -170,16 +262,57 @@ function checkIntent(text) {
     if (word === 'no' && /^no\W*$/i.test(clause.trim())) continue;
     // Ordinary-English use of a verb that is only destructive on a device.
     if (SOFT_VERBS[word]) {
-      const rest = String(clause).toLowerCase().replace(/[^a-z0-9\s'-]/g, ' ')
-        .split(/\s+/).filter(Boolean);
+      const rest = tokensOf(clause);
       const after = rest.slice(rest.indexOf(word) + 1).join(' ');
       if (SOFT_VERBS[word].test(after)) continue;
     }
+    // The word is on the list, but is it being USED as a command? A rationale
+    // that refers to an event ("after the upgrade", "…after restart") is prose,
+    // not an instruction, and refusing it refuses a legitimate read.
+    if (isEventReference(shape, sep)) continue;
     if (STATE_CHANGING.includes(word)) {
       return { destructive: true, keyword: word, clause: clause.trim() };
     }
   }
   return { destructive: false };
+}
+
+// ── Compound "read then change" (CW-2 pre-work 2) ───────────────────────────
+// "reload sw1 then show me the version" is TWO asks in one sentence. Refusing
+// the whole thing drops the read silently; running the whole thing is a write.
+// So the two halves are separated here, at the one place that already knows how
+// to cut a sentence into clauses, and the caller honours the read half out loud
+// while refusing the change half out loud.
+//
+// readText is rebuilt from the READ clauses ONLY, so no fragment of the change
+// half can reach the command parser or the wire.
+function splitIntent(text) {
+  const raw = String(text || '');
+  const readClauses = [];
+  let change = null;
+  for (const { text: clause, sep } of clauseParts(raw)) {
+    const shape = commandShape(clause);
+    const word = shape.word;
+    if (!word) continue;
+    if (READ_VERBS.includes(word)) { readClauses.push(clause.trim()); continue; }
+    if (word === 'no' && /^no\W*$/i.test(clause.trim())) continue;
+    if (SOFT_VERBS[word]) {
+      const rest = tokensOf(clause);
+      const after = rest.slice(rest.indexOf(word) + 1).join(' ');
+      if (SOFT_VERBS[word].test(after)) continue;
+    }
+    if (isEventReference(shape, sep)) continue;
+    if (STATE_CHANGING.includes(word) && !change) {
+      change = { keyword: word, clause: clause.trim() };
+    }
+  }
+  return {
+    destructive: Boolean(change),
+    change,
+    readClauses,
+    readText: readClauses.join('. '),
+    compound: Boolean(change) && readClauses.length > 0,
+  };
 }
 
 // Convenience wrapper for callers: throws with a plain-words message.
@@ -191,7 +324,8 @@ function assertReadOnly(command) {
 
 module.exports = {
   checkCommand, checkIntent, assertReadOnly, commandWord,
-  READ_VERBS, STATE_CHANGING,
+  splitIntent, clausesOf, clauseParts, commandShape,
+  READ_VERBS, STATE_CHANGING, EVENT_NOUNS, DETERMINERS,
   // Exported so the SSH sidecar's mirrored rules can be parity-checked against
   // these (sources/ssh-runner.smoke.js). Drift between the two layers must fail
   // a test, not sit silently until someone tightens one side only.
