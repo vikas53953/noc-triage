@@ -21,6 +21,7 @@ const session = require('./sources/session-log');
 const chatStore = require('./sources/chat-store');
 const approvals = require('./sources/approvals');
 const artifacts = require('./sources/artifacts');
+const notifier = require('./sources/notifier');
 const { checkIntent } = require('./sources/guardrails');
 
 // One module owns where the workspace is and how any caller-supplied path is
@@ -273,7 +274,27 @@ session.setCommandShareBroadcast((data) => broadcast('command_share', data));
 
 // The permission gate (Phase C) broadcasts approval requests + decisions so the
 // approval surface updates live: approval_new, approval_update, approval_mode.
-approvals.setBroadcast((type, data) => broadcast(type, data));
+approvals.setBroadcast((type, data) => {
+  broadcast(type, data);
+  // On-call notifier (Wave 3): a read that needs an operator decision (ask mode)
+  // pages on-call. Only a genuinely-PENDING new request — never an auto-approved
+  // read or a decision update. Fire-and-forget; the notifier is an honest no-op
+  // when no webhook is set and swallows its own failures (never blocks a read).
+  if (type === 'approval_new' && data && data.state === 'pending') {
+    try {
+      const p = notifier.notify('approval_needed', {
+        incidentId: data.triageId || null,   // approval records carry the trg-/INC id as triageId
+        triageId: data.triageId || null,
+        front: data.front || null,
+        command: data.command || 'a read',
+        target: data.target || null,
+        summary: `Approval needed — ${data.agentName || 'an agent'} wants to run "${data.command || 'a read'}"${data.target ? ` against ${data.target}` : ''}${data.triageId ? ` (${data.triageId})` : ''}`,
+        detail: { reason: data.reason || null, mode: data.mode || null },
+      });
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    } catch (e) { /* telemetry must never break the approval flow */ }
+  }
+});
 
 // Surface a problem on the dashboard instead of dying quietly (or loudly).
 // The detail stays in the server log; the browser gets plain words.
@@ -1915,7 +1936,9 @@ app.post('/api/triage', (req, res) => {
   if (result.refused) {
     return res.status(422).json({ error: result.reason });
   }
-  res.json({ triageId: result.triageId });
+  // relatedTo (Wave 3): OPEN incidents this new triage may overlap with — surfaced
+  // for the operator, never auto-merged. [] when there is no real shared scope.
+  res.json({ triageId: result.triageId, incidentId: result.incidentId, relatedTo: result.relatedTo || [] });
 });
 
 // ── Alert-driven ingestion (Wave 2) ─────────────────────────────────────────
@@ -1958,6 +1981,15 @@ app.post('/api/alerts/sample', (req, res) => {
 // List of recent triages (id, severity, title, status, openedAt).
 app.get('/api/triage', (req, res) => {
   res.json(triage.listTriages());
+});
+
+// ── Incident queue (Wave 3) ─────────────────────────────────────────────────
+// The multi-incident queue view: all open + recent triages as compact rows,
+// most-urgent first. Each concurrent bridge already has its own id — this just
+// exposes the list cleanly. Contract: [{triageId, incidentId, severity, source,
+// status, owner, title, openedAt, sla:{targetMs,breached}}]. Read-rate-limited.
+app.get('/api/incidents', (req, res) => {
+  res.json(triage.listIncidents());
 });
 
 // Full current triage object, for reconnect/refresh.
@@ -2140,6 +2172,15 @@ app.get('/api/approvals', (req, res) => {
   const { triageId, limit } = req.query || {};
   const lim = Math.min(Number(limit) || 200, 500);
   res.json({ mode: approvals.getMode(), records: approvals.list({ triageId, limit: lim }), readOnly: true });
+});
+
+// ── On-call notifier status (Wave 3) ────────────────────────────────────────
+// Is an on-call webhook (PagerDuty/Opsgenie/Slack) wired up? Honest: reports
+// configured:false when ONCALL_WEBHOOK is unset — it never pretends to page.
+// When configured, `target` is the webhook HOST only (never the full URL, which
+// may carry a token). Read-rate-limited via the shared /api/ budget.
+app.get('/api/notifier/status', (req, res) => {
+  res.json(notifier.status());
 });
 
 // The persistent approval log — who wanted to run what, when, the decision, the outcome.

@@ -30,8 +30,20 @@ const MAX_RECORDS = 500;
 const records = [];
 let seq = 0;
 
-// Records still waiting for a decision: id → { resolve, record }.
+// Records still waiting for a decision: id → { resolve, record, timer }.
 const pending = new Map();
+
+// ── Approval timeout (Wave 3 — DEFAULT OFF) ──────────────────────────────────
+// Env APPROVAL_TIMEOUT_MS. 0 / unset = DISABLED (the default): a pending approval
+// waits FOREVER for the operator, exactly as before — no timer is ever armed.
+// When set to a positive number, a pending approval that is not decided within
+// the window auto-resolves to DENY (the safe choice — a denied read runs nothing)
+// and is logged as "auto-denied (timeout)". Read fresh each gate call so an
+// operator can opt in without a restart. A malformed/negative value = disabled.
+function approvalTimeoutMs() {
+  const n = Number(process.env.APPROVAL_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
 
 let onEvent = null; // server sets this to broadcast approval_* WS events
 function setBroadcast(fn) { onEvent = typeof fn === 'function' ? fn : null; }
@@ -56,6 +68,10 @@ function view(rec) {
     mode: rec.mode, state: rec.state,
     decidedBy: rec.decidedBy, decidedAt: rec.decidedAt,
     outcome: rec.outcome, outcomeOk: rec.outcomeOk,
+    // Wave 3 — when the approval timeout is enabled, the deadline a pending
+    // approval auto-DENIES at, so the UI can show a countdown. null when the
+    // timeout is disabled (the default) — the UI then shows no countdown.
+    timeoutAt: rec.timeoutAt || null,
   };
 }
 
@@ -95,6 +111,7 @@ async function gate(meta, executeFn) {
     decidedAt: null,
     outcome: null,
     outcomeOk: null,
+    timeoutAt: null,   // set below only in ask mode when the timeout is enabled
   };
 
   // Belt-and-braces: the gate is a read-only surface. A raw CLI string that is
@@ -125,19 +142,40 @@ async function gate(meta, executeFn) {
   }
 
   // ── Ask mode: PAUSE until the operator decides ─────────────────────────────
+  // Arm the auto-deny timeout ONLY when the operator has opted in (env set > 0).
+  // Default (unset) = no timer: the approval waits forever, exactly as before.
+  const timeoutMs = approvalTimeoutMs();
+  if (timeoutMs > 0) {
+    rec.timeoutAt = new Date(Date.now() + timeoutMs).toISOString();
+  }
   push(rec);
   emit('approval_new', view(rec));
 
-  const decision = await new Promise((resolve) => { pending.set(rec.id, { resolve, record: rec }); });
+  const decision = await new Promise((resolve) => {
+    let timer = null;
+    if (timeoutMs > 0) {
+      // The safe auto-resolution: DENY. A denied read runs NOTHING (executeFn is
+      // never called), so the timeout can never trigger a wire call.
+      timer = setTimeout(() => {
+        if (pending.has(rec.id)) {
+          pending.delete(rec.id);
+          resolve('deny-timeout');
+        }
+      }, timeoutMs);
+      if (typeof timer.unref === 'function') timer.unref(); // never keep the process alive
+    }
+    pending.set(rec.id, { resolve, record: rec, timer });
+  });
 
-  if (decision === 'deny') {
+  if (decision === 'deny' || decision === 'deny-timeout') {
+    const byTimeout = decision === 'deny-timeout';
     rec.state = 'denied';
-    rec.decidedBy = 'operator';
+    rec.decidedBy = byTimeout ? 'timeout' : 'operator';
     rec.decidedAt = new Date().toISOString();
-    rec.outcome = 'denied — ran nothing';
+    rec.outcome = byTimeout ? 'auto-denied (timeout) — ran nothing' : 'denied — ran nothing';
     rec.outcomeOk = false;
     emit('approval_update', view(rec));
-    return { approved: false, denied: true, record: view(rec) };
+    return { approved: false, denied: true, timedOut: byTimeout, record: view(rec) };
   }
 
   if (decision === 'approve-all') {
@@ -179,6 +217,7 @@ function decide(id, decision) {
   const entry = pending.get(id);
   if (!entry) return { error: 'not_pending', reason: 'That request is not waiting for a decision (already decided, or unknown).' };
   pending.delete(id);
+  if (entry.timer) { try { clearTimeout(entry.timer); } catch (e) { /* never throw on teardown */ } }
   entry.resolve(d === 'approve-once' ? 'approve-once' : d === 'approve-all' ? 'approve-all' : 'deny');
   return { ok: true, id, decision: d };
 }

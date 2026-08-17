@@ -27,6 +27,7 @@ const baseline = require('./baseline-store');
 const configStore = require('./config-store');
 const incidentStore = require('./incident-store');
 const alerts = require('./alerts');
+const notifier = require('./notifier');
 
 // The host app injects broadcast + status plumbing here so this module stays
 // free of server internals — the same seam live-agents.js uses.
@@ -154,6 +155,73 @@ function isNetworkSubject(text) {
   return NETWORK_SUBJECT.test(String(text || ''));
 }
 
+// ── Dedupe / correlation to an OPEN incident (Wave 3) ────────────────────────
+// When a new triage opens we surface — but NEVER auto-merge — the OPEN incidents
+// it plausibly overlaps with, so an operator sees "possibly related to INC-X
+// (both hit the wan front)" instead of opening a duplicate blind. The overlap is
+// REAL: it comes from the fronts each incident actually names. Empty when there
+// is no genuine shared scope.
+//
+// `symptom.scope` (the LLM's parsed front list) is only available AFTER the async
+// bridge starts, so at open time we derive scope DETERMINISTICALLY from the
+// description keywords + any originating alert front — no LLM, works with credits
+// exhausted. Each keyword set maps a front to the words that name it.
+const FRONT_KEYWORDS = {
+  campus: /\b(campus|catalyst|dnac|catalyst[\s-]?center|access\s?switch|distribution|edge\s?switch)\b/i,
+  fabric: /\b(fabric|aci|apic|nexus|n9k|leaf|leaves|spine|spines|tenant|epg|bridge[\s-]?domain|data[\s-]?center|datacenter)\b/i,
+  wan: /\b(wan|sd-?wan|vmanage|viptela|vedge|v-edge|cedge|overlay|bfd|tunnel|ipsec|branch\s?site|hub)\b/i,
+  incidents: /\b(incident|incidents|outage)\b/i,
+  firewall: /\b(firewall|fmc|asa|ftd)\b/i,
+  loadbalancer: /\b(load[\s-]?balancer|f5|ltm|vip|pool)\b/i,
+  security: /\b(cve|threat|ids|ips|vulnerab)\b/i,
+};
+
+// Best-effort, synchronous scope for a triage: the fronts its description names,
+// plus any front carried on an originating alert. A subset of FRONTS; may be
+// empty (the description named no front keyword — then it correlates to nothing).
+function deriveScope(triage) {
+  const found = new Set();
+  const text = String(triage.description || '');
+  for (const front of Object.keys(FRONT_KEYWORDS)) {
+    if (FRONT_KEYWORDS[front].test(text)) found.add(front);
+  }
+  // A parsed symptom scope, if one already landed, only ADDS real fronts.
+  if (triage.symptom && Array.isArray(triage.symptom.scope)) {
+    triage.symptom.scope.forEach((f) => found.add(f));
+  }
+  // An alert's derived front is a real, first-class scope signal.
+  if (triage.alert && triage.alert.front) found.add(triage.alert.front);
+  return [...found];
+}
+
+// Compute relatedTo for a freshly-opened triage: the OPEN triages whose scope
+// overlaps this one's. We DO NOT auto-merge — we only name the possible relation
+// and WHY. Real overlap only; empty when none. Excludes the triage itself and
+// its own re-triage lineage (same incidentId). One entry per related incidentId
+// (the most recent open run of it), newest first.
+function computeRelatedTo(triage) {
+  const myScope = deriveScope(triage);
+  if (!myScope.length) return [];
+  const myScopeSet = new Set(myScope);
+  const byIncident = new Map(); // incidentId -> { incidentId, why, openedAt }
+  for (const other of triages.values()) {
+    if (other.id === triage.id) continue;
+    if (other.status === 'closed') continue;                 // OPEN incidents only
+    if (other.incidentId && other.incidentId === triage.incidentId) continue; // same lineage
+    const shared = deriveScope(other).filter((f) => myScopeSet.has(f));
+    if (!shared.length) continue;
+    const key = other.incidentId || other.id;
+    const why = `both hit the ${shared.join(' & ')} front${shared.length > 1 ? 's' : ''}`;
+    const prior = byIncident.get(key);
+    if (!prior || other.openedAt > prior.openedAt) {
+      byIncident.set(key, { incidentId: key, why, openedAt: other.openedAt });
+    }
+  }
+  return [...byIncident.values()]
+    .sort((a, b) => (a.openedAt < b.openedAt ? 1 : -1))
+    .map((r) => ({ incidentId: r.incidentId, why: r.why }));
+}
+
 // ── Small helpers ───────────────────────────────────────────────────────────
 const now = () => new Date().toISOString();
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -182,6 +250,30 @@ function setStatus(id, status, label) {
 }
 function log(line) {
   if (ctx.appendToActivityLog) ctx.appendToActivityLog(`[${now()}] ${line}\n`);
+}
+
+// Fire an on-call notifier event for a triage, fire-and-forget. Maps the real
+// triage fields into the compact notifier shape. NEVER awaited on the bridge
+// hot path and can never throw here — the notifier is a no-op when no webhook is
+// configured and swallows its own failures. A `.catch` is belt-and-braces.
+function notifyOncall(event, triage, extra = {}) {
+  try {
+    const scope = (triage.symptom && Array.isArray(triage.symptom.scope) && triage.symptom.scope.length)
+      ? triage.symptom.scope : deriveScope(triage);
+    const p = notifier.notify(event, {
+      incidentId: triage.incidentId,
+      triageId: triage.id,
+      severity: triage.severity,
+      title: triage.title,
+      front: (triage.alert && triage.alert.front) || (scope && scope[0]) || null,
+      origin: triage.source || 'operator',
+      ...extra,
+    });
+    if (p && typeof p.catch === 'function') p.catch(() => { /* logged inside notifier */ });
+  } catch (e) {
+    // Telemetry must never break a bridge.
+    log(`[Triage ${triage.id}] notifier error (ignored) — ${e && e.message}`);
+  }
 }
 
 // ── Live front readers ──────────────────────────────────────────────────────
@@ -890,6 +982,13 @@ async function runL4(triage, sym) {
   };
   const v = emit('triage_verdict', triage.id, verdictPayload);
   triage.verdict = { ...verdictPayload, ts: v.ts };
+  // On-call notifier (Wave 3): a verdict landed. Fire-and-forget — the notifier
+  // is an HONEST no-op when no webhook is set and can never block or crash the
+  // bridge (failures are logged inside it, never thrown here).
+  notifyOncall('verdict', triage, {
+    summary: `Verdict on ${triage.incidentId} (${triage.severity}) — ${triage.title}`,
+    detail: { impact: verdictPayload.impact, hypothesis: hypo ? hypo.hypothesis : null },
+  });
   // MTTR stop-clock (issue 11): the verdict is "resolution" — stamp the moment
   // Jarvis commits so the record's MTTR is opened→verdict, a real elapsed time.
   triage.verdictAt = v.ts;
@@ -929,6 +1028,15 @@ async function runL4(triage, sym) {
   // roll-up now, before the record is persisted in runBridge's finally.
   finalizeSla(triage);
   triage.lifecycle = buildLifecycle(triage);
+  // On-call notifier (Wave 3): page on a REAL SLA breach — breached is computed
+  // from real timestamps (time-to-verdict vs the per-severity target). Only fires
+  // when the incident actually blew its SLA; honest no-op when no webhook is set.
+  if (triage.sla && triage.sla.breached === true) {
+    notifyOncall('sla_breach', triage, {
+      summary: `SLA BREACH — ${triage.incidentId} (${triage.severity}) "${triage.title}" missed its ${Math.round(triage.sla.targetMs / 60000)}m target`,
+      detail: { targetMs: triage.sla.targetMs, breachAt: triage.sla.breachAt, timeToVerdict: triage.lifecycle && triage.lifecycle.timeToVerdictHuman },
+    });
+  }
   emit('triage_closed', triage.id, {
     incidentId: triage.incidentId || null, mttr: mttrOf(triage),
     sla: triage.sla, lifecycle: triage.lifecycle,
@@ -1470,7 +1578,8 @@ function startTriage(severity, description, operatorTz) {
   // Run the bridge in the background. Failures are contained inside runBridge.
   runBridge(triage).catch((err) => log(`[Triage ${triage.id}] unhandled bridge error — ${err.message}`));
 
-  return { triageId: triage.id };
+  // relatedTo (Wave 3): OPEN incidents this may overlap — surfaced, never merged.
+  return { triageId: triage.id, incidentId: triage.incidentId, relatedTo: triage.relatedTo || [] };
 }
 
 // ── Alert-driven ingestion (Wave 2) ──────────────────────────────────────────
@@ -1517,6 +1626,7 @@ function startTriageFromAlert(payload, opts = {}) {
     source: 'alert',
     alert: triage.alert,
     severityNote: norm.severityNote || null,
+    relatedTo: triage.relatedTo || [],   // Wave 3 — possibly-related OPEN incidents
   };
 }
 
@@ -1615,8 +1725,14 @@ function buildTriage(severity, description, opts = {}) {
     reads: {},                 // in-memory raw read results (re-triage diff / CIs)
     affectedCIs: [],           // real affected devices/tenants (ServiceNow)
     reTriageDelta: null,       // set on a re-run: the real delta vs the prior run
+    relatedTo: [],             // Wave 3 — OPEN incidents this may overlap (never auto-merged)
   };
   triages.set(id, triage);
+
+  // Wave 3 — dedupe/correlation: which OPEN incidents does this plausibly relate
+  // to? Computed AFTER the record is registered so the loop can see its peers;
+  // self + same lineage are excluded inside computeRelatedTo. Real overlap only.
+  triage.relatedTo = computeRelatedTo(triage);
 
   // Board renders in front order; every live front starts "waiting", every
   // blind front starts "blind" (hatched grey, no data source).
@@ -1654,6 +1770,9 @@ function emitOpened(triage) {
     // per-severity SLA target so the UI can count down locally from openedAt.
     roles: triage.roles,
     sla: { targetMs: triage.sla.targetMs, openedAt: triage.sla.openedAt },
+    // Wave 3 — possibly-related OPEN incidents (dedupe/correlation), never
+    // auto-merged. Contract: data.relatedTo = [{incidentId, why}]; [] when none.
+    relatedTo: triage.relatedTo || [],
   });
   // Blind cards go out immediately — they are known before any read.
   BLIND_FRONTS.forEach((front) =>
@@ -1828,6 +1947,48 @@ function listTriages() {
     }));
 }
 
+// ── Incident queue (Wave 3) ──────────────────────────────────────────────────
+// The multi-incident queue view: every open + recent triage as a compact row,
+// most-urgent first. Concurrent bridges each already have their own id — this
+// just exposes the list cleanly. SLA `breached` is REAL: for a closed incident
+// it is the settled value (time-to-verdict vs target); for an OPEN one it is a
+// live computation (now past openedAt+target?), never fabricated.
+function listIncidents() {
+  const rank = { P1: 0, P2: 1, P3: 2 };
+  const rows = [...triages.values()].map((t) => {
+    const openedMs = t.openedAt ? Date.parse(t.openedAt) : NaN;
+    const targetMs = (t.sla && t.sla.targetMs) || slaTargetFor(t.severity);
+    let breached;
+    if (t.status === 'closed') {
+      breached = t.sla ? t.sla.breached : null;   // settled on close from real timestamps
+    } else {
+      breached = Number.isFinite(openedMs) ? (Date.now() - openedMs) > targetMs : null; // live
+    }
+    return {
+      triageId: t.id,
+      incidentId: t.incidentId || null,
+      severity: t.severity,
+      source: t.source || 'operator',
+      status: t.status,
+      owner: (t.roles && t.roles.owner) || null,
+      title: t.title,
+      openedAt: t.openedAt,
+      sla: { targetMs, breached },
+    };
+  });
+  // Most-urgent first: open before closed, then breached first, then by severity
+  // (P1>P2>P3), then newest opened. A stable, deterministic ordering.
+  return rows.sort((a, b) => {
+    const ao = a.status === 'closed' ? 1 : 0, bo = b.status === 'closed' ? 1 : 0;
+    if (ao !== bo) return ao - bo;
+    const ab = a.sla.breached ? 0 : 1, bb = b.sla.breached ? 0 : 1;
+    if (ab !== bb) return ab - bb;
+    const ar = rank[a.severity] ?? 9, br = rank[b.severity] ?? 9;
+    if (ar !== br) return ar - br;
+    return a.openedAt < b.openedAt ? 1 : -1;
+  });
+}
+
 module.exports = {
   init,
   startTriage,
@@ -1835,6 +1996,7 @@ module.exports = {
   sampleAlert,
   getTriage,
   listTriages,
+  listIncidents,
   postOperatorMessage,
   setRoles,
   acknowledge,
