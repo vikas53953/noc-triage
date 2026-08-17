@@ -7,7 +7,8 @@ Jarvis Opus 5). Features share triage.js + index.html → SEQUENTIAL waves; with
 backend vs public/index.html to a pinned contract so two agents run in parallel on disjoint files.
 
 ## External dependencies (build interface + honest "connect your X" state; go live when provided)
-- Anthropic credits EXHAUSTED → correlation reasoning + Jarvis LLM offline until topped up. Deterministic parts still build/verify.
+- ~~Anthropic credits EXHAUSTED → correlation reasoning + Jarvis LLM offline until topped up.~~
+  **RESOLVED 2026-08-17 — credits topped up, Jarvis reasoning is live (see HANDOFF.md).**
 - Two-way ServiceNow → needs a ServiceNow instance URL + API creds (env). Build the client + a "not connected" state.
 - On-call paging → needs a PagerDuty/Opsgenie/Slack webhook (env). Build the notifier + "not configured" state.
 
