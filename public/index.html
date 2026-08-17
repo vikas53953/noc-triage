@@ -368,6 +368,11 @@ pre.cli{
 /* ---------- live activity ---------- */
 .activity{flex:1;min-height:0}
 .act-list{flex:1;overflow-y:auto}
+/* Shown only after a reload restore — tells the operator the panel holds recent
+   bursts, not the whole history, instead of truncating in silence (m5). */
+.act-restored-hint{flex-shrink:0;padding:.5rem .7rem;border-top:1px dashed var(--line);
+  font-size:.63rem;color:var(--ink3);text-align:center;line-height:1.4}
+.act-restored-hint b{color:var(--ink2);font-weight:700}
 .act{padding:.55rem .75rem;border-bottom:1px solid var(--line-soft);font-size:.75rem;animation:slidein .3s ease}
 @keyframes slidein{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:none}}
 .act-top{display:flex;justify-content:space-between;gap:.5rem;margin-bottom:.15rem}
@@ -487,12 +492,18 @@ pre.cli{
 .ev-actions .mini-btn.retry:hover{background:rgba(239,68,68,.1)}
 
 /* ---------- CLI / session drawer ---------- */
-.drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;z-index:60}
+/* Above the sticky top bar (z-index 120) so the drawer's OWN header — and its
+   close ✕ — are never hidden behind it (M2). */
+.drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;z-index:200}
 .drawer-overlay.on{display:block}
 .drawer{position:absolute;top:0;right:0;height:100%;width:min(760px,94vw);background:var(--bg);border-left:1px solid var(--line);display:flex;flex-direction:column;box-shadow:-18px 0 50px rgba(0,0,0,.35)}
 .drawer-head{display:flex;align-items:center;gap:.6rem;padding:.8rem 1rem;border-bottom:1px solid var(--line);flex-shrink:0}
-.drawer-head h3{font-size:.92rem;font-weight:800;flex:1;display:flex;align-items:center;gap:.5rem}
-.drawer-head .sub{font-size:.66rem;color:var(--ink3);font-weight:600}
+.drawer-head h3{font-size:.92rem;font-weight:800;flex:0 1 auto;min-width:0;display:flex;align-items:center;gap:.5rem;white-space:nowrap}
+/* The subtitle is the flexible part: it shrinks and truncates so the close ✕
+   is ALWAYS on-screen, never pushed behind the header (M2). */
+.drawer-head .sub{font-size:.66rem;color:var(--ink3);font-weight:600;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drawer-head .iconbtn{flex-shrink:0;margin-left:auto;width:30px;height:30px;font-size:.9rem}
+.drawer-head .iconbtn:hover{border-color:var(--bad);color:var(--bad);background:var(--bad-bg)}
 .drawer-body{flex:1;overflow-y:auto;padding:.9rem 1rem}
 .sess-empty{font-size:.78rem;color:var(--ink3);font-style:italic;padding:1.2rem .4rem;line-height:1.6}
 .sess-rec{border:1px solid var(--line-soft);border-radius:11px;margin-bottom:.85rem;overflow:hidden;background:var(--panel)}
@@ -1081,7 +1092,7 @@ pre.cli{
         <div class="inc-ribbon" id="incRibbon" hidden>
           <span class="inc-id" id="incId">INC-—</span>
           <span class="inc-retag" id="incRetag" hidden>re-triage</span>
-          <span class="mttr running" id="mttr"><span class="mttr-dot"></span><span class="mttr-lbl">MTTR</span><span class="mttr-val" id="mttrVal">0s</span></span>
+          <span class="mttr running" id="mttr" title="Open → verdict (time to diagnose)"><span class="mttr-dot"></span><span class="mttr-lbl">Time to verdict</span><span class="mttr-val" id="mttrVal">0s</span></span>
           <span class="inc-actions">
             <button class="mini-btn rerun" id="rerunBtn" title="Re-run this triage and show what changed">🔁 Re-run this triage</button>
             <button class="mini-btn" id="snBtn" title="Export a ServiceNow-ready summary">📤 Export / ServiceNow</button>
@@ -1135,6 +1146,7 @@ pre.cli{
       </div>
       <div class="act-body" style="display:flex;flex-direction:column;min-height:0;flex:1">
         <div class="act-list" id="actList"></div>
+        <div class="act-restored-hint" id="actRestoredHint" hidden>Showing recent activity — the full timeline lives in <b>History</b>.</div>
       </div>
     </div>
   </div>
@@ -1698,6 +1710,10 @@ $('startBtn').onclick = function(){
 /* ---------- console open / reset / close ---------- */
 var currentTriageId = null;
 var currentSeverity = 'P1';
+/* Is the triage bridge LIVE? Retry re-attempts a front's read over that live
+   bridge — on a concluded/closed triage there is no bridge, so the per-evidence
+   Retry control must not be offered (M1). Flipped true on open, false on close. */
+var triageLive = false;
 
 function openConsole(){
   $('idleWrap').style.display = 'none';
@@ -1740,6 +1756,7 @@ $('closeTriageBtn').onclick = function(){
   $('idleWrap').style.display = 'flex';
   $('stageTitle').textContent = '💬 Squad chat & commands';
   $('closeTriageBtn').style.display = 'none';
+  triageLive = false;
   setBridgeInput(false);
   stopMttrTick();
   var ribbon = $('incRibbon'); if(ribbon) ribbon.hidden = true;
@@ -1841,7 +1858,9 @@ function renderEvActions(front, state){
   var live = ['campus','fabric','wan','incidents'].indexOf(front) >= 0;
   var down = state === 'suspect' || state === 'degraded' || state === 'blind';
   var html = '';
-  if(live && down){
+  // Retry only makes sense while the triage bridge is live — a closed triage has
+  // no bridge, so offering it just yields "No such triage" (M1). Hide it there.
+  if(triageLive && live && down){
     html += '<button class="mini-btn retry" data-retry="'+escapeHtml(front)+'">🔁 Retry read</button>';
   }
   if(live){
@@ -1856,9 +1875,15 @@ $('board').addEventListener('click', function(e){
   var sb = e.target.closest('[data-evsess]');
   if(sb){ openSession({ front: sb.getAttribute('data-evsess') }); return; }
 });
+/* Remove any lingering per-evidence Retry buttons — called the moment a triage
+   concludes so a closed bridge can never be retried (M1). */
+function removeRetryControls(){
+  [].forEach.call(document.querySelectorAll('#board .mini-btn.retry'), function(b){ b.parentNode && b.parentNode.removeChild(b); });
+}
 /* Re-attempt one front's live read inside the open triage. Real fresh result. */
 function retryFront(front, btn){
   if(!currentTriageId || DEMO) return;
+  if(!triageLive){ removeRetryControls(); return; }  // bridge closed — no live read to retry (M1)
   if(btn){ btn.disabled = true; btn.textContent = '…retrying'; }
   fetch('/api/triage/'+encodeURIComponent(currentTriageId)+'/retry/'+encodeURIComponent(front), {method:'POST'})
     .then(function(r){ return r.json().then(function(b){ return {ok:r.ok, body:b}; }); })
@@ -1921,7 +1946,7 @@ function renderMsg(m){
     '<span class="badge '+tierClass(m.tier)+'">'+escapeHtml(m.tier||'')+'</span>'+
     '<span class="badge sev-'+escapeHtml(sev)+'">'+escapeHtml(sev)+'</span>'+
     '<span class="msg-time">'+escapeHtml(tsClock(m.ts))+'</span></div>'+
-    '<div class="msg-text">'+escapeHtml(m.text)+'</div></div>';
+    '<div class="msg-text">'+mdToHtml(m.text)+'</div></div>';
   $('stream').appendChild(el); scrollStream();
   var posted = $('stream').querySelectorAll('.msg').length;
   $('msgCount').textContent = posted + ' posts';
@@ -1968,22 +1993,22 @@ function hypoCardHtml(v){
   out += '<div class="hypo-head"><span class="h-lbl">🧠 Committed hypothesis</span>'+
     (conf ? '<span class="hypo-conf '+escapeHtml(conf)+'">confidence: '+escapeHtml(conf)+'</span>' : '')+'</div>';
   out += '<div class="hypo-most"><span class="m-tag">Most likely</span>'+
-    escapeHtml((h && h.hypothesis) ? h.hypothesis : (v.verdict||'—'))+'</div>';
+    mdInline((h && h.hypothesis) ? h.hypothesis : (v.verdict||'—'))+'</div>';
   if(h && h.ranked && h.ranked.length){
     var items = h.ranked.map(function(r){
-      return '<li>'+escapeHtml(r.cause||'')+'<span class="hr-like">'+escapeHtml(r.likelihood||'')+'</span></li>';
+      return '<li>'+mdInline(r.cause||'')+'<span class="hr-like">'+escapeHtml(r.likelihood||'')+'</span></li>';
     }).join('');
     out += '<div class="hypo-row"><span class="r-lbl">Ranked causes</span><ol class="hypo-ranked">'+items+'</ol></div>';
   }
   if(h && h.ifThen){
-    out += '<div class="hypo-row next"><span class="r-lbl">Next check · if / then</span>'+escapeHtml(h.ifThen)+'</div>';
+    out += '<div class="hypo-row next"><span class="r-lbl">Next check · if / then</span>'+mdInline(h.ifThen)+'</div>';
   } else if(v.nextChecks && v.nextChecks.length){
     out += '<div class="hypo-row next"><span class="r-lbl">Next checks</span><ul style="margin:.2rem 0 0 .95rem;padding:0">'+
       v.nextChecks.map(function(c){ return '<li>'+escapeHtml(c)+'</li>'; }).join('')+'</ul></div>';
   }
   out += configFindingHtml(v.configFindings);
-  if(v.impact) out += '<div class="hypo-row"><span class="r-lbl">Impact</span>'+escapeHtml(v.impact)+'</div>';
-  if(h && h.why) out += '<div class="hypo-why"><b>Why: </b>'+escapeHtml(h.why)+'</div>';
+  if(v.impact) out += '<div class="hypo-row"><span class="r-lbl">Impact</span>'+mdInline(v.impact)+'</div>';
+  if(h && h.why) out += '<div class="hypo-why"><b>Why: </b>'+mdInline(h.why)+'</div>';
   var bs = v.blindSpots || [];
   if(bs.length){
     var bl = bs.map(function(b){
@@ -2154,7 +2179,7 @@ function renderServiceNow(sn, text){
     snField('Urgency', escapeHtml(sn.urgency||'—'))+
     snField('State', escapeHtml(sn.state||'—'))+
     snField('Category', escapeHtml(sn.category||'—'))+
-    snField('MTTR', escapeHtml((sn.mttr && sn.mttr.mttrHuman) || '—'))+
+    snField('Time to verdict', escapeHtml((sn.mttr && sn.mttr.mttrHuman) || '—'))+
   '</div>';
   html += snField('Affected CIs', cis ? '<ul class="sn-list">'+cis+'</ul>' : 'none recorded');
   html += snField('Affected fronts', '<div class="sn-chips">'+
@@ -2290,6 +2315,7 @@ function hideTyping(){ var t = $('typingRow'); if(t) t.remove(); }
 function handleOpened(d){
   currentTriageId = d.triageId;
   currentSeverity = d.severity || 'P1';
+  triageLive = true;               // bridge is live — Retry is valid (M1)
   resetConsole();
   openConsole();
   $('stageTitle').textContent = '🚨 Triage · ' + currentSeverity + ' · live';
@@ -2348,6 +2374,8 @@ function handleVerdict(d){
 }
 function handleClosed(d){
   hideTyping();
+  triageLive = false;              // bridge is over — pull every Retry control (M1)
+  removeRetryControls();
   $('stageTitle').textContent = '✅ Triage · ' + currentSeverity + ' · verdict in';
   $('boardClock').textContent = 'settled';
   settleMttr(d && d.mttr);
@@ -2814,8 +2842,12 @@ function apprDecide(id, dec){
   }).then(function(r){ return r.json(); }).then(function(){ /* WS approval_update repaints */ }).catch(function(){});
 }
 function apprSetMode(m){
+  // Reflect the click immediately so the toggle never looks dead while the POST
+  // is in flight (m4); reconcile if the server lands on something different.
+  APPR.mode = m;
+  renderApprovals();
   fetch('/api/approvals/mode', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:m}) })
-    .then(function(r){ return r.json(); }).then(function(d){ if(d&&d.mode){ APPR.mode=d.mode; renderApprovals(); } }).catch(function(){});
+    .then(function(r){ return r.json(); }).then(function(d){ if(d&&d.mode&&d.mode!==APPR.mode){ APPR.mode=d.mode; renderApprovals(); } }).catch(function(){});
 }
 function seedApprovals(){
   if(DEMO) return;
@@ -2833,9 +2865,23 @@ document.addEventListener('click', function(e){
   var mb = e.target.closest && e.target.closest('.appr-mode');
   if(mb){ apprSetMode(mb.getAttribute('data-mode')); return; }
 });
-$('apprBtn').onclick = function(){ renderApprovals(); $('apprDrawer').classList.add('on'); };
+/* The shield icon TOGGLES the gate open/closed, so the same control that opens
+   it also shuts it — the panel must never feel like a trap (M2). */
+function apprToggleOpen(){
+  var d = $('apprDrawer');
+  if(d.classList.contains('on')){ d.classList.remove('on'); }
+  else { renderApprovals(); d.classList.add('on'); }
+}
+$('apprBtn').onclick = apprToggleOpen;
 $('apprClose').onclick = function(){ $('apprDrawer').classList.remove('on'); };
 $('apprDrawer').onclick = function(e){ if(e.target === this) this.classList.remove('on'); };
+/* Escape reliably closes any open drawer — the approvals gate above all, since
+   it's the safety-critical surface an operator must always be able to leave (M2). */
+document.addEventListener('keydown', function(e){
+  if(e.key !== 'Escape') return;
+  var open = document.querySelector('.drawer-overlay.on');
+  if(open){ e.preventDefault(); open.classList.remove('on'); }
+});
 
 /* ============================================================
    HISTORY / RECORDS — browse past triages, their ARTIFACTS and
@@ -2891,6 +2937,15 @@ function mdToHtml(src){
   return out.join('');
 }
 
+/* Inline-only markdown for single-line prose sinks (agent bubbles, verdict rows).
+   Escapes FIRST, then formats **bold** and `code` — so the LIVE stream renders the
+   same as the rehydrated path and XSS stays inert (m1). No block wrapping, so it
+   drops cleanly into existing inline layouts. */
+function mdInline(s){
+  return escapeHtml(s == null ? '' : s)
+    .replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')
+    .replace(/`([^`]+)`/g,'<code>$1</code>');
+}
 function recStateChips(fronts){
   return '<div class="rec-fchips">'+(fronts||[]).map(function(f){
     return '<span class="rec-fchip '+escapeHtml(f.state||'')+'">'+escapeHtml(f.front)+'</span>';
@@ -3107,6 +3162,7 @@ function handleInit(data){
       pushActivity(ad.source || ad.agent || 'Activity', ad.text || ad.message || '', tsClock(ad.ts || ad.timestamp));
     });
     finalizeBurst();   // seal the restored burst so live events open a fresh group
+    if(acts.length){ var hint = $('actRestoredHint'); if(hint) hint.hidden = false; }
   }
   var chats = data.chatHistory;
   if(Array.isArray(chats)){
@@ -3194,6 +3250,7 @@ function repaintFromRecord(t){
   resetConsole();
   openConsole();
   var live = t.status === 'open';
+  triageLive = live;               // restored closed triage → no Retry (M1)
   $('stageTitle').textContent = (live ? '🚨 Triage · ' : '✅ Triage · ') + currentSeverity + (live ? ' · live' : ' · verdict in');
   if(!live) $('boardClock').textContent = 'settled';
   setIncident(t.incidentId, t.openedAt, t.reTriageOf);
