@@ -618,4 +618,48 @@ async function synthesizeTriageVerdict(input) {
   }
 }
 
-module.exports = { init, ask, keyStatus, extractSymptom, rankBlindSpots, synthesizeTriageVerdict };
+// ── Wave 4: NARRATE a correlation the app already FOUND ──────────────────────
+// The finding itself is deterministic (sources/correlation.js, computed from real
+// timestamps). This call only puts it into one operator sentence. It cannot create,
+// delete or move a correlation: no key / a refusal / any error simply returns null
+// and the deterministic sentence stands.
+const CORRELATION_SYSTEM =
+`You are Jarvis, L4 / Principal Engineer, on a live NOC bridge.
+The app has ALREADY established, from real event timestamps, that events on several
+fronts co-occurred inside the incident window. Your ONLY job is to say that finding in
+ONE plain sentence an operator can read on a bridge call: which fronts, roughly when,
+and that it should be treated as one event rather than several separate problems.
+Rules: use ONLY the fronts, times and event lines given. Never add a device, number,
+cause or front that is not listed. Do not speculate about the root cause. Do not
+hedge the correlation away — it was measured, not guessed. One sentence, no preamble.`;
+
+async function narrateCorrelation(input) {
+  if (!claude.hasKey()) return null;
+  const { topCandidate, cluster, symptom } = input || {};
+  if (!topCandidate || !Array.isArray(topCandidate.fronts) || topCandidate.fronts.length < 2) return null;
+  try {
+    const lines = ((cluster && cluster.events) || [])
+      .map((e) => `- ${e.front} | ${e.type} | ${e.ts} | ${e.detail}`).join('\n');
+    const res = await claude.reason({
+      system: CORRELATION_SYSTEM,
+      messages: [{ role: 'user', content:
+        `Operator symptom: ${symptom && symptom.rawSymptom ? symptom.rawSymptom : '(none given)'}\n` +
+        `Incident window: ${symptom && symptom.timeAnchor ? `since ${symptom.timeAnchor}` : 'no explicit anchor (recent default)'}\n` +
+        `Correlated fronts: ${topCandidate.fronts.join(', ')}\n` +
+        `They all started ~ ${topCandidate.ts}\n` +
+        `Deterministic finding: ${topCandidate.summary}\n\n` +
+        `Member events (your ONLY source of truth):\n${RULE}\n${lines || '(none)'}\n${RULE}\n\n` +
+        `Narrate this correlation in one sentence.` }],
+      // Headroom: on the current tiers thinking shares max_tokens, so a one-sentence
+      // answer still needs room above its own size or it truncates to nothing.
+      maxTokens: 1500, effort: 'medium',
+    });
+    if (res.refused) return null;
+    const txt = (res.text || '').trim();
+    return txt ? txt.slice(0, 600) : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+module.exports = { init, ask, keyStatus, extractSymptom, rankBlindSpots, synthesizeTriageVerdict, narrateCorrelation };
