@@ -18,8 +18,8 @@ Wave 4 correlation backend, SSH sidecar) — they land under the existing wave p
 | 1 | Unknowns (blindspot pass, 1 Q/message) | DONE 2026-08-17 (5 Qs answered; 3 items resolved by rec) | answers ledger below |
 | 2 | Requirements (PRD, measurable bars) | **GATE 1 APPROVED** (Vikas 2026-08-17: all 8 abilities LIKED, no changes) | https://claude.ai/code/artifact/6cac1f65-0135-44ed-8aad-d1d6d1faa4e6 |
 | 3 | Mocks (2–4 clickable directions) | **GATE 2 APPROVED — DIRECTION C (cockpit)** (Vikas 2026-08-17). A's command-bar can layer on later. | A: https://claude.ai/code/artifact/aa326803-34e8-4a26-accc-3c7e65b0534e · B: https://claude.ai/code/artifact/da36930a-e48f-42c6-b45d-e80ef2c0dc36 · C: https://claude.ai/code/artifact/ca5748c2-0ce0-499f-8e3e-292f5ba2e702 |
-| 4 | System design + plan | **GATE 3 OPEN**, awaiting green light. NOT a separate project: the copilot is a new desk view INSIDE noc-triage (same repo, same app, same port); classic console untouched. | docs/copilot-design.md · https://claude.ai/code/artifact/01462d72-6177-4506-99dc-1a09c625880d |
-| 5 | Build (wave process, worklaw) | not started | |
+| 4 | System design + plan | **GATE 3 APPROVED — GREEN LIGHT** (Vikas 2026-08-17: all 10 blocks LIKED). Copilot = new desk view INSIDE noc-triage, classic console untouched. | docs/copilot-design.md · https://claude.ai/code/artifact/01462d72-6177-4506-99dc-1a09c625880d |
+| 5 | Build (wave process, worklaw) | IN PROGRESS — CW-1 building (backend + UI agents to pinned contract) | docs/copilot-cw1-contract.md |
 | 6 | Review (plan-vs-built audit) | not started | |
 | 7 | QA (stranger test + log sweep) | not started | |
 | 8 | Ship | not started | → HARD GATE 4 |
