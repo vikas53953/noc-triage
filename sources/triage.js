@@ -26,6 +26,7 @@ const jarvis = require('./jarvis');
 const baseline = require('./baseline-store');
 const configStore = require('./config-store');
 const incidentStore = require('./incident-store');
+const alerts = require('./alerts');
 
 // The host app injects broadcast + status plumbing here so this module stays
 // free of server internals — the same seam live-agents.js uses.
@@ -1459,7 +1460,9 @@ async function retriage(id) {
 // Start a triage. Returns { triageId } on success, or { refused, reason } if
 // the description names no real network subject (the landlord-problem fix).
 function startTriage(severity, description, operatorTz) {
-  const triage = buildTriage(severity, description, { operatorTz });
+  // The normal operator path — the triage is stamped source:'operator' so the
+  // record + UI can tell an operator-opened triage from an alert-opened one.
+  const triage = buildTriage(severity, description, { operatorTz, source: 'operator' });
   if (triage.refused) return { refused: true, reason: triage.reason };
 
   emitOpened(triage);
@@ -1469,6 +1472,57 @@ function startTriage(severity, description, operatorTz) {
 
   return { triageId: triage.id };
 }
+
+// ── Alert-driven ingestion (Wave 2) ──────────────────────────────────────────
+// Open a triage AUTO-DERIVED from a real inbound monitoring alert. The alert is
+// normalized + severity-mapped + turned into a description DETERMINISTICALLY
+// (no LLM — Anthropic credits may be exhausted). A malformed payload or an alert
+// that names nothing real is refused here (the caller returns 422), so a bad
+// alert never opens a phantom triage. A real alert naming a device/front opens a
+// real triage that runs the normal bridge — same reads, same verdict, same
+// honesty — just marked source:'alert' with the originating alert attached.
+function startTriageFromAlert(payload, opts = {}) {
+  const norm = alerts.normalize(payload, opts);
+  if (!norm.ok) {
+    // 'malformed' = structurally unusable; 'nonsense' = names nothing real.
+    return { error: norm.error, reason: norm.reason };
+  }
+
+  const triage = buildTriage(norm.triageSeverity, norm.description, {
+    source: 'alert',
+    alert: norm.alert,
+    severityNote: norm.severityNote,
+  });
+  if (triage.refused) {
+    // The derived description still failed the network-subject gate — treat as a
+    // nonsense alert (honest 422), never a phantom triage.
+    return { error: 'nonsense', reason: triage.reason };
+  }
+
+  emitOpened(triage);
+
+  // The extra alert-provenance activity line, on top of the normal "opened" log:
+  // "Alert-triggered triage — <source>: <message>".
+  if (ctx && ctx.appendToActivityLog) {
+    ctx.appendToActivityLog(
+      `[${now()}] [Alert] Alert-triggered triage — ${norm.alert.source}: ${norm.alert.message}\n`);
+  }
+
+  runBridge(triage).catch((err) => log(`[Triage ${triage.id}] unhandled bridge error — ${err.message}`));
+
+  return {
+    triageId: triage.id,
+    incidentId: triage.incidentId,
+    severity: triage.severity,
+    source: 'alert',
+    alert: triage.alert,
+    severityNote: norm.severityNote || null,
+  };
+}
+
+// Re-exported so the server's DEV sample endpoint doesn't need to require the
+// alerts module directly — one seam.
+function sampleAlert() { return alerts.sampleAlert(); }
 
 // Validate + construct a triage object (and register it), WITHOUT emitting or
 // running the bridge. Shared by startTriage and retriage. `opts` carries the
@@ -1513,6 +1567,13 @@ function buildTriage(severity, description, opts = {}) {
     incidentId,                          // stable human-readable id (issue 11)
     reTriageOf: opts.reTriageOf || null, // set when this run is a re-triage
     operatorTz: opts.operatorTz || null, // IANA tz for reading absolute clock times (gap 1)
+    // ── Alert-driven ingestion (wave 2) ──
+    // How this triage was opened: 'operator' (a person filed it) or 'alert' (an
+    // inbound monitoring alert auto-opened it). `alert` carries the originating
+    // alert (secret-scrubbed raw) when source === 'alert', else null.
+    source: opts.source === 'alert' ? 'alert' : 'operator',
+    alert: opts.alert || null,
+    severityNote: opts.severityNote || null, // set when the alert severity was defaulted
     severity: sev,
     title: titleFrom(desc),
     description: desc,
@@ -1584,6 +1645,11 @@ function emitOpened(triage) {
     staffed: triage.staffed,
     blindSpots: BLIND_SPOTS,
     fronts: FRONTS,
+    // Wave 2 — how the triage was opened + the originating alert (contract for the
+    // UI: data.source = 'alert'|'operator'; data.alert = {source,type,severity,
+    // device,front,message,receivedAt,(raw)}). null alert on the operator path.
+    source: triage.source || 'operator',
+    alert: triage.alert || null,
     // Wave 1 — the bridge roles (empty until the operator sets them) and the
     // per-severity SLA target so the UI can count down locally from openedAt.
     roles: triage.roles,
@@ -1643,6 +1709,9 @@ function getTriage(id) {
     status: t.status,
     openedAt: t.openedAt,
     closedAt: t.closedAt,
+    // Wave 2 — origin + originating alert, restored on refresh/reconnect.
+    source: t.source || 'operator',
+    alert: t.alert || null,
     // Wave 1 — roles, acknowledge/MTTA, SLA clock + lifecycle roll-up, so a
     // refresh/reconnect restores them exactly (FE ignores what it doesn't use).
     roles: t.roles || { commander: '', scribe: '', joiners: [], owner: '' },
@@ -1753,6 +1822,8 @@ function listTriages() {
       title: t.title,
       status: t.status,
       openedAt: t.openedAt,
+      source: t.source || 'operator',
+      alert: t.alert ? { source: t.alert.source, type: t.alert.type, severity: t.alert.severity, front: t.alert.front, device: t.alert.device } : null,
       mttr: mttrOf(t),
     }));
 }
@@ -1760,6 +1831,8 @@ function listTriages() {
 module.exports = {
   init,
   startTriage,
+  startTriageFromAlert,
+  sampleAlert,
   getTriage,
   listTriages,
   postOperatorMessage,
