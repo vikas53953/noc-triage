@@ -37,3 +37,6 @@ backend vs public/index.html to a pinned contract so two agents run in parallel 
 The whole current app: triage brain, permission gate, guardrail, secret scrubbing, Evidence Split Console
 + professional chat, reload persistence, timezone anchoring, incident id, time-to-verdict, honesty,
 XSS escaping, zero console errors.
+
+## STATUS
+- 2026-08-17: Wave 1 (bridge roles + SLA) MERGED (PR#31 be, #32 fe, + key reconcile). Verified: roles round-trip, ack/MTTA, per-severity SLA, breach, lifecycle roll-up. Wave 2 (alert ingestion) starting.
