@@ -1,0 +1,59 @@
+# TRACKER — noc-triage live dashboard
+
+**Single source of truth for anyone (any agent, any session) picking this up.** Read this + HANDOFF.md
+first. Vikas is AWAY; work is FULLY AUTONOMOUS — no waiting for his approval. Fix the CLASS not the case.
+Every reviewable thing he sees = a visual HTML page. Never fabricate. Keep this file updated every turn.
+
+Last updated: 2026-08-17 ~22:40 IST · driver: Fable session 7d4aaef3
+
+## Mode & standing orders (Vikas, 2026-08-17)
+- FULLY AUTONOMOUS. Do not wait for approval/permission. Run QA from every angle, write a spec report,
+  turn it into a spec file, implement every feedback item, verify live, keep going.
+- On session/quota limit: a self-resume schedule is armed (ScheduleWakeup, ~hourly). On reset, RESUME
+  automatically from this TRACKER — do not sit idle, do not wait for Vikas.
+- Whenever Vikas says/gives anything → immediately add it to "Vikas's asks" below as a to-do, in HIS words.
+- Two product laws (in HANDOFF.md): (1) No static bindings — intent-first agentic routing; deterministic
+  code = safety only. (2) Ambiguity → ask, never assume; reviewers run an operator-experience pass.
+
+## Quota / heartbeat
+- Session limit resets ~19:00–19:50 IST (observed 2026-08-17). Self-resume wakeup armed.
+- If you are a fresh resume: check `git log`, `gh pr list`, this TRACKER, then continue the top pending item.
+
+## Vikas's asks (his words → status)
+| # | Ask (his words) | Status |
+|---|---|---|
+| 1 | Take over the Opus session, continue the work | DONE — took over, handoff secured |
+| 2 | Build the roadmap features he picked | IN PROGRESS (waves) |
+| 3 | Jarvis NOC Copilot — anyone asks anything, Jarvis acts (commands/changes/tickets/bridge/etc.) | IN PROGRESS — Gates 1-3 approved, CW-1 live, CW-2 building |
+| 4 | Keep pushing GitHub + docs inside repo updated | ONGOING — every merge/decision pushed |
+| 5 | Polish repo + every info | DONE (PR #41 merged) |
+| 6 | Fix: "show version on sw" guessed sw1 — must ASK which switch | IN PROGRESS (PR fix/ambiguous-device-asks building) |
+| 7 | Spawn QA agents, test from EVERY angle, don't wait for me | IN PROGRESS — 5 QA persona agents running on live app |
+| 8 | Full autonomous; self-resume on quota reset; live to-do tracker | DONE — this file + wakeup armed |
+
+## Build waves (copilot) — see docs/copilot-design.md
+- CW-1 desk + identity + capability honesty — MERGED + live 2026-08-17
+- CW-2 change engine + drift — BUILDING (UI PR #44 open; backend building)
+- CW-3 ticket queue · CW-4 Teams (needs webhook) · CW-5 SSH wiring · CW-6 ServiceNow (needs creds) — queued
+
+## Open PRs / branches
+- #44 CW-2 UI (open, waits for CW-2 backend to integrate-review together)
+- fix/ambiguous-device-asks (building — Vikas ask #6)
+- CW-2 backend (building)
+
+## Merged today (all adversarially reviewed + live-verified)
+#38 CLI routing · #39+#37 Wave 4 correlation · #40 SSH engine · #41 repo polish · #42+#43 CW-1
+
+## Needs Vikas (non-blocking, honest-if-absent until supplied)
+- DevNet sandbox reservation creds (real SSH show output) · Teams webhook (CW-4) · ServiceNow creds (CW-6)
+
+## In flight right now (agents)
+- 5 QA persona agents on live :3000 (intent / stranger / adversarial / operator / wireup) → findings → spec
+- fix/ambiguous-device-asks builder · CW-2 backend builder · CW-2 UI done (#44)
+
+## Next actions (autonomous queue)
+1. Collect 5 QA reports → compile ONE ranked spec report (visual page for Vikas) + machine spec file
+2. Review + merge the ambiguity fix (operator-experience pass)
+3. Integrate-review CW-2 backend + #44, merge, verify live
+4. Implement every QA finding by class, each as its own reviewed PR
+5. Keep TRACKER + HANDOFF + GitHub current every turn
