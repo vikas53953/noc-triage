@@ -18,6 +18,11 @@ Jarvis default model = `claude-opus-5` (`JARVIS_MODEL` env overrides). Never fak
   recommendation. Fix the CLASS, not the case. No "done" without fresh live evidence — he confirms, never discovers.
 
 ## Laws (absolute, never regress)
+**Ambiguity → ask, never assume** (Vikas, 2026-08-17): when an operator request is ambiguous (device not
+named / several candidates / unclear target), Jarvis runs NOTHING and asks, listing the real options.
+Auto-run only when exactly one candidate can serve the ask. The chosen answer is remembered for the rest
+of that conversation. Reviewers must run an operator-experience pass: "would a senior NOC engineer behave
+this way?" — wrong-but-honest guessing is a defect, not a feature.
 Real data or an honest "not connected/unread/unreachable" — NEVER fabricate. Permission gate: deny = ZERO
 wire calls, writes blocked BEFORE the gate. Read-only guardrail (only show/ping/traceroute/dir/more).
 Secrets scrubbed from everything persisted. XSS-escape every DOM sink. Timezone: bare clock times anchored
