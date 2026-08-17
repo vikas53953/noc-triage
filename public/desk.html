@@ -1,0 +1,1329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jarvis Copilot Desk</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%9B%A9%3C/text%3E%3C/svg%3E">
+<style>
+/* ============================================================
+   Copilot Desk (CW-1) — Direction C cockpit.
+   Design tokens + shell match the approved mock; every value on
+   screen comes from a REAL API call. Nothing here is canned.
+   ============================================================ */
+*{margin:0;padding:0;box-sizing:border-box}
+
+:root{
+  --bg:#0a0e17;   --panel:#111827; --card:#1a2234; --hover:#243047;
+  --line:#2d3a4f; --line-soft:#212c3e;
+  --ink:#f0f4f8;  --ink2:#94a3b8; --ink3:#64748b;
+  --accent:#3b82f6; --accent2:#2563eb;
+  --ok:#10b981; --warn:#f59e0b; --bad:#ef4444; --purple:#8b5cf6; --info:#38bdf8;
+  --ok-bg:rgba(16,185,129,.13); --warn-bg:rgba(245,158,11,.13);
+  --bad-bg:rgba(239,68,68,.13); --info-bg:rgba(56,189,248,.13);
+  --purple-bg:rgba(139,92,246,.14);
+  --term-bg:#060a12; --term-ink:#c8e6c9;
+  --shadow:0 10px 30px rgba(0,0,0,.45);
+  --mono:'Consolas','SF Mono',ui-monospace,monospace;
+}
+@media (prefers-color-scheme:light){
+  :root:not([data-theme="dark"]){
+    --bg:#eef2f7; --panel:#ffffff; --card:#ffffff; --hover:#e8eef6;
+    --line:#d6dfea; --line-soft:#e5ebf3;
+    --ink:#0f172a; --ink2:#4a5a6d; --ink3:#7b8798;
+    --ok:#0d8f60; --warn:#b57209; --bad:#c72c2c; --info:#0284c7;
+    --ok-bg:rgba(13,143,96,.12); --warn-bg:rgba(181,114,9,.13);
+    --bad-bg:rgba(199,44,44,.10); --info-bg:rgba(2,132,199,.10);
+    --purple-bg:rgba(139,92,246,.10);
+    --term-bg:#0f172a; --term-ink:#d5f0d8;
+    --shadow:0 10px 30px rgba(15,23,42,.14);
+  }
+}
+:root[data-theme="light"]{
+  --bg:#eef2f7; --panel:#ffffff; --card:#ffffff; --hover:#e8eef6;
+  --line:#d6dfea; --line-soft:#e5ebf3;
+  --ink:#0f172a; --ink2:#4a5a6d; --ink3:#7b8798;
+  --ok:#0d8f60; --warn:#b57209; --bad:#c72c2c; --info:#0284c7;
+  --ok-bg:rgba(13,143,96,.12); --warn-bg:rgba(181,114,9,.13);
+  --bad-bg:rgba(199,44,44,.10); --info-bg:rgba(2,132,199,.10);
+  --purple-bg:rgba(139,92,246,.10);
+  --term-bg:#0f172a; --term-ink:#d5f0d8;
+  --shadow:0 10px 30px rgba(15,23,42,.14);
+}
+
+body{
+  font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
+  background:var(--bg); color:var(--ink); min-height:100vh; overflow-x:hidden;
+}
+button,input,select,textarea{font-family:inherit}
+
+/* ---------- header ---------- */
+.top{
+  height:56px;padding:0 1.1rem;display:flex;align-items:center;justify-content:space-between;
+  gap:1rem;background:linear-gradient(135deg,var(--panel),var(--card));
+  border-bottom:1px solid var(--line);position:sticky;top:0;z-index:120;
+}
+.brand{display:flex;align-items:center;gap:.7rem;min-width:0}
+.brand h1{
+  font-size:1.1rem;font-weight:800;letter-spacing:-.01em;white-space:nowrap;
+  background:linear-gradient(135deg,#3b82f6,#8b5cf6);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+}
+.dirtag{
+  font-size:.62rem;font-weight:800;letter-spacing:.09em;text-transform:uppercase;
+  padding:.22rem .5rem;border-radius:5px;color:var(--purple);
+  background:var(--purple-bg);border:1px solid rgba(139,92,246,.4);white-space:nowrap
+}
+.top-right{display:flex;align-items:center;gap:.55rem}
+.chip{
+  display:flex;align-items:center;gap:.4rem;font-size:.73rem;font-weight:600;
+  padding:.3rem .65rem;border-radius:999px;border:1px solid var(--ok);
+  color:var(--ok);background:var(--ok-bg);white-space:nowrap
+}
+.chip.down{border-color:var(--bad);color:var(--bad);background:var(--bad-bg)}
+.chip.wait{border-color:var(--warn);color:var(--warn);background:var(--warn-bg)}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.clock{font-family:var(--mono);font-size:.76rem;color:var(--ink2)}
+.whotag{
+  display:flex;align-items:center;gap:.45rem;padding:.25rem .55rem .25rem .25rem;
+  border:1px solid var(--line);border-radius:999px;background:var(--panel);cursor:pointer
+}
+.whotag:hover{border-color:var(--accent)}
+.avatar{
+  width:26px;height:26px;border-radius:50%;font-size:.66rem;font-weight:800;color:#fff;
+  background:linear-gradient(135deg,#3b82f6,#8b5cf6);
+  display:flex;align-items:center;justify-content:center;flex-shrink:0
+}
+.whotag span{font-size:.75rem;font-weight:700}
+.iconbtn{
+  background:transparent;border:1px solid var(--line);color:var(--ink2);
+  width:28px;height:28px;border-radius:7px;cursor:pointer;font-size:.85rem;
+  display:flex;align-items:center;justify-content:center;transition:.15s;flex-shrink:0;
+  text-decoration:none
+}
+.iconbtn:hover{background:var(--hover);color:var(--ink);border-color:var(--accent)}
+
+/* ---------- three-pane shell ---------- */
+.shell{
+  display:grid;grid-template-columns:300px minmax(0,1fr) 410px;
+  gap:.75rem;padding:.75rem;height:calc(100vh - 56px);
+}
+.pane{
+  background:var(--card);border:1px solid var(--line);border-radius:12px;
+  display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden;position:relative
+}
+.pane-head{
+  padding:.6rem .8rem;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-shrink:0;
+  background:var(--panel)
+}
+.pane-head h2{
+  font-size:.68rem;font-weight:800;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--ink2);display:flex;align-items:center;gap:.4rem
+}
+.pane-body{flex:1;min-height:0;overflow-y:auto}
+.count{
+  font-size:.6rem;font-weight:800;padding:.12rem .4rem;border-radius:999px;
+  background:var(--hover);color:var(--ink2)
+}
+
+/* ---------- LEFT: queue ---------- */
+.grouphead{
+  font-size:.6rem;font-weight:800;letter-spacing:.12em;color:var(--ink3);
+  text-transform:uppercase;padding:.7rem .75rem .3rem;display:flex;
+  justify-content:space-between;align-items:center
+}
+.qitem{
+  display:flex;gap:.55rem;padding:.55rem .7rem;margin:0 .45rem .35rem;border-radius:9px;
+  border:1px solid transparent;cursor:pointer;transition:.14s;position:relative;
+  width:calc(100% - .9rem);text-align:left;background:transparent;color:inherit;font:inherit
+}
+.qitem:hover{background:var(--hover)}
+.qitem.sel{background:var(--hover);border-color:var(--accent)}
+.qitem.closed{opacity:.72}
+.stripe{width:4px;border-radius:99px;flex-shrink:0}
+.sev-P1{background:var(--bad)} .sev-P2{background:var(--warn)}
+.sev-P3{background:var(--info)} .sev-none{background:var(--ink3)}
+.qtxt{min-width:0;flex:1}
+.qtitle{font-size:.79rem;font-weight:650;line-height:1.3;margin-bottom:.2rem}
+.qmeta{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;margin-bottom:.15rem}
+.tag{
+  font-size:.57rem;font-weight:800;letter-spacing:.05em;padding:.1rem .32rem;
+  border-radius:4px;text-transform:uppercase
+}
+.t-P1{background:var(--bad-bg);color:var(--bad)}
+.t-P2{background:var(--warn-bg);color:var(--warn)}
+.t-P3{background:var(--info-bg);color:var(--info)}
+.t-none{background:rgba(148,163,184,.16);color:var(--ink3)}
+.t-closed{background:rgba(148,163,184,.16);color:var(--ink3)}
+.t-src{background:var(--purple-bg);color:var(--purple)}
+.qsub{font-size:.65rem;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sla{font-family:var(--mono);font-size:.62rem;font-weight:700;padding:.1rem .3rem;border-radius:4px}
+.sla.ok{color:var(--ok);background:var(--ok-bg)}
+.sla.late{color:var(--bad);background:var(--bad-bg)}
+.sla.unk{color:var(--ink3);background:rgba(148,163,184,.14)}
+.qfoot{padding:.6rem;border-top:1px solid var(--line);flex-shrink:0;background:var(--panel)}
+.newform{display:none;flex-direction:column;gap:.4rem;margin-bottom:.5rem}
+.newform.on{display:flex}
+.newform select,.newform textarea{
+  background:var(--card);border:1px solid var(--line);border-radius:8px;color:var(--ink);
+  padding:.45rem .6rem;font-size:.78rem;width:100%
+}
+.newform textarea{resize:vertical;min-height:56px}
+.newform select:focus,.newform textarea:focus{outline:none;border-color:var(--accent)}
+.formerr{font-size:.7rem;color:var(--bad);line-height:1.45}
+
+/* ---------- buttons ---------- */
+.btn{
+  border:none;border-radius:8px;padding:.5rem .85rem;font-size:.79rem;font-weight:700;
+  cursor:pointer;transition:.15s;display:inline-flex;align-items:center;gap:.4rem
+}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent2)}
+.btn-ghost{background:transparent;color:var(--ink2);border:1px solid var(--line)}
+.btn-ghost:hover{background:var(--hover);color:var(--ink)}
+.btn-sm{padding:.34rem .6rem;font-size:.71rem;border-radius:7px}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+
+/* ---------- CENTER: conversation ---------- */
+.ctx{
+  padding:.6rem .85rem;border-bottom:1px solid var(--line);background:var(--panel);
+  display:flex;align-items:center;gap:.6rem;flex-shrink:0;flex-wrap:wrap
+}
+.ctx b{font-size:.86rem}
+.chat{flex:1;min-height:0;overflow-y:auto;padding:.9rem;display:flex;flex-direction:column;gap:.75rem}
+.msg{display:flex;gap:.6rem;max-width:100%}
+.msg.me{flex-direction:row-reverse}
+.msg .who{
+  width:28px;height:28px;border-radius:8px;flex-shrink:0;display:flex;align-items:center;
+  justify-content:center;font-size:.64rem;font-weight:800;color:#fff
+}
+.msg.me .who{background:linear-gradient(135deg,#3b82f6,#8b5cf6)}
+.msg.jv .who{background:linear-gradient(135deg,#0ea5e9,#10b981)}
+.msg.sys .who{background:linear-gradient(135deg,#f59e0b,#ef4444)}
+.bubble{
+  border:1px solid var(--line);border-radius:11px;padding:.6rem .8rem;
+  font-size:.85rem;line-height:1.55;background:var(--panel);min-width:0;overflow-wrap:anywhere
+}
+.msg.me .bubble{background:var(--hover)}
+.msg.sys .bubble{border-color:var(--warn);background:var(--warn-bg)}
+.bubble .lbl{font-size:.63rem;font-weight:800;letter-spacing:.07em;color:var(--ink3);
+  text-transform:uppercase;display:block;margin-bottom:.25rem}
+.bubble ul,.bubble ol{margin:.4rem 0 .1rem 1.05rem}
+.bubble li{margin-bottom:.22rem}
+.bubble code{font-family:var(--mono);font-size:.79rem;background:var(--hover);
+  padding:.06rem .3rem;border-radius:4px}
+.jump{
+  margin-top:.55rem;display:inline-flex;align-items:center;gap:.35rem;font-size:.71rem;
+  font-weight:700;color:var(--accent);background:var(--info-bg);border:1px solid var(--line);
+  border-radius:7px;padding:.28rem .55rem;cursor:pointer
+}
+.jump:hover{border-color:var(--accent)}
+.thinking{font-size:.78rem;color:var(--ink3);font-style:italic;padding-left:2.2rem}
+.chat-empty{color:var(--ink3);font-size:.8rem;line-height:1.6;text-align:center;padding:2rem 1rem}
+
+.capbar{padding:.5rem .7rem 0}
+.capnote{font-size:.72rem;color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn);
+  border-radius:8px;padding:.4rem .6rem;line-height:1.5}
+.suggest{display:flex;gap:.4rem;flex-wrap:wrap;padding:.5rem .7rem 0}
+.suggest button{
+  background:var(--panel);border:1px solid var(--line);border-radius:999px;
+  padding:.32rem .68rem;font-size:.72rem;color:var(--ink2);cursor:pointer;transition:.14s
+}
+.suggest button:hover{border-color:var(--accent);color:var(--ink)}
+.suggest button[disabled]{opacity:.5;cursor:not-allowed;border-style:dashed}
+/* no operator-voiced example on this ability — the chip fills nothing, and says so */
+.suggest button[data-noexample]{border-style:dashed;opacity:.8}
+.askbar{
+  display:flex;gap:.5rem;padding:.6rem .7rem;border-top:1px solid var(--line);
+  flex-shrink:0;background:var(--panel);align-items:center;flex-wrap:wrap
+}
+.askbar input{
+  flex:1;background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:.55rem .75rem;color:var(--ink);font-size:.85rem;min-width:120px
+}
+.askbar input:focus{outline:none;border-color:var(--accent)}
+.stamp{font-size:.63rem;color:var(--ink3);white-space:nowrap}
+
+/* ---------- RIGHT: evidence ---------- */
+.evtabs{display:flex;gap:.25rem;padding:.4rem .5rem;border-bottom:1px solid var(--line);
+  background:var(--panel);flex-shrink:0;overflow-x:auto}
+.evtabs button{
+  background:transparent;border:1px solid transparent;border-radius:7px;color:var(--ink3);
+  font-size:.7rem;font-weight:700;padding:.3rem .55rem;cursor:pointer;white-space:nowrap
+}
+.evtabs button:hover{color:var(--ink);background:var(--hover)}
+.evtabs button.on{color:var(--ink);background:var(--hover);border-color:var(--accent)}
+.evpage{display:none;padding:.7rem}
+.evpage.on{display:block}
+.evcard{
+  border:1px solid var(--line);border-radius:10px;background:var(--panel);
+  margin-bottom:.65rem;overflow:hidden
+}
+.evcard>header{
+  padding:.45rem .65rem;border-bottom:1px solid var(--line);display:flex;
+  justify-content:space-between;align-items:center;gap:.5rem
+}
+.evcard>header b{font-size:.73rem;font-weight:800}
+.evcard>header .stamp{font-size:.61rem}
+.evcard .body{padding:.6rem .65rem;font-size:.79rem;line-height:1.55;color:var(--ink2)}
+.evcard .body b,.evcard .body strong{color:var(--ink)}
+pre.term{
+  font-family:var(--mono);font-size:.7rem;line-height:1.5;background:var(--term-bg);
+  color:var(--term-ink);padding:.6rem .7rem;overflow-x:auto;white-space:pre;margin:0;max-height:340px
+}
+.metric{display:flex;justify-content:space-between;gap:.6rem;padding:.28rem 0;font-size:.76rem;
+  border-bottom:1px dashed var(--line-soft)}
+.metric:last-child{border-bottom:none}
+.metric b{font-family:var(--mono);font-weight:700;text-align:right}
+.metric b.bad{color:var(--bad)} .metric b.ok{color:var(--ok)} .metric b.warn{color:var(--warn)}
+.empty{text-align:center;color:var(--ink3);font-size:.79rem;padding:2.5rem 1rem;line-height:1.6}
+.empty .big{font-size:1.8rem;display:block;margin-bottom:.5rem;opacity:.5}
+.soon{
+  border:1px dashed var(--warn);background:var(--warn-bg);border-radius:10px;
+  padding:.9rem .85rem;font-size:.79rem;line-height:1.6;color:var(--ink2)
+}
+.soon b{color:var(--warn);display:block;margin-bottom:.3rem;font-size:.8rem}
+
+.state{font-size:.58rem;font-weight:800;padding:.1rem .35rem;border-radius:4px;text-transform:uppercase}
+.state.red{background:var(--bad-bg);color:var(--bad)}
+.state.amber{background:var(--warn-bg);color:var(--warn)}
+.state.green{background:var(--ok-bg);color:var(--ok)}
+.state.grey{background:rgba(148,163,184,.16);color:var(--ink3)}
+
+.hypo-row{margin-top:.5rem}
+.r-lbl{display:block;font-size:.61rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--ink3);margin-bottom:.15rem}
+.conf{font-size:.6rem;font-weight:800;padding:.1rem .35rem;border-radius:4px;
+  background:var(--info-bg);color:var(--info);text-transform:uppercase}
+.corr{border:1px solid var(--purple);background:var(--purple-bg);border-radius:9px;
+  padding:.5rem .6rem;margin-top:.6rem;font-size:.76rem;line-height:1.55}
+.corr .r-lbl{color:var(--purple)}
+.corr-chip{display:inline-block;font-size:.63rem;font-weight:700;padding:.1rem .35rem;
+  border-radius:4px;background:var(--panel);border:1px solid var(--line);margin:.15rem .2rem 0 0}
+.corr-none{border:1px dashed var(--line);border-radius:9px;padding:.45rem .6rem;margin-top:.6rem;
+  font-size:.74rem;color:var(--ink3);line-height:1.5}
+
+.person{display:flex;align-items:center;gap:.55rem;padding:.4rem .3rem;border-radius:8px}
+.person:hover{background:var(--hover)}
+.pav{width:26px;height:26px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;
+  justify-content:center;font-size:.62rem;font-weight:800;color:#fff;
+  background:linear-gradient(135deg,#3b82f6,#8b5cf6)}
+.pav.agent{background:linear-gradient(135deg,#0ea5e9,#10b981)}
+.pname{font-size:.77rem;font-weight:650;color:var(--ink)}
+.prole{font-size:.64rem;color:var(--ink3)}
+
+/* ---------- name gate ---------- */
+.gate{
+  position:fixed;inset:0;z-index:400;background:rgba(6,10,18,.86);backdrop-filter:blur(6px);
+  display:flex;align-items:center;justify-content:center;padding:1rem
+}
+.gate.hide{display:none}
+.gatecard{
+  width:min(430px,94vw);background:var(--card);border:1px solid var(--line);border-radius:16px;
+  padding:1.6rem;box-shadow:var(--shadow);text-align:center
+}
+.gatecard h3{font-size:1.2rem;margin-bottom:.4rem}
+.gatecard p{font-size:.84rem;color:var(--ink2);line-height:1.6;margin-bottom:1.1rem}
+.gatecard input{
+  width:100%;background:var(--panel);border:1px solid var(--line);border-radius:9px;
+  padding:.7rem .85rem;color:var(--ink);font-size:.95rem;text-align:center;margin-bottom:.8rem
+}
+.gatecard input:focus{outline:none;border-color:var(--accent)}
+.gatecard .fine{font-size:.7rem;color:var(--ink3);margin-top:.9rem;margin-bottom:0}
+
+/* toast */
+.toast{
+  position:fixed;bottom:1.1rem;left:50%;transform:translateX(-50%) translateY(140%);
+  background:var(--panel);border:1px solid var(--ok);color:var(--ok);border-radius:99px;
+  padding:.5rem 1rem;font-size:.8rem;font-weight:700;box-shadow:var(--shadow);
+  z-index:500;transition:transform .25s ease;max-width:90vw;text-align:center
+}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.toast.bad{border-color:var(--bad);color:var(--bad)}
+
+@keyframes flash{0%{box-shadow:0 0 0 0 rgba(59,130,246,.55)}100%{box-shadow:0 0 0 12px rgba(59,130,246,0)}}
+.flash{animation:flash .9s ease-out}
+
+/* ---------- mobile: panes stack ---------- */
+.mobtabs{display:none;gap:.35rem;padding:.5rem .75rem 0}
+.mobtabs button{
+  flex:1;background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:.45rem;font-size:.74rem;font-weight:700;color:var(--ink2);cursor:pointer
+}
+.mobtabs button.on{border-color:var(--accent);color:var(--ink);background:var(--hover)}
+.ovclose{display:none}
+@media (max-width:1080px){
+  .shell{grid-template-columns:250px minmax(0,1fr)}
+  .shell .pane.right{display:none}
+  .shell.show-right .pane.right{display:flex;position:fixed;inset:56px 0 0 0;z-index:200;border-radius:0}
+  .shell.show-right .ovclose{display:inline-flex}
+}
+@media (max-width:760px){
+  .ovclose{display:none !important}
+  .mobtabs{display:flex}
+  .shell{grid-template-columns:1fr;height:auto;min-height:calc(100vh - 96px)}
+  .shell .pane{display:none;height:calc(100vh - 120px)}
+  .shell .pane.active{display:flex}
+  .shell.show-right .pane.right{position:static;inset:auto;border-radius:12px}
+  .top .clock,.top .dirtag{display:none}
+}
+</style>
+</head>
+<body>
+
+<!-- ============ NAME GATE ============ -->
+<div class="gate" id="gate">
+  <div class="gatecard">
+    <div style="font-size:2rem;margin-bottom:.5rem">🛩</div>
+    <h3>Who's at the desk?</h3>
+    <p>Type your name once. Everything Jarvis does for you gets stamped with it —
+       every question, every command, every incident you open.</p>
+    <input id="nameIn" placeholder="e.g. Vikas Mittal" autocomplete="off" maxlength="64">
+    <button class="btn btn-primary" style="width:100%;justify-content:center" id="gateBtn">Take the desk</button>
+    <p class="fine">No login, no badge. Just a name so the log knows who did what.</p>
+  </div>
+</div>
+
+<!-- ============ HEADER ============ -->
+<header class="top">
+  <div class="brand">
+    <h1>Jarvis Copilot Desk</h1>
+    <span class="dirtag">Cockpit · CW-1</span>
+  </div>
+  <div class="top-right">
+    <span class="chip wait" id="connChip"><span class="dot"></span>Connecting…</span>
+    <span class="clock" id="clock">--:--:--</span>
+    <a class="iconbtn" href="/" title="Back to the classic Evidence Split Console">🖥</a>
+    <button class="iconbtn" id="themeBtn" title="Switch light / dark">🌗</button>
+    <div class="whotag" id="whoTag" title="Change who's at the desk">
+      <div class="avatar" id="avi">?</div><span id="whoName">—</span>
+    </div>
+  </div>
+</header>
+
+<div class="mobtabs" id="mobtabs">
+  <button class="on" data-i="0">Work queue</button>
+  <button data-i="1">Jarvis</button>
+  <button data-i="2">Evidence</button>
+</div>
+
+<!-- ============ THREE PANES ============ -->
+<div class="shell" id="shell">
+
+  <!-- ---------- LEFT ---------- -->
+  <section class="pane left active">
+    <div class="pane-head">
+      <h2>⛳ Work queue</h2>
+      <span class="count" id="qcount">—</span>
+    </div>
+    <div class="pane-body" id="queueBody">
+      <div class="empty"><span class="big">⏳</span>Loading the real incident queue…</div>
+    </div>
+    <div class="qfoot">
+      <div class="newform" id="newForm">
+        <select id="newSev">
+          <option value="P1">P1 — major, everyone on it</option>
+          <option value="P2" selected>P2 — serious</option>
+          <option value="P3">P3 — routine</option>
+        </select>
+        <textarea id="newDesc" placeholder="What is happening? Name the device / site / symptom, e.g. &quot;users on sw1 seeing packet loss since 2pm&quot;"></textarea>
+        <div class="formerr" id="newErr" hidden></div>
+        <div style="display:flex;gap:.4rem">
+          <button class="btn btn-primary btn-sm" id="newGo" style="flex:1;justify-content:center">Open it</button>
+          <button class="btn btn-ghost btn-sm" id="newCancel">Cancel</button>
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="newToggle" style="width:100%;justify-content:center">
+        ➕ Open a new triage
+      </button>
+    </div>
+  </section>
+
+  <!-- ---------- CENTER ---------- -->
+  <section class="pane center">
+    <div class="ctx" id="ctxBar">
+      <b id="ctxTitle">No incident selected</b>
+      <span class="qsub" id="ctxSub" style="margin-left:auto">Pick one on the left, or ask Jarvis anything</span>
+    </div>
+
+    <div class="chat" id="chat">
+      <div class="chat-empty" id="chatEmpty">
+        Nothing said yet. Ask Jarvis a question below, or pick an incident on the left
+        to see its real bridge conversation.
+      </div>
+    </div>
+
+    <div class="capbar" id="capBar"></div>
+    <div class="suggest" id="suggest"></div>
+
+    <div class="askbar">
+      <input id="ask" placeholder="Ask Jarvis anything about the network…" autocomplete="off">
+      <button class="btn btn-primary" id="askBtn">Ask Jarvis</button>
+      <button class="btn btn-ghost" id="postBtn" disabled title="Post a note into the selected open bridge">Post to bridge</button>
+      <span class="stamp">acting as <b id="stampName">—</b></span>
+    </div>
+  </section>
+
+  <!-- ---------- RIGHT ---------- -->
+  <section class="pane right">
+    <div class="pane-head">
+      <h2>🔎 Evidence board</h2>
+      <div style="display:flex;gap:.4rem">
+        <button class="btn btn-ghost btn-sm ovclose" id="ovclose">← Back to the desk</button>
+      </div>
+    </div>
+    <div class="evtabs" id="evtabs">
+      <button class="on" data-p="ev-find">Findings</button>
+      <button data-p="ev-out">Output</button>
+      <button data-p="ev-chg">Change</button>
+      <button data-p="ev-drift">Drift</button>
+      <button data-p="ev-bridge">Bridge</button>
+    </div>
+    <div class="pane-body">
+
+      <div class="evpage on" id="ev-find">
+        <div id="findWrap">
+          <div class="empty"><span class="big">📋</span>
+            Nothing pinned yet.<br>Pick an incident on the left — its real findings and verdict land here.
+          </div>
+        </div>
+      </div>
+
+      <div class="evpage" id="ev-out">
+        <div id="outWrap">
+          <div class="empty"><span class="big">⌨️</span>
+            No commands run since this desk was opened.<br>
+            Every real check an engineer runs lands here with its exact command and raw output.
+          </div>
+        </div>
+      </div>
+
+      <div class="evpage" id="ev-chg">
+        <div class="soon">
+          <b>Change wrap arrives in CW-2.</b>
+          Jarvis cannot change a device yet — this desk is read-only today. When the change engine
+          lands, every change will walk five steps in the open here: before picture, apply,
+          after picture, what moved, and a one-click undo. Nothing is shown here until it is real.
+        </div>
+      </div>
+
+      <div class="evpage" id="ev-drift">
+        <div class="soon">
+          <b>Drift check arrives in CW-2.</b>
+          Comparing a device against its standard build needs the deviation engine, which is not
+          built yet. No drift table is drawn from guesses — this stays empty until the real
+          comparison exists.
+        </div>
+      </div>
+
+      <div class="evpage" id="ev-bridge">
+        <div id="bridgeWrap">
+          <div class="empty"><span class="big">👥</span>
+            No incident selected — no bridge to show.
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast">done</div>
+
+<script>
+/* ============================================================
+   Copilot Desk — CW-1. REAL data only.
+   Every panel is fed by an existing API:
+     GET  /api/incidents            → left work queue
+     GET  /api/triage/:id           → selected incident record
+     POST /api/triage               → open a new triage
+     POST /api/triage/:id/message   → post into an open bridge
+     POST /api/triage/:id/roles     → take ownership (stamped)
+     POST /api/command              → ask Jarvis (reply arrives on the WS)
+     GET  /api/capabilities         → the honest capability map (CW-1 backend)
+     WebSocket                      → live triage_* / chat_message / command_share
+   No endpoint is invented, no value is fabricated. When something is
+   missing the screen says so.
+   ============================================================ */
+(function(){
+'use strict';
+
+var $ = function(id){ return document.getElementById(id); };
+var OP = '';                 // operator name (localStorage)
+var SEL = null;              // selected incident record (real, from /api/triage/:id)
+var SELID = null;            // selected triageId
+var QUEUE = { list:[], state:'loading', error:'' };
+var CAPS = { state:'loading', abilities:[], error:'' };
+var TZ = '';
+try{ TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; }catch(e){ TZ=''; }
+
+/* ---------- escaping: every DOM sink goes through here ---------- */
+function esc(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+/* Tiny, safe markdown: escape FIRST, then re-introduce only bold / code / breaks. */
+function md(s){
+  var t = esc(s);
+  t = t.replace(/`([^`\n]+)`/g, function(m,a){ return '<code>'+a+'</code>'; });
+  t = t.replace(/\*\*([^*\n]+)\*\*/g, function(m,a){ return '<b>'+a+'</b>'; });
+  return t.replace(/\n/g,'<br>');
+}
+
+/* ---------- clock (operator's own timezone) ---------- */
+function tick(){ $('clock').textContent = new Date().toTimeString().slice(0,8); }
+setInterval(tick,1000); tick();
+function clockOf(ts){
+  if(!ts) return '—';
+  var d = new Date(ts);
+  return isNaN(d.getTime()) ? '—' : d.toTimeString().slice(0,5);
+}
+function nowClock(){ return new Date().toTimeString().slice(0,5); }
+
+/* ---------- theme: three states (system / light / dark) ---------- */
+$('themeBtn').addEventListener('click', function(){
+  var r = document.documentElement, cur = r.getAttribute('data-theme');
+  if(!cur){
+    var dark = !window.matchMedia || !window.matchMedia('(prefers-color-scheme:light)').matches;
+    r.setAttribute('data-theme', dark ? 'light' : 'dark');
+  } else r.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+  try{ localStorage.setItem('noc-desk-theme', r.getAttribute('data-theme')); }catch(e){}
+});
+(function(){
+  var t=null; try{ t = localStorage.getItem('noc-desk-theme'); }catch(e){}
+  if(t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+})();
+
+/* ---------- toast ---------- */
+function toast(t, bad){
+  var el = $('toast'); el.textContent = t;
+  el.className = 'toast show' + (bad ? ' bad' : '');
+  clearTimeout(el._t); el._t = setTimeout(function(){ el.className = 'toast' + (bad?' bad':''); }, 3200);
+}
+
+/* ============================================================
+   NAME GATE + identity header
+   ============================================================ */
+function initials(n){
+  var p = String(n||'').trim().split(/\s+/);
+  return ((p[0]||'?')[0] + (p[1] ? p[1][0] : '')).toUpperCase();
+}
+function applyName(){
+  $('whoName').textContent = OP.split(/\s+/)[0];
+  $('avi').textContent = initials(OP);
+  $('stampName').textContent = OP;
+}
+function enterDesk(){
+  var v = $('nameIn').value.trim().replace(/[^\x20-\x7E]/g,'').slice(0,64);
+  if(!v){ $('nameIn').focus(); return; }
+  OP = v;
+  try{ localStorage.setItem('noc-desk-operator', v); }catch(e){}
+  applyName();
+  $('gate').classList.add('hide');
+  boot();
+}
+$('gateBtn').addEventListener('click', enterDesk);
+$('nameIn').addEventListener('keydown', function(e){ if(e.key === 'Enter') enterDesk(); });
+$('whoTag').addEventListener('click', function(){
+  $('nameIn').value = OP;
+  $('gate').classList.remove('hide');
+  setTimeout(function(){ $('nameIn').focus(); }, 60);
+});
+
+/* Every fetch carries the operator name — the backend stamps actions with it. */
+function api(url, opts){
+  opts = opts || {};
+  var h = Object.assign({ 'Accept':'application/json' }, opts.headers || {});
+  if(OP) h['X-Operator-Name'] = OP;
+  if(opts.body && !h['Content-Type']) h['Content-Type'] = 'application/json';
+  return fetch(url, Object.assign({}, opts, { headers: h }));
+}
+
+/* ============================================================
+   LEFT — work queue from the REAL /api/incidents
+   ============================================================ */
+var qInflight = false;
+function refreshQueue(){
+  if(qInflight) return;
+  qInflight = true;
+  api('/api/incidents')
+    .then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function(list){
+      if(!Array.isArray(list)) throw new Error('the server did not return a list');
+      QUEUE.list = list; QUEUE.state = 'ok'; QUEUE.error = '';
+    })
+    .catch(function(err){ QUEUE.state = 'error'; QUEUE.error = err.message || String(err); })
+    .then(function(){ qInflight = false; renderQueue(); });
+}
+function sevClass(s){ return /^P[123]$/.test(String(s)) ? String(s) : 'none'; }
+function slaHtml(i){
+  var sla = i && i.sla;
+  if(!sla || sla.breached == null){
+    return '<span class="sla unk" title="No SLA target recorded for this incident">SLA —</span>';
+  }
+  if(sla.breached) return '<span class="sla late" title="Past its severity SLA target">SLA breached</span>';
+  var mins = sla.targetMs != null ? Math.round(sla.targetMs/60000) : null;
+  return '<span class="sla ok" title="Within its severity SLA target">SLA ' +
+    (mins != null ? esc(mins + 'm') : 'on track') + '</span>';
+}
+function qRow(i){
+  var sev = sevClass(i.severity);
+  var isAlert = i.source === 'alert';
+  var closed = i.status !== 'open';
+  return '<button type="button" class="qitem' + (closed ? ' closed' : '') +
+      (i.triageId === SELID ? ' sel' : '') + '" data-triage="' + esc(i.triageId||'') + '">' +
+    '<div class="stripe sev-' + esc(sev) + '"></div>' +
+    '<div class="qtxt">' +
+      '<div class="qtitle">' + esc(i.title || 'Untitled incident') + '</div>' +
+      '<div class="qmeta">' +
+        '<span class="tag t-' + esc(sev) + '">' + esc(i.severity || 'P?') + '</span>' +
+        '<span class="tag t-src" title="' + (isAlert ? 'Raised by a monitoring alert' : 'Opened by an operator') + '">' +
+          (isAlert ? '⚡ alert' : '🧑‍💻 operator') + '</span>' +
+        (closed ? '<span class="tag t-closed">closed</span>' : '') +
+        slaHtml(i) +
+      '</div>' +
+      '<div class="qsub">' + esc(i.incidentId || 'INC-—') + ' · opened ' + esc(clockOf(i.openedAt)) +
+        ' · ' + (i.owner ? 'owner ' + esc(i.owner) : 'owner unassigned') + '</div>' +
+    '</div></button>';
+}
+function renderQueue(){
+  var body = $('queueBody'), cnt = $('qcount');
+  if(QUEUE.state === 'loading'){
+    body.innerHTML = '<div class="empty"><span class="big">⏳</span>Loading the real incident queue…</div>';
+    cnt.textContent = '—'; return;
+  }
+  if(QUEUE.state === 'error'){
+    body.innerHTML = '<div class="empty"><span class="big">⚠️</span>' +
+      'Could not read the incident queue.<br><b>' + esc(QUEUE.error) + '</b><br>' +
+      'Nothing is shown rather than something invented — retrying every 8 seconds.</div>';
+    cnt.textContent = 'error'; return;
+  }
+  var list = QUEUE.list || [];
+  var open = list.filter(function(i){ return i && i.status === 'open'; });
+  var done = list.filter(function(i){ return i && i.status !== 'open'; });
+  cnt.textContent = open.length + ' open';
+  if(!list.length){
+    body.innerHTML = '<div class="empty"><span class="big">🌤</span>' +
+      'No incidents on the board.<br>Nothing is broken right now — or nothing has been opened yet.</div>';
+    return;
+  }
+  var html = '';
+  if(open.length){
+    html += '<div class="grouphead">Live incidents <span style="color:var(--bad)">' + esc(open.length) + '</span></div>';
+    html += open.map(qRow).join('');
+  }
+  if(done.length){
+    html += '<div class="grouphead">Recently settled <span>' + esc(done.length) + '</span></div>';
+    html += done.map(qRow).join('');
+  }
+  body.innerHTML = html;
+}
+$('queueBody').addEventListener('click', function(e){
+  var row = e.target.closest && e.target.closest('.qitem[data-triage]');
+  if(!row) return;
+  selectIncident(row.getAttribute('data-triage'));
+  if(window.innerWidth <= 760) mobPane(1);
+});
+
+/* ---------- open a new triage (REAL POST /api/triage) ---------- */
+$('newToggle').addEventListener('click', function(){
+  $('newForm').classList.toggle('on');
+  if($('newForm').classList.contains('on')) $('newDesc').focus();
+});
+$('newCancel').addEventListener('click', function(){ $('newForm').classList.remove('on'); });
+$('newGo').addEventListener('click', function(){
+  var desc = $('newDesc').value.trim();
+  var sev = $('newSev').value;
+  var errEl = $('newErr');
+  errEl.hidden = true;
+  if(!desc){ errEl.textContent = 'Say what is happening first — the engine refuses an empty symptom.'; errEl.hidden = false; return; }
+  var btn = this; btn.disabled = true; btn.textContent = 'Opening…';
+  api('/api/triage', { method:'POST', body: JSON.stringify({ severity: sev, description: desc, operatorTz: TZ }) })
+    .then(function(r){ return r.json().then(function(b){ return { ok:r.ok, status:r.status, body:b }; }); })
+    .then(function(res){
+      if(!res.ok){
+        errEl.textContent = (res.body && res.body.error) || ('The server refused it (HTTP ' + res.status + ').');
+        errEl.hidden = false; return;
+      }
+      $('newDesc').value = '';
+      $('newForm').classList.remove('on');
+      toast('Opened ' + (res.body.incidentId || res.body.triageId) + ' — by ' + OP);
+      refreshQueue();
+      selectIncident(res.body.triageId, function(t){
+        sysMsg(esc(t.incidentId || t.triageId) + ' opened by <b>' + esc(OP) + '</b> — ' + esc(sev) + '. The bridge is running now.');
+      });
+    })
+    .catch(function(err){
+      errEl.textContent = 'Could not reach the server: ' + (err.message || err);
+      errEl.hidden = false;
+    })
+    .then(function(){ btn.disabled = false; btn.textContent = 'Open it'; });
+});
+
+/* ============================================================
+   CENTER — the conversation
+   ============================================================ */
+function clearChatEmpty(){ var e = $('chatEmpty'); if(e) e.remove(); }
+function atBottom(){
+  var c = $('chat');
+  return c.scrollHeight - c.scrollTop - c.clientHeight < 160;
+}
+function push(el, force){
+  var near = atBottom();
+  clearChatEmpty();
+  $('chat').appendChild(el);
+  if(force || near) $('chat').scrollTop = $('chat').scrollHeight;
+}
+/* side: 'me' | 'jv' | 'sys' — html must already be escaped by the caller. */
+function bubble(side, label, html, force){
+  var d = document.createElement('div');
+  d.className = 'msg ' + side;
+  d.innerHTML = '<div class="who">' + esc(side === 'me' ? initials(OP) : (side === 'sys' ? '!' : 'JV')) + '</div>' +
+    '<div class="bubble"><span class="lbl">' + esc(label) + '</span>' + html + '</div>';
+  push(d, force);
+  return d;
+}
+function sysMsg(html){ return bubble('sys', 'Desk · ' + nowClock(), html); }
+function meMsg(text){ return bubble('me', OP + ' · ' + nowClock(), md(text), true); }
+function jvMsg(who, text, ts, extraHtml){
+  return bubble('jv', (who || 'Jarvis') + ' · ' + clockOf(ts || new Date().toISOString()),
+    md(text) + (extraHtml || ''));
+}
+function jumpBtn(page, label){
+  return '<span class="jump" data-jump="' + esc(page) + '">→ ' + esc(label) + '</span>';
+}
+$('chat').addEventListener('click', function(e){
+  var j = e.target.closest && e.target.closest('[data-jump]');
+  if(j) evTab(j.getAttribute('data-jump'));
+});
+
+/* ---------- ask Jarvis (REAL POST /api/command; reply on the WS) ---------- */
+function sendAsk(){
+  var box = $('ask'), t = box.value.trim();
+  if(!t) return;
+  if(!OP){ $('whoTag').click(); return; }
+  box.value = '';
+  meMsg(t);
+  api('/api/command', { method:'POST', body: JSON.stringify({ agent:'jarvis', command:t }) })
+    .then(function(r){
+      if(!r.ok) return r.json().catch(function(){ return {}; }).then(function(b){
+        sysMsg('Jarvis did not accept that — ' + esc((b && b.error) || ('HTTP ' + r.status)) + '. Nothing was run.');
+      });
+    })
+    .catch(function(err){
+      sysMsg('Could not reach the server: ' + esc(err.message || err) + '. Nothing was run.');
+    });
+}
+$('askBtn').addEventListener('click', sendAsk);
+$('ask').addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); sendAsk(); } });
+
+/* ---------- post into the selected open bridge (REAL) ---------- */
+$('postBtn').addEventListener('click', function(){
+  var box = $('ask'), t = box.value.trim();
+  if(!t || !SELID || !SEL || SEL.status !== 'open') return;
+  box.value = '';
+  api('/api/triage/' + encodeURIComponent(SELID) + '/message', { method:'POST', body: JSON.stringify({ text:t }) })
+    .then(function(r){
+      if(!r.ok) return r.json().catch(function(){ return {}; }).then(function(b){
+        sysMsg('The bridge refused that note — ' + esc((b && b.error) || ('HTTP ' + r.status)) + '.');
+      });
+      toast('Posted to the bridge — by ' + OP);
+      /* the triage_message event paints it, stamped */
+    })
+    .catch(function(err){ sysMsg('Could not post to the bridge: ' + esc(err.message || err)); });
+});
+function syncPostBtn(){
+  var on = !!(SEL && SEL.status === 'open');
+  $('postBtn').disabled = !on;
+  $('postBtn').title = on ? 'Post a note into this open bridge as ' + OP
+                          : 'Pick an OPEN incident on the left to post into its bridge';
+}
+
+/* ============================================================
+   CAPABILITIES — the honest map (GET /api/capabilities)
+   ============================================================ */
+function loadCaps(){
+  api('/api/capabilities')
+    .then(function(r){
+      if(!r.ok) throw new Error(r.status === 404 ? 'the server has no capability list yet (404)' : 'HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function(d){
+      if(!d || !Array.isArray(d.abilities)) throw new Error('the capability list came back in an unexpected shape');
+      CAPS = { state:'ok', abilities:d.abilities, error:'' };
+    })
+    .catch(function(err){ CAPS = { state:'error', abilities:[], error: err.message || String(err) }; })
+    .then(renderCaps);
+}
+function renderCaps(){
+  var bar = $('capBar'), sug = $('suggest');
+  if(CAPS.state === 'loading'){ bar.innerHTML = ''; sug.innerHTML = ''; return; }
+  if(CAPS.state === 'error'){
+    bar.innerHTML = '<div class="capnote"><b>Capability list unavailable</b> — ' + esc(CAPS.error) +
+      '. I will not guess what Jarvis can do, so no shortcuts are offered. ' +
+      'You can still ask in plain words; Jarvis answers with what it really has.</div>';
+    sug.innerHTML = '';
+    return;
+  }
+  var av = CAPS.abilities.filter(function(a){ return a && a.available; });
+  var no = CAPS.abilities.filter(function(a){ return a && !a.available; });
+  bar.innerHTML = no.length
+    ? '<div class="capnote"><b>Not yet:</b> ' + no.map(function(a){
+        return esc(a.label || a.key) + ' — ' + esc(a.reason || 'no reason given');
+      }).join(' · ') + '</div>'
+    : '';
+  /* A chip prefills the ability's `example` — an OPERATOR-VOICED sample ask.
+     `plain` is Jarvis's own description of itself; putting that in the box would
+     send Jarvis's words to Jarvis as if the operator had typed them. So it is
+     used only as the hover explanation. No example -> the chip fills nothing and
+     just puts the cursor in the box, so whatever gets sent is the operator's. */
+  sug.innerHTML = av.map(function(a){
+    var ex = (typeof a.example === 'string') ? a.example.trim() : '';
+    var tip = ex ? (a.plain || a.label || a.key)
+                 : ((a.plain ? a.plain + ' — ' : '') + 'no sample ask given, type your own');
+    return '<button type="button" data-cap="' + esc(ex) + '"' + (ex ? '' : ' data-noexample="1"') +
+      ' title="' + esc(tip) + '">' + esc(a.label || a.key) + '</button>';
+  }).join('');
+}
+$('suggest').addEventListener('click', function(e){
+  var b = e.target.closest && e.target.closest('button[data-cap]');
+  if(!b) return;
+  var ex = b.getAttribute('data-cap');
+  if(ex) $('ask').value = ex;   // no example -> leave the box exactly as the operator left it
+  $('ask').focus();
+});
+
+/* ============================================================
+   SELECTING AN INCIDENT — real record from GET /api/triage/:id
+   ============================================================ */
+function selectIncident(triageId, afterPaint){
+  if(!triageId) return;
+  SELID = triageId;
+  renderQueue();
+  $('ctxTitle').textContent = 'Loading…';
+  $('ctxSub').textContent = triageId;
+  api('/api/triage/' + encodeURIComponent(triageId))
+    .then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function(t){
+      SEL = t;
+      paintContext(t);
+      paintConversation(t);
+      paintFindings(t);
+      paintBridge(t);
+      syncPostBtn();
+      if(typeof afterPaint === 'function') afterPaint(t);
+    })
+    .catch(function(err){
+      SEL = null; syncPostBtn();
+      $('ctxTitle').textContent = 'Could not load that incident';
+      $('ctxSub').textContent = err.message || String(err);
+      $('findWrap').innerHTML = '<div class="empty"><span class="big">⚠️</span>' +
+        'The incident record could not be read — ' + esc(err.message || err) + '.<br>Nothing is drawn from memory.</div>';
+    });
+}
+function paintContext(t){
+  var sev = sevClass(t.severity);
+  $('ctxBar').innerHTML =
+    '<span class="tag t-' + esc(sev) + '">' + esc(t.severity || 'P?') + '</span>' +
+    '<b id="ctxTitle">' + esc(t.title || 'Untitled incident') + '</b>' +
+    '<span class="tag t-' + (t.status === 'open' ? 'P3' : 'closed') + '">' + esc(t.status || '—') + '</span>' +
+    '<span class="qsub" id="ctxSub" style="margin-left:auto">' + esc(t.incidentId || t.triageId) +
+      ' · opened ' + esc(clockOf(t.openedAt)) +
+      (t.source === 'alert' ? ' · ⚡ alert-raised' : ' · 🧑‍💻 operator-opened') + '</span>';
+}
+function paintConversation(t){
+  var chat = $('chat');
+  chat.innerHTML = '';
+  var msgs = Array.isArray(t.messages) ? t.messages : [];
+  if(!msgs.length){
+    chat.innerHTML = '<div class="chat-empty" id="chatEmpty">No bridge conversation recorded on ' +
+      esc(t.incidentId || t.triageId) + ' yet.' +
+      (t.status === 'open' ? ' The engineers are still working — lines appear as they land.' : '') +
+      '</div>';
+  }
+  msgs.forEach(function(m){
+    if(m && m.operator) bubble('me', esc(m.agentName || 'Operator') + ' · ' + clockOf(m.ts), md(m.text||''));
+    else jvMsg((m && (m.agentName || m.agent)) || 'Engineer', (m && m.text) || '', m && m.ts);
+  });
+  if(t.verdict) jvMsg('Jarvis · verdict', t.verdict.verdict || 'Verdict posted.', t.verdict.ts,
+    jumpBtn('ev-find','See the findings behind it'));
+  chat.scrollTop = chat.scrollHeight;
+}
+
+/* ============================================================
+   RIGHT — evidence board
+   ============================================================ */
+function evTab(name){
+  [].forEach.call(document.querySelectorAll('.evtabs button'), function(b){
+    b.classList.toggle('on', b.getAttribute('data-p') === name);
+  });
+  [].forEach.call(document.querySelectorAll('.evpage'), function(p){
+    p.classList.toggle('on', p.id === name);
+  });
+  if(window.innerWidth <= 1080 && window.innerWidth > 760) $('shell').classList.add('show-right');
+}
+$('evtabs').addEventListener('click', function(e){
+  var b = e.target.closest && e.target.closest('button[data-p]');
+  if(b) evTab(b.getAttribute('data-p'));
+});
+$('ovclose').addEventListener('click', function(){ $('shell').classList.remove('show-right'); });
+
+function stateClass(s){
+  if(s === 'red' || s === 'fault') return 'red';
+  if(s === 'amber' || s === 'degraded') return 'amber';
+  if(s === 'green' || s === 'clean') return 'green';
+  return 'grey';
+}
+function evidenceCard(e){
+  if(!e) return '';
+  var body = '';
+  var d = e.delta;
+  var cur = (e.count != null) ? e.count : (d && d.count != null ? d.count : null);
+  if(cur != null){
+    var right = esc(cur);
+    if(d && d.firstSweep) right += ' <span class="stamp">first sweep · baseline set</span>';
+    else if(d && d.baseline != null){
+      var dv = Number(d.delta);
+      right += ' <span class="stamp">vs baseline ' + esc(d.baseline) + '</span> ' +
+        '<span class="' + (dv > 0 ? 'state red' : (dv < 0 ? 'state green' : 'state grey')) + '">' +
+        (dv > 0 ? '+' : '') + esc(dv) + '</span>';
+    }
+    body += '<div class="metric"><span>Findings</span><b>' + right + '</b></div>';
+  }
+  var g = e.groups;
+  if(g && Array.isArray(g.top) && g.top.length){
+    body += '<div class="metric"><span>Top alarm groups' +
+      (g.total != null ? ' · ' + esc(g.total) + ' total' : '') + '</span><b></b></div>';
+    g.top.forEach(function(row){
+      if(!row) return;
+      body += '<div class="metric"><span>' + esc(row.key || 'group') + '</span><b>' + esc(row.count) +
+        ' <span class="state ' + (row.chronic ? 'grey' : 'amber') + '">' +
+        (row.chronic ? 'chronic' : (row.newCount ? esc(row.newCount) + ' new' : 'new')) + '</span></b></div>';
+    });
+  }
+  if(e.age && (e.age.inWindow != null || e.age.older != null)){
+    body += '<div class="metric"><span>Inside the incident window</span><b>' +
+      esc(e.age.inWindow != null ? e.age.inWindow : 0) + '</b></div>' +
+      '<div class="metric"><span>Pre-existing (not the cause)</span><b>' +
+      esc(e.age.older != null ? e.age.older : 0) + '</b></div>';
+  }
+  if(e.detail) body += '<div style="margin-top:.4rem">' + esc(e.detail) + '</div>';
+  if(e.why) body += '<div style="margin-top:.35rem;color:var(--ink3);font-size:.73rem">' + esc(e.why) + '</div>';
+  if(!body) body = '<span style="color:var(--ink3)">No evidence recorded for this front.</span>';
+  return '<div class="evcard"><header><b>' + esc(e.front || 'front') + '</b>' +
+    '<span><span class="state ' + stateClass(e.state) + '">' + esc(e.state || 'unknown') + '</span>' +
+    (e.source ? ' <span class="stamp">' + esc(e.source) + '</span>' : '') + '</span></header>' +
+    '<div class="body">' + body + '</div></div>';
+}
+function correlationHtml(corr){
+  if(!corr) return '';
+  var tc = corr.topCandidate;
+  if(!tc){
+    return '<div class="corr-none">🔎 ' +
+      esc(corr.note || 'No cross-front correlation — the events look independent.') + '</div>';
+  }
+  var fronts = Array.isArray(tc.fronts) ? tc.fronts.filter(Boolean) : [];
+  var clusters = Array.isArray(corr.clusters) ? corr.clusters : [];
+  var cluster = null;
+  for(var i=0;i<clusters.length;i++){
+    var c = clusters[i];
+    if(c && (c.id === tc.clusterId || c.id === tc.id)){ cluster = c; break; }
+  }
+  if(!cluster && clusters.length) cluster = clusters[0];
+  var out = '<div class="corr"><span class="r-lbl">🔗 Correlated root-cause candidate' +
+    (cluster && cluster.strength != null ? ' · strength ' + esc(cluster.strength) : '') + '</span>';
+  out += fronts.length >= 2
+    ? '<div>One event across ' + esc(fronts.length) + ' fronts — not ' + esc(fronts.length) + ' separate problems.</div>'
+    : '<div>One correlated event.</div>';
+  if(fronts.length) out += '<div>' + fronts.map(function(f){ return '<span class="corr-chip">' + esc(f) + '</span>'; }).join('') + '</div>';
+  if(tc.ts) out += '<div style="margin-top:.25rem">all started ~ <b>' + esc(clockOf(tc.ts)) + '</b></div>';
+  if(tc.summary) out += '<div style="margin-top:.25rem">' + esc(tc.summary) + '</div>';
+  var evs = (cluster && Array.isArray(cluster.events)) ? cluster.events : [];
+  if(evs.length){
+    out += '<div style="margin-top:.35rem">' + evs.map(function(e){
+      e = e || {};
+      return '<div class="metric"><span>' + esc(e.front || '—') + (e.type ? ' · ' + esc(e.type) : '') +
+        '</span><b>' + esc(e.ts ? clockOf(e.ts) : '—') + '</b></div>' +
+        (e.detail ? '<div style="font-size:.71rem;color:var(--ink3)">' + esc(e.detail) + '</div>' : '');
+    }).join('') + '</div>';
+  }
+  return out + '</div>';
+}
+function verdictCard(v, t){
+  if(!v) return '';
+  var h = v.hypothesis || {};
+  var out = '<div class="evcard"><header><b>🎖️ Verdict — ' + esc(t.incidentId || t.triageId) + '</b>' +
+    '<span class="stamp">' + esc(clockOf(v.ts)) + '</span></header><div class="body">';
+  out += '<div><b>' + md(h.hypothesis || v.verdict || '—') + '</b>' +
+    (h.confidence ? ' <span class="conf">' + esc(h.confidence) + '</span>' : '') + '</div>';
+  if(Array.isArray(h.ranked) && h.ranked.length){
+    out += '<div class="hypo-row"><span class="r-lbl">Ranked causes</span><ol style="margin-left:1rem">' +
+      h.ranked.map(function(r){ return '<li>' + md((r && r.cause) || '') +
+        ((r && r.likelihood) ? ' <span class="stamp">' + esc(r.likelihood) + '</span>' : '') + '</li>'; }).join('') +
+      '</ol></div>';
+  }
+  if(h.ifThen) out += '<div class="hypo-row"><span class="r-lbl">Next check · if / then</span>' + md(h.ifThen) + '</div>';
+  else if(Array.isArray(v.nextChecks) && v.nextChecks.length){
+    out += '<div class="hypo-row"><span class="r-lbl">Next checks</span><ul style="margin-left:1rem">' +
+      v.nextChecks.map(function(c){ return '<li>' + esc(c) + '</li>'; }).join('') + '</ul></div>';
+  }
+  if(v.impact) out += '<div class="hypo-row"><span class="r-lbl">Impact</span>' + md(v.impact) + '</div>';
+  if(h.why) out += '<div class="hypo-row"><span class="r-lbl">Why</span>' + md(h.why) + '</div>';
+  var cfg = v.configFindings || t.configFindings || [];
+  if(Array.isArray(cfg) && cfg.length){
+    var changed = cfg.filter(function(x){ return x && x.changed; });
+    var inWin = changed.filter(function(x){ return x.inWindow; });
+    var txt;
+    if(inWin.length){
+      txt = 'Config CHANGE inside the window: ' + inWin.map(function(x){
+        return esc(x.device || 'device') + (x.when ? ' at ' + esc(x.when) : ''); }).join('; ') +
+        ' — a strong candidate cause.';
+    } else if(changed.length){
+      txt = 'Config changes found but all pre-date the window (' +
+        changed.map(function(x){ return esc(x.device || 'device'); }).join(', ') + ') — not the trigger.';
+    } else {
+      var named = cfg.filter(function(x){ return x && !x.error && x.device; }).map(function(x){ return esc(x.device); });
+      var note = cfg.map(function(x){ return x && x.note; }).filter(Boolean)[0];
+      txt = named.length
+        ? 'No config change on ' + named.join(', ') + ' in the window — that rules out a config-change cause class.'
+        : esc(note || 'No config finding this pass.');
+    }
+    out += '<div class="hypo-row"><span class="r-lbl">📋 Config-Keeper finding</span>' + txt + '</div>';
+  }
+  out += correlationHtml(v.correlation || t.correlation);
+  var bs = v.blindSpots || t.blindSpots || [];
+  if(Array.isArray(bs) && bs.length){
+    out += '<div class="hypo-row"><span class="r-lbl">Blind spots · ranked for this symptom</span><ul style="margin-left:1rem">' +
+      bs.map(function(b){
+        b = b || {};
+        return '<li>' + (b.risk === 'high' ? '<b style="color:var(--warn)">HIGH · </b>' : '') +
+          esc(b.front || '—') + ' — ' + esc(b.reason || '') + '</li>';
+      }).join('') + '</ul></div>';
+  }
+  return out + '</div></div>';
+}
+function paintFindings(t){
+  var w = $('findWrap');
+  var html = '';
+  if(t.verdict) html += verdictCard(t.verdict, t);
+  else if(t.status === 'open'){
+    html += '<div class="evcard"><header><b>Verdict</b><span class="stamp">not in yet</span></header>' +
+      '<div class="body">The bridge is still running on ' + esc(t.incidentId || t.triageId) +
+      '. No verdict is shown until the engineers commit one.</div></div>';
+  }
+  var ev = Array.isArray(t.evidence) ? t.evidence : [];
+  if(ev.length) html += ev.map(evidenceCard).join('');
+  else html += '<div class="evcard"><header><b>Evidence</b><span class="stamp">nothing yet</span></header>' +
+    '<div class="body">No front has reported evidence on this incident yet.</div></div>';
+  if(!t.verdict && !ev.length && t.status !== 'open'){
+    html = '<div class="empty"><span class="big">📋</span>This incident settled with no recorded evidence.</div>';
+  }
+  w.innerHTML = html;
+}
+function paintBridge(t){
+  var roles = t.roles || {};
+  var joiners = Array.isArray(roles.joiners) ? roles.joiners : [];
+  var staffed = Array.isArray(t.staffed) ? t.staffed : [];
+  var person = function(name, role, agent){
+    return '<div class="person"><div class="pav' + (agent ? ' agent' : '') + '">' + esc(initials(name)) + '</div>' +
+      '<div><div class="pname">' + esc(name) + '</div><div class="prole">' + esc(role) + '</div></div></div>';
+  };
+  var people = '';
+  if(roles.commander) people += person(roles.commander, 'Incident commander');
+  if(roles.scribe) people += person(roles.scribe, 'Scribe');
+  if(roles.owner) people += person(roles.owner, 'Current owner');
+  joiners.forEach(function(j){ people += person(String(j), 'On the bridge'); });
+  if(!people) people = '<div class="body" style="color:var(--ink3)">No roles set on this bridge yet — nobody has been named.</div>';
+
+  var agentsHtml = staffed.length
+    ? staffed.map(function(s){
+        s = s || {};
+        return person(String(s.agent || '—'), (s.tier ? s.tier + ' · ' : '') + 'engineer on the bridge', true);
+      }).join('')
+    : '<div class="body" style="color:var(--ink3)">No engineers staffed on this bridge.</div>';
+
+  var owned = roles.owner && roles.owner === OP;
+  $('bridgeWrap').innerHTML =
+    '<div class="evcard"><header><b>People on ' + esc(t.incidentId || t.triageId) + '</b>' +
+      '<span class="stamp">' + esc(t.status || '') + '</span></header>' +
+      '<div class="body" style="padding:.4rem .5rem">' + people +
+      (t.status === 'open'
+        ? '<div style="margin-top:.5rem"><button class="btn btn-ghost btn-sm" id="takeOwn"' +
+            (owned ? ' disabled' : '') + '>' + (owned ? 'You own this' : 'Take ownership as ' + esc(OP)) + '</button></div>'
+        : '') +
+      '</div></div>' +
+    '<div class="evcard"><header><b>Engineers staffed</b><span class="stamp">real roster</span></header>' +
+      '<div class="body" style="padding:.4rem .5rem">' + agentsHtml + '</div></div>' +
+    (t.ackAt
+      ? '<div class="evcard"><header><b>Acknowledged</b><span class="stamp">' + esc(clockOf(t.ackAt)) + '</span></header>' +
+        '<div class="body">MTTA ' + esc(t.mttaMs != null ? Math.round(t.mttaMs/1000) + 's' : '—') + '</div></div>'
+      : '');
+  var b = $('takeOwn');
+  if(b) b.addEventListener('click', function(){
+    b.disabled = true;
+    api('/api/triage/' + encodeURIComponent(t.triageId) + '/roles', {
+      method:'POST', body: JSON.stringify({ owner: OP })
+    }).then(function(r){
+      if(!r.ok) return r.json().catch(function(){ return {}; }).then(function(x){
+        toast('Could not take ownership — ' + ((x && x.error) || ('HTTP ' + r.status)), true);
+        b.disabled = false;
+      });
+      toast((t.incidentId || t.triageId) + ' now owned by ' + OP);
+      refreshQueue();
+      selectIncident(t.triageId, function(rec){
+        sysMsg('Ownership of ' + esc(rec.incidentId || rec.triageId) + ' taken by <b>' + esc(OP) + '</b>.');
+      });
+    }).catch(function(err){ toast('Could not reach the server: ' + (err.message||err), true); b.disabled = false; });
+  });
+}
+
+/* ---------- command output tab (real command_share events) ---------- */
+var cmdCount = 0;
+function landCommand(d){
+  var w = $('outWrap');
+  if(!cmdCount) w.innerHTML = '';
+  cmdCount++;
+  var who = d.agentName || d.agent || 'Engineer';
+  var card = document.createElement('div');
+  card.innerHTML =
+    '<div class="evcard"><header><b>' + esc(who) + (d.tier ? ' · ' + esc(d.tier) : '') + '</b>' +
+    '<span class="stamp">' + esc(clockOf(d.ts)) + ' · for ' + esc(OP) + '</span></header>' +
+    (d.purpose ? '<div class="body"><b>Why:</b> ' + esc(String(d.purpose).replace(/\s*×\d+\s*$/,'')) + '</div>' : '') +
+    '<div class="body" style="border-top:1px solid var(--line-soft);font-family:var(--mono);font-size:.72rem">$ ' +
+      esc(d.command || '(no command)') + '</div>' +
+    '<pre class="term">' + esc(d.raw == null || d.raw === '' ? '(no output returned)' : d.raw) + '</pre>' +
+    (d.conclusion ? '<div class="body" style="border-top:1px solid var(--line-soft)"><b>Means:</b> ' + esc(d.conclusion) + '</div>' : '') +
+    '</div>';
+  w.insertBefore(card, w.firstChild);
+  card.classList.add('flash');
+}
+
+/* ============================================================
+   LIVE — the same WebSocket the classic console uses
+   ============================================================ */
+var ws = null, wsRetry = 0;
+function setConn(state){
+  var c = $('connChip');
+  if(state === 'up'){ c.className = 'chip'; c.innerHTML = '<span class="dot"></span>Live'; }
+  else if(state === 'down'){ c.className = 'chip down'; c.innerHTML = '<span class="dot"></span>Not connected — retrying'; }
+  else { c.className = 'chip wait'; c.innerHTML = '<span class="dot"></span>Connecting…'; }
+}
+function connectWS(){
+  var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  try{ ws = new WebSocket(proto + '//' + location.host); }
+  catch(e){ setConn('down'); return scheduleReconnect(); }
+  ws.onopen = function(){ wsRetry = 0; setConn('up'); };
+  ws.onclose = function(){ setConn('down'); scheduleReconnect(); };
+  ws.onerror = function(){ /* onclose retries */ };
+  ws.onmessage = function(ev){
+    var m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
+    if(!m || !m.type) return;
+    if(m.type === 'chat_message' && m.data){ onChat(m.data); return; }
+    if(m.type === 'command_share' && m.data){ onShare(m.data); return; }
+    if(m.type === 'system_error' && m.data){ sysMsg(esc(m.data.message || 'System error')); return; }
+    if(m.type === 'approval_new' && m.data && m.data.state === 'pending'){
+      sysMsg('Approval needed before a read can run: <code>' + esc(m.data.command || 'a read') + '</code>' +
+        (m.data.target ? ' on ' + esc(m.data.target) : '') +
+        '. Decide it in the classic console — nothing was sent to any device.');
+      return;
+    }
+    if(m.type.indexOf('triage_') === 0){ onTriage(m.type, m.data); return; }
+  };
+}
+function scheduleReconnect(){ wsRetry = Math.min(wsRetry + 1, 6); setTimeout(connectWS, 500 * wsRetry); }
+
+function onChat(d){
+  if(d.type === 'outgoing') return;   // our own asks are already on screen
+  jvMsg(d.agentName || d.agent || 'Jarvis', d.text || '', d.timestamp);
+}
+function onShare(d){
+  landCommand(d);
+  jvMsg(d.agentName || d.agent || 'Engineer',
+    'Ran a real check: `' + String(d.command || '').slice(0,120) + '`',
+    d.ts, jumpBtn('ev-out','See the full output'));
+}
+function onTriage(type, d){
+  if(!d) return;
+  if(type === 'triage_opened'){ refreshQueue(); return; }
+  if(type === 'triage_closed'){ refreshQueue(); }
+  if(!SELID || !d.triageId || d.triageId !== SELID) return;
+  switch(type){
+    case 'triage_message':
+      if(d.operator) bubble('me', esc(d.agentName || 'Operator') + ' · ' + clockOf(d.ts), md(d.text||''));
+      else if(!(d.tier === 'L4' && d.round === 2)) jvMsg(d.agentName || d.agent || 'Engineer', d.text || '', d.ts);
+      break;
+    case 'triage_verdict':
+      jvMsg('Jarvis · verdict', d.verdict || 'Verdict posted.', d.ts, jumpBtn('ev-find','See the findings behind it'));
+      refetchSelected();
+      break;
+    case 'triage_evidence':
+    case 'triage_roles':
+    case 'triage_ack':
+      refetchSelected();
+      break;
+    case 'triage_closed':
+      sysMsg('The bridge on ' + esc(d.incidentId || SELID) + ' closed.');
+      refetchSelected();
+      break;
+  }
+}
+var refetchT = null;
+function refetchSelected(){
+  if(!SELID) return;
+  clearTimeout(refetchT);
+  refetchT = setTimeout(function(){
+    var id = SELID;
+    api('/api/triage/' + encodeURIComponent(id))
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(t){
+        if(!t || id !== SELID) return;
+        SEL = t;
+        paintContext(t); paintFindings(t); paintBridge(t); syncPostBtn();
+      })
+      .catch(function(){ /* keep what is on screen; nothing invented */ });
+  }, 350);
+}
+
+/* ---------- mobile pane switching ---------- */
+function mobPane(i){
+  var panes = document.querySelectorAll('#shell .pane');
+  [].forEach.call(panes, function(p,n){ p.classList.toggle('active', n === i); });
+  [].forEach.call(document.querySelectorAll('#mobtabs button'), function(b,n){ b.classList.toggle('on', n === i); });
+  $('shell').classList.toggle('show-right', i === 2);
+}
+$('mobtabs').addEventListener('click', function(e){
+  var b = e.target.closest && e.target.closest('button[data-i]');
+  if(b) mobPane(Number(b.getAttribute('data-i')));
+});
+
+/* ============================================================
+   BOOT
+   ============================================================ */
+var booted = false;
+function boot(){
+  if(booted) return;
+  booted = true;
+  applyName();
+  syncPostBtn();
+  refreshQueue();
+  setInterval(refreshQueue, 8000);
+  loadCaps();
+  connectWS();
+  bubble('jv', 'Jarvis · ' + nowClock(),
+    'Desk is yours, <b>' + esc(OP.split(/\s+/)[0]) + '</b>. Everything on this screen is read live from the ' +
+    'real console — the queue on the left, the evidence on the right. Ask me anything; I will run real reads ' +
+    'or say honestly that I cannot.');
+}
+(function(){
+  var saved = null; try{ saved = localStorage.getItem('noc-desk-operator'); }catch(e){}
+  if(saved){ OP = saved; applyName(); $('gate').classList.add('hide'); boot(); }
+  else setTimeout(function(){ $('nameIn').focus(); }, 200);
+})();
+
+})();
+</script>
+</body>
+</html>
