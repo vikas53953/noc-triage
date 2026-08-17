@@ -43,10 +43,9 @@ not-configured) + opt-in approval timeout (`APPROVAL_TIMEOUT_MS`, default off). 
    Runner path (Config-Keeper) so it never dead-ends on NetOps/inventory ("no command-runner path").
    Class fix in server.js `detectAgentIntent` + jarvis routing + live-agents. Verify: ask JARVIS
    "show version on sw1" → real device output. (Was relaunched 2026-08-17.)
-2. **Roadmap Wave 4 — cross-domain correlation** — UI done (PR **#37** open, feat/correlation-fe); BACKEND
-   was stopped mid-build, REBUILD it (sources/triage.js + jarvis.js) per docs/roadmap-build-spec.md item 4:
-   deterministic time co-occurrence across fronts → one ranked root-cause candidate; contract
-   `correlation:{clusters,topCandidate,note}`. Credits are back so the LLM can narrate it.
+2. **Roadmap Wave 4 — cross-domain correlation** — DONE. PRs #39+#37 adversarially reviewed (2 blockers
+   fixed at class level: candidate evidence never decided by a display cap), merged 2026-08-17, verified
+   live on :3000 (honest null on the real estate; positive path proven with widened window). sources/correlation.js.
 3. **SSH/Netmiko backend** (Vikas approved) — a small Python sidecar (Scrapli/Netmiko) so agents can run
    CLI over SSH to DIRECTLY-REACHABLE DevNet sandboxes (the always-on IOS-XE box). The DNAC switches
    sw1–sw4 are NOT SSH-reachable (private behind DNAC) → they STAY on Command Runner. Read-only guardrail

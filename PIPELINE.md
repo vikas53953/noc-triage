@@ -1,82 +1,53 @@
-# PIPELINE — NOC Triage (Evidence Split Console)
+# PIPELINE — Jarvis NOC Copilot mode
 
-**Project:** `noc-triage` — a real NOC/SOC incident-triage app. Forked from
-mission-control 2026-08-15 to carry its hardened read-only live-data engine
-(`sources/` adapters + guardrails + workspace/origins/ratelimit security).
-mission-control (the network-squad dashboard) stays a SEPARATE untouched project.
+**The ask (Vikas's words, 2026-08-17):** "anyone comes in and access the noc-triage and ask any
+question related to network and jarvis should be able to answer — it could be running commands /
+doing checks, doing changes taking pre/ post/ compare/ config validations/ deviations, getting on
+BL, investigating the issue with teams, handling tickets, or it could be anything related to
+noc-soc operations."
 
-**Repo:** https://github.com/vikas53953/noc-triage (PRIVATE), branch `master`.
+Existing product: the triage console (waves process, see HANDOFF.md). This pipeline covers the
+COPILOT expansion only. Three build agents are in flight on other features (CLI routing fix,
+Wave 4 correlation backend, SSH sidecar) — they land under the existing wave process, not here.
 
-## The product (approved by Vikas, Gate 1 + Gate 2, 2026-08-15)
-An issue comes in (P1/P2/P3). Jarvis (the **L4 / Principal Engineer**) opens a
-triage bridge and pulls the relevant tier engineers. Each investigates from its
-own front with REAL live data. The screen is the **Evidence Split Console**
-(mock direction C, all 5 sections liked):
-- Left: bridge conversation as narration.
-- Right: an **evidence board** — one card per network front (Campus / Fabric /
-  WAN / Incidents / blind-spot fronts hatched grey) that fills in and re-colours
-  (green/amber/red) live as engineers post.
-- Top: escalation progress strip L1 → L2 → L3 → L4.
-- Chat window MAXIMIZE button; Live Activity COLLAPSE button.
-- Light AND dark theme toggle.
+## Stage scoreboard
 
-### NOC tiers (from Gate 1)
-- **L1** Monitor-Eye — acknowledge, basic live sweep, escalation call.
-- **L2** NetOps, Incident-Handler — investigation tier, live front findings.
-- **L3** Router-Expert, Config-Keeper — SMEs, device-deep (real `show` via
-  Command Runner / fabric analysis).
-- **L4 / Principal Engineer** Jarvis — runs the bridge, correlates, posts the
-  verdict + next checks + blind spots. Named "L4 / Principal Engineer", NOT
-  "Manager" (Vikas's instruction 2026-08-15).
+| # | Stage | Status | Artifact |
+|---|-------|--------|----------|
+| 0 | Intake + scoreboard | DONE 2026-08-17 | this file |
+| 1 | Unknowns (blindspot pass, 1 Q/message) | DONE 2026-08-17 (5 Qs answered; 3 items resolved by rec) | answers ledger below |
+| 2 | Requirements (PRD, measurable bars) | **GATE 1 APPROVED** (Vikas 2026-08-17: all 8 abilities LIKED, no changes) | https://claude.ai/code/artifact/6cac1f65-0135-44ed-8aad-d1d6d1faa4e6 |
+| 3 | Mocks (2–4 clickable directions) | **GATE 2 APPROVED — DIRECTION C (cockpit)** (Vikas 2026-08-17). A's command-bar can layer on later. | A: https://claude.ai/code/artifact/aa326803-34e8-4a26-accc-3c7e65b0534e · B: https://claude.ai/code/artifact/da36930a-e48f-42c6-b45d-e80ef2c0dc36 · C: https://claude.ai/code/artifact/ca5748c2-0ce0-499f-8e3e-292f5ba2e702 |
+| 4 | System design + plan | **GATE 3 OPEN**, awaiting green light. NOT a separate project: the copilot is a new desk view INSIDE noc-triage (same repo, same app, same port); classic console untouched. | docs/copilot-design.md · https://claude.ai/code/artifact/01462d72-6177-4506-99dc-1a09c625880d |
+| 5 | Build (wave process, worklaw) | not started | |
+| 6 | Review (plan-vs-built audit) | not started | |
+| 7 | QA (stranger test + log sweep) | not started | |
+| 8 | Ship | not started | → HARD GATE 4 |
+| 9 | Learn | not started | |
 
-### Rules carried from mission-control (non-negotiable)
-- No fabricated data or capability. Every number traces to a live read seconds
-  earlier, or the agent says "not connected" / "I can't answer that, ran nothing".
-- Read-only enforced in code (guardrails). Refusals spoken, naming what was refused.
-- Not-connected engineers stay OFF the bridge, named as blind spots.
+## Open questions (asked one at a time)
 
-## Stage table
-| # | Stage | Status |
-|---|-------|--------|
-| 0 | Intake | done — forked, repo created |
-| 1 | Unknowns | done — Gate 1 approved (tiers, flow, staffing) |
-| 2 | Requirements | done — Gate 1 page approved |
-| 3 | Mocks | done — Gate 2, Vikas picked C (Evidence Split Console) |
-| 4 | Design | folded into build brief (Vikas said proceed) |
-| 5 | Build | IN PROGRESS — branch feat/evidence-split-console |
-| 6 | Review | pending — different agent |
-| 7 | QA | pending |
-| 8 | Ship | pending — visibility + auth decisions |
+| # | Question | Recommendation | Answer |
+|---|----------|----------------|--------|
+| 1 | Do we relax the read-only law so Jarvis can make config CHANGES (pre/post/compare/rollback), and under what gate? | Yes, sandbox-only + per-change approval | **FULL CHANGE ACCESS** (Vikas, 2026-08-17, overrode rec) — changes allowed wherever Jarvis has a path, gated by the existing auto/ask/deny permission mode; mandatory pre-capture, post-capture, diff, and rollback artifact on EVERY change |
+| 2 | Who uses it — access model? | Shared access + operator name, no SSO in v1 | **OPEN + NAME TAG** (Vikas, 2026-08-17) — no logins in v1; every action/question/change stamped with the operator's name; SSO/RBAC later |
+| 3 | "Getting on BL / investigating with teams" — what does that mean physically in v1? | In-app bridge room (existing bridges + roles), no external chat/voice yet | **IN-APP ROOM + REAL CHAT INTEGRATION** (Vikas, 2026-08-17) — multi-person named bridge in-app, plus Jarvis posts/reads a real chat channel; voice parked |
+| 4 | Which chat platform for the bridge integration? | Telegram (bot already exists on this machine) | **MICROSOFT TEAMS** (Vikas, 2026-08-17, overrode rec) — needs a Teams webhook/bot registration from his M365 tenant; build the integration + honest "not connected" state until he supplies it |
+| 5 | Ticket handling scope — is ServiceNow (Wave 6) the ticket surface? | Yes; copilot adds conversational create/update/close on top of Wave 6, no internal queue system | **BUILT-IN TICKET QUEUE + ServiceNow sync** (Vikas, 2026-08-17, overrode rec). Design law to avoid two truths: the INTERNAL queue is the single source of truth; ServiceNow is a mirror that syncs when connected. |
 
-## Answered forks
-- Triage start: MANUAL (Vikas opens with severity + description).
-- Bridge flow: TWO ROUNDS (front findings → L4 correlation verdict).
-- Staffing: SEVERITY DECIDES (P1 all-hands; P2/P3 relevant fronts).
-- Live data from day one (Option A — reuse the hardened engine).
-- Known nit inherited: "triage my landlord problem" dictionary overlap — fix here.
+### Stage-1 items resolved by recommendation (approve/veto at Gate 1, not re-asked)
+- Capability honesty: Jarvis keeps a live capability map; anything outside it gets an explicit
+  "I can't do that yet — here's what I can do" (class rule, covers all unknown asks).
+- Validation/deviation gold standard: the baseline snapshots in config-store (operator can re-baseline).
+- Success bars: proposed as numbers in the PRD (Gate 1 page).
 
-## BUILD COMPLETE — merged to master 2026-08-15 (3547c9b)
-Two halves built in parallel (isolated worktrees, disjoint files) to docs/triage-contract.md:
-- Backend: sources/triage.js (two-round bridge), server.js endpoints, live-agents nit fix.
-- UI: public/index.html Evidence Split Console (split view, evidence board, escalation strip,
-  maximize/collapse, light+dark toggle).
-Integration review ran the COMBINED app live end-to-end → MERGE. Fixed 3 seam defects
-(raw agent ids; cross-triage event bleed with a triageId guard; icon escaping). Proven live:
-P1/P2/P3 staffing correct, evidence board matches backend states, ACI genuinely down →
-fabric "suspect" with real error (honesty path), themes legible, XSS escaped, zero console/log errors.
-Stage 5 Build + Stage 6 Review = done.
+## Known blindspots to cover in stage 1 (queue, not yet asked)
+- Who are the users? (just Vikas today vs real eng/SME logins → RBAC/SSO scope)
+- "Getting on BL / investigating with teams" — what does that physically mean in v1 (bridge page in-app vs real chat/voice integration)?
+- Tickets: is Wave 6 ServiceNow the ticket surface, or more (assignment, queues)?
+- Capability honesty: what Jarvis says when asked something it can't do yet
+- Config validation/deviation: against what gold standard? (baseline snapshots exist in config-store)
+- Success bar as a number (e.g. % of a sample question list answered/actioned correctly)
 
-### Known follow-up (non-blocking, Stage 7 QA / next)
-runBridge's finally idles ALL roster agents on any bridge close — two concurrent triages,
-the first to finish flips shared agent statuses to idle while the second still runs. Cosmetic
-(agent-status sidebar only); per-triage boards stay correct via the WS triageId guard. Fix later.
-
-## DESIGN MISS — full reskin (Vikas, 2026-08-15)
-Vikas opened the built app and saw it IS mission-control with a triage mode + a
-renamed banner — NOT the Evidence Split Console identity he picked at Gate 2.
-Root cause: build brief said "build the console INTO the existing index.html", so
-the mock C look only appears transiently during a triage; the shell stayed
-mission-control. DECISION: Option A — FULL RESKIN. Rebuild the whole front end
-(public/index.html) in the mock C design language so the entire app IS the
-Evidence Split Console. Backend/WS contract/triage engine unchanged. Adversarial
-QA (honesty/XSS/concurrency) already passed and stays valid; UI QA obsoleted by reskin.
+## Deviations
+(none yet)
