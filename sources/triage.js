@@ -885,7 +885,9 @@ async function runL4(triage, sym) {
   triage.closedAt = now();
   emit('triage_closed', triage.id, { incidentId: triage.incidentId || null, mttr: mttrOf(triage) });
   progress(triage, 'L4', 'done');
-  log(`[Triage ${triage.id}] closed — ${triage.severity} "${triage.title}" — MTTR ${mttrOf(triage).mttrHuman}`);
+  // Human-facing activity line: label the elapsed value "Time to verdict" — it is
+  // opened→verdict (time to diagnose), not full MTTR. The mttr payload/field stays.
+  log(`[Triage ${triage.id}] closed — ${triage.severity} "${triage.title}" — Time to verdict ${mttrOf(triage).mttrHuman}`);
 }
 
 // Is this front's evidence ACTIVE inside the incident window, or only pre-existing?

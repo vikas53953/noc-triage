@@ -369,7 +369,11 @@ function renderServiceNowText(rec, sn) {
   L.push(`- **State:** ${sn.state}`);
   L.push(`- **Opened:** ${sn.openedAt || '(unknown)'}`);
   L.push(`- **Closed:** ${sn.closedAt || '(still open)'}`);
-  L.push(`- **MTTR:** ${sn.mttr ? sn.mttr.mttrHuman : 'unknown'}${sn.mttr && sn.mttr.verdictAt ? ` (verdict at ${sn.mttr.verdictAt})` : ''}`);
+  // Human label is "Time to verdict (open→verdict)" — what we actually measure is
+  // opened→verdict (time to diagnose), NOT full MTTR (which would include fix+
+  // verify). Relabelled to avoid an argument on a live bridge call. The JSON
+  // field name (sn.mttr / mttrHuman) is kept stable so the UI/record don't break.
+  L.push(`- **Time to verdict (open→verdict):** ${sn.mttr ? sn.mttr.mttrHuman : 'unknown'}${sn.mttr && sn.mttr.verdictAt ? ` (verdict at ${sn.mttr.verdictAt})` : ''}`);
   if (sn.reTriageOf) L.push(`- **Re-triage of:** ${sn.reTriageOf}`);
   L.push('');
   L.push('## Affected CIs');
@@ -531,7 +535,9 @@ function renderEngineerDoc(rec) {
   L.push(`- **Opened:** ${rec.openedAt}`);
   L.push(`- **Closed:** ${rec.closedAt || '(still open)'}`);
   L.push(`- **Duration:** ${rec.durationHuman}`);
-  if (rec.mttr) L.push(`- **MTTR (opened→verdict):** ${rec.mttr.mttrHuman}`);
+  // "Time to verdict" — opened→verdict is time-to-diagnose, not full MTTR. Human
+  // label relabelled; the rec.mttr JSON field name stays stable for the UI/record.
+  if (rec.mttr) L.push(`- **Time to verdict (open→verdict):** ${rec.mttr.mttrHuman}`);
   L.push(`- **Staffed:** ${(rec.staffed || []).map((s) => `${s.agent} (${s.tier})`).join(', ') || '(none)'}`);
   L.push('');
 
