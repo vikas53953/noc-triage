@@ -52,6 +52,16 @@ const FILLER = new Set([
   'hey', 'hi', 'ok', 'okay', 'just', 'also', 'now', 'then', 'go', 'and',
   'lets', "let's", 'let', 'us', 'me', 'i', 'want', 'need', 'to', 'do',
   'the', 'a', 'an', 'my', 'your', 'our', 'this', 'that', 'it', 'quickly',
+  // SEQUENCING ADVERBS. These say WHEN the next command runs, never WHAT it is,
+  // so they must never be mistaken for the command word. Left in place, the
+  // adverb stood at the head of the clause and shielded the real verb behind it:
+  // "…and afterwards reload it" read as the harmless word "afterwards", the read
+  // ran, and the operator was never told the reload had been dropped. Listed
+  // here AND as clause separators below, so the verb is exposed whether the
+  // adverb joins two clauses or merely leads one.
+  'afterwards', 'afterward', 'subsequently', 'later', 'thereafter', 'finally',
+  'next', 'eventually', 'immediately', 'straightaway', 'meanwhile', 'lastly',
+  'firstly', 'secondly', 'first', 'second', 'again', 'quickly', 'promptly',
 ]);
 
 function checkCommand(command) {
@@ -86,9 +96,15 @@ function checkCommand(command) {
 // a request like "show version after you reload the router" reads as a plain
 // show — the read runs and the reload is dropped without a word, which is the
 // silent substitution this whole file exists to prevent.
+//
+// The list therefore has to cover every way English says "and then do this
+// other thing" — not just the conjunctions but the SEQUENCING ADVERBS people
+// naturally reach for ("afterwards", "subsequently", "later", "finally",
+// "next"). Each one is a joint between two commands, and any joint this misses
+// is a second command nobody is judging.
 function clausesOf(text) {
   return String(text || '')
-    .split(/[;&|,\n\r]+|\band then\b|\bafter that\b|\bthen\b|\band\b|\bbefore\b|\bafter\b|\bonce\b|\bwhile\b|\bunless\b|\bbut\b|\bso\b|\balso\b/i)
+    .split(/[;&|,\n\r]+|\band then\b|\bafter that\b|\bthen\b|\band\b|\bbefore\b|\bafter\b|\bonce\b|\bwhile\b|\bunless\b|\bbut\b|\bso\b|\balso\b|\bafterwards?\b|\bsubsequently\b|\blater\b|\bthereafter\b|\bfinally\b|\bnext\b|\beventually\b|\bmeanwhile\b|\blastly\b|\bfollowed by\b/i)
     .map((c) => c.trim())
     .filter(Boolean);
 }
