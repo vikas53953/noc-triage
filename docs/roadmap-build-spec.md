@@ -40,3 +40,4 @@ XSS escaping, zero console errors.
 
 ## STATUS
 - 2026-08-17: Wave 1 (bridge roles + SLA) MERGED (PR#31 be, #32 fe, + key reconcile). Verified: roles round-trip, ack/MTTA, per-severity SLA, breach, lifecycle roll-up. Wave 2 (alert ingestion) starting.
+- 2026-08-17: Wave 2 (alert ingestion) MERGED (PR#33/#34). Verified: sample vManage alarm → auto-open INC P1, source:alert, badge, XSS-safe, 422 on garbage. Wave 3 (multi-incident + on-call) starting.
