@@ -244,11 +244,12 @@ function broadcast(type, data) {
   // secret-scrubs before anything touches disk.
   if (type === 'chat_message') chatStore.appendChat(data);
   else if (type === 'activity_new' && data && data.ts !== undefined) {
-    // activity_new is broadcast in two shapes: the canonical {source,text,ts}
-    // from appendToActivityLog, and a {timestamp,agent,message} RE-broadcast of
-    // the very same line by the ACTIVITY_LOG.md file watcher. Persist only the
-    // canonical one (it carries `ts`) so the restored feed has one uniform shape
-    // and no duplicates — the watcher copy would double every entry on reload.
+    // activity_new now has ONE canonical emitter: appendToActivityLog, which
+    // sends the {source,text,ts} shape. The ACTIVITY_LOG.md file watcher no
+    // longer re-broadcasts (see M3 fix in setupFileWatcher), so live and
+    // persisted feeds each carry every event exactly once. This `ts` guard is
+    // kept as a defensive belt: only the canonical shape (which carries `ts`)
+    // is ever persisted, so no stray non-canonical copy could double the feed.
     chatStore.appendActivity(data);
   }
   const message = JSON.stringify({ type, data, timestamp: new Date().toISOString() });
@@ -2303,30 +2304,18 @@ function setupFileWatcher() {
     if (filename === 'TASKS.md') {
       broadcast('tasks_updated', getTasks());
     } else if (filename === 'ACTIVITY_LOG.md') {
-      // Stream only new lines
+      // M3 (round-2 QA): DO NOT re-broadcast activity_new here. Every real
+      // activity line is already streamed EXACTLY ONCE by appendToActivityLog
+      // (the single canonical emission seam), which broadcasts the {source,text,
+      // ts} shape the instant it writes. This watcher used to ALSO re-broadcast
+      // each appended line as {timestamp,agent,message}, doubling (and on
+      // Windows, where chokidar can fire 'change' more than once per write,
+      // tripling) every event in the Live Activity feed — the "artifacts written
+      // ×3 / closed ×2 / re-triage opened ×2" bug. We keep only the size cursor
+      // advanced so nothing here ever replays the log; emission stays single.
       try {
         const stats = fs.statSync(filePath);
         if (stats.size > lastActivitySize) {
-          const fd = fs.openSync(filePath, 'r');
-          const buffer = Buffer.alloc(stats.size - lastActivitySize);
-          fs.readSync(fd, buffer, 0, buffer.length, lastActivitySize);
-          fs.closeSync(fd);
-
-          const newContent = buffer.toString('utf-8');
-          const newLines = newContent.split('\n').filter(line => line.trim());
-
-          newLines.forEach(line => {
-            const match = line.match(/\[([^\]]+)\]\s*\[([^\]]+)\]\s*(.*)/);
-            if (match) {
-              broadcast('activity_new', {
-                id: `activity-${Date.now()}`,
-                timestamp: match[1],
-                agent: match[2],
-                message: match[3]
-              });
-            }
-          });
-
           lastActivitySize = stats.size;
         }
       } catch (e) {
