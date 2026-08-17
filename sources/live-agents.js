@@ -461,6 +461,59 @@ function readCommandFrom(text) {
   return { command: frag };
 }
 
+// ── The class: "run a command on a device" ──────────────────────────────────
+// A device-CLI request is one the operator wants EXECUTED on a box through the
+// Command Runner — "show version on sw1", "show running-config", "ping 10.0.0.1",
+// "traceroute 8.8.8.8" — as opposed to a plain domain question an agent answers
+// from its own source ("what's the device health", "show me the alarms", an
+// inventory ask). Whichever engineer it is aimed at, this class must reach the
+// one shared Command Runner path (Config-Keeper) instead of dead-ending on an
+// agent that has no CLI session.
+//
+// Deliberately NARROW so ordinary domain asks still route to their owner:
+//   • ping/traceroute only count with a real target (a bare "ping" is an agent
+//     responsiveness check, not a device ping);
+//   • show/dir/more count when aimed at a device ("… on sw1 / on 10.0.0.1"), or
+//   • when they are a canonical IOS config/version read (running-config, version,
+//     show ip …) even without an explicit target.
+// "inventory" and "health" are intentionally NOT canonical triggers — those are
+// domain questions NetOps/Monitor-Eye answer from their own live source.
+const DEVICE_TARGET = /\bon\s+(?:the\s+)?(?:sw\d+|switch(?:es)?|routers?|devices?|nodes?|\d{1,3}(?:\.\d{1,3}){3}|[a-z][\w-]*\d[\w.-]*)\b/i;
+const CANON_SHOW = /\bshow\s+(?:run(?:ning)?[\s-]?config|start(?:up)?[\s-]?config|version|ip\s+\w|interfaces?\b|mac[\s-]?address|cdp\b|lldp\b|vlan\b|arp\b|processes\b|logging\b)/i;
+const PING_TRACE = /\b(?:ping|traceroute|trace)\b\s+(?:\d{1,3}(?:\.\d{1,3}){3}|sw\d+|[a-z][\w.-]*\.[\w.-]+|[a-z][\w-]*\d[\w-]*)/i;
+
+function isDeviceCliRequest(command) {
+  const raw = String(command || '');
+  const t = raw.toLowerCase();
+  // Backup / compliance / baseline asks are NOT a live run — Config-Keeper says
+  // out loud it holds no such store (readCommandFrom handles that honestly).
+  if (NO_STORE.test(raw)) return false;
+  if (PING_TRACE.test(t)) return true;
+  if (/\b(show|dir|more)\b/i.test(t) && DEVICE_TARGET.test(t)) return true;
+  if (CANON_SHOW.test(t)) return true;
+  return false;
+}
+
+// Route a device-CLI request to the shared Command Runner path. Config-Keeper
+// owns that path; every other engineer hands it off OUT LOUD rather than
+// dead-ending with "I have no CLI session". A state-changing command is still
+// refused inside configKeeper (its guardrail runs first), so this never opens a
+// write path. This is the single choke point that makes the class-level promise
+// true: aim a "run <cli> on <device>" at anyone, it reaches the runner.
+function runDeviceCli(originAgentId, command) {
+  if (originAgentId && originAgentId !== 'config-keeper') {
+    const ckName = (ctx.agents['config-keeper'] && ctx.agents['config-keeper'].name) || 'Config-Keeper';
+    say(originAgentId,
+      `🔀 That is a device CLI command. I read from my own source and hold no Command Runner session of my own, ` +
+      `so I am handing this to @${ckName}, who runs read-only commands on the box through Catalyst Center's Command Runner.`);
+    ctx.updateAgentStatus(originAgentId, 'idle', `Handed a CLI command to ${ckName}`);
+    ctx.appendToActivityLog(
+      `[${new Date().toISOString()}] [${(ctx.agents[originAgentId] && ctx.agents[originAgentId].name) || originAgentId}] ` +
+      `Handed a device-CLI request to Config-Keeper — "${String(command).slice(0, 60)}"\n`);
+  }
+  return configKeeper('config-keeper', command);
+}
+
 // Command Runner returns a nested envelope with SUCCESS / FAILURE /
 // BLOCKLISTED buckets. Read all three so a device error is reported as a
 // device error, not dumped as raw JSON.
@@ -718,6 +771,33 @@ const DEBATE_BUILDERS = {
   'config-keeper': {
     source: () => `${catalyst.label} (${catalyst.host})`,
     async build(topic) {
+      // When Jarvis delegates an ACTUAL device CLI command ("run show version on
+      // sw1", "show running-config", "ping <ip>"), execute it on the box through
+      // the Command Runner and return the REAL output — the same runner a direct
+      // Config-Keeper read uses. build() already runs inside Jarvis's permission
+      // gate + session context (gatherForJarvis), so it does not re-gate here.
+      // A non-read command is refused; nothing is ever sent to change a device.
+      if (isDeviceCliRequest(topic)) {
+        const read = readCommandFrom(topic);
+        if (read.command) {
+          const verdict = checkCommand(read.command);
+          if (!verdict.allowed) {
+            return `That is not a read-only command, so I did not run it: ${verdict.reason}. ` +
+              `Nothing was sent to any device.`;
+          }
+          const devices = await catalyst.getDevices();
+          const target = devices.find((d) => d.reachability === 'Reachable');
+          if (!target) throw new Error('no reachable device to read from');
+          const file = await catalyst.runShowCommand([target.id], verdict.command);
+          const out = extractCommandOutput(file, verdict.command);
+          const body = out ? String(out.text).slice(0, 2000) : JSON.stringify(file).slice(0, 1200);
+          return `Ran "${verdict.command}" live on ${target.hostname} (${target.ip}, ${target.platform}) ` +
+            `via ${catalyst.label} Command Runner:\n${body}\n` +
+            (out && out.ok === false
+              ? `(The device rejected the command — real output above, nothing invented, no configuration sent.)`
+              : `(Real output, read-only; no configuration was sent.)`);
+        }
+      }
       const devices = await catalyst.getDevices();
       const versions = devices.map((d) => `${d.hostname}: ${d.software || 'version not reported'} (${d.reachability})`);
       return `Live software/reachability read from ${catalyst.label} (${catalyst.host}):\n` +
@@ -797,8 +877,28 @@ const DEBATE_BUILDERS = {
 // Returns { agentId, name, connected, stance, text }:
 //   stance ∈ 'evidence' | 'not-connected' | 'denied' | 'unreachable'
 async function gatherForJarvis(agentId, question) {
+  // CLASS FIX (CLI routing): a "run <show/ping/traceroute/dir/more> on <device>"
+  // sub-question is a DEVICE CLI job. Only Config-Keeper holds the Command Runner
+  // path, so whoever the planner picked, the execution seam re-points it there
+  // instead of letting an inventory-only engineer answer "I have no CLI session".
+  // Enforced HERE (not only in the planner prompt) because this is the single
+  // choke point every delegated read passes through — a model that picks the
+  // wrong owner can no longer dead-end the operator.
+  let handoffFrom = null;
+  if (agentId !== 'config-keeper' && DEBATE_BUILDERS['config-keeper'] && isDeviceCliRequest(question)) {
+    handoffFrom = (ctx && ctx.agents && ctx.agents[agentId] && ctx.agents[agentId].name) || agentId;
+    ctx.appendToActivityLog(
+      `[${new Date().toISOString()}] [${handoffFrom}] Device-CLI sub-question handed to Config-Keeper (Command Runner) — ` +
+      `"${String(question || '').slice(0, 60)}"\n`);
+    ctx.updateAgentStatus(agentId, 'idle', 'Handed a CLI command to Config-Keeper');
+    agentId = 'config-keeper';
+  }
+
   const agent = (ctx && ctx.agents && ctx.agents[agentId]) || { name: agentId };
   const name = agent.name || agentId;
+  const handoffNote = handoffFrom
+    ? `(${handoffFrom} has no device CLI session, so this was handed to ${name}, who owns the Catalyst Center Command Runner path.)\n`
+    : '';
 
   // CLASS FIX (transparency contract, agent_status): the MOMENT Jarvis delegates
   // to an agent it is engaged — flip it active here and idle when the turn ends,
@@ -853,7 +953,7 @@ async function gatherForJarvis(agentId, question) {
           text: 'Read denied by the operator — ran nothing, and I will not invent a result.',
         };
       }
-      return { agentId, name, connected: true, stance: 'evidence', text: String(g.result || '').trim() };
+      return { agentId, name, connected: true, stance: 'evidence', text: handoffNote + String(g.result || '').trim() };
     } catch (err) {
       const src = typeof builder.source === 'function' ? builder.source() : 'the source';
       return {
@@ -971,6 +1071,18 @@ const CAPABILITIES = {
       'read the SD-WAN overlay from vManage — devices, controllers, vEdges and alarm counts',
     ],
   },
+  // Config-Keeper owns the one path that runs a real command ON a device — the
+  // Catalyst Center Command Runner. Listed here so the Jarvis planner's roster
+  // knows to delegate any "run <cli> on <device>" to it. It gates itself in
+  // handle() (readCommandFrom), so this entry only feeds the roster `sees` + help.
+  'config-keeper': {
+    subjects: /\b(show|running[\s-]?config|start(up)?[\s-]?config|version|command|cli|ping|traceroute|interface|device|switch(es)?|sw\d+|config|configuration)\b/i,
+    verbs: ['run', 'execute'],
+    can: [
+      'run a read-only command on a live switch through Catalyst Center Command Runner — "show version", "show running-config", "show ip interface brief", ping, traceroute — and return the real device output',
+      'refuse any config-change command in code (read-only guardrail); it changes nothing on a device',
+    ],
+  },
   'jarvis': {
     subjects: /\b(network|overview|picture|estate|all sources|every source|devices?|inventory|fabric|switch(es)?|router|wan|sd-?wan|aci|catalyst|reachab|health)\b/i,
     verbs: ['poll', 'overview', 'summarise', 'summarize', 'brief'],
@@ -1038,6 +1150,13 @@ function canAnswer(agentId, command) {
 
 // Entry point used by the dispatcher in server.js.
 function handle(agentId, command) {
+  // CLASS FIX (CLI routing): "run <cli> on <device>" is a device-CLI job no
+  // matter who it was aimed at. It goes to the one Command Runner path FIRST —
+  // before the not-connected check, before the capability check — so an
+  // inventory-only (or unwired) engineer can never dead-end it. configKeeper
+  // still runs the destructive-intent check and the read-only guardrail inside,
+  // so this opens no write path.
+  if (isDeviceCliRequest(command)) return runDeviceCli(agentId, command);
   if (NO_BACKEND[agentId]) return notConnected(agentId);
   const fn = HANDLERS[agentId];
   if (!fn) return notConnected(agentId);
@@ -1052,5 +1171,6 @@ function handle(agentId, command) {
 module.exports = {
   init, handle, refuseWrite, notConnected, hasLiveBackend, NO_BACKEND, readCommandFrom,
   canAnswer, cannotAnswer, CAPABILITIES,
+  isDeviceCliRequest, runDeviceCli,
   debateContribution, gatherForJarvis,
 };

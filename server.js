@@ -731,6 +731,17 @@ function detectAgentIntent(agentId, command) {
        /\b(interface|loopback|lo\d+|gigabit|gig\b|vlan|trunk|route|ntp|snmp|bgp[\s-]?neighbor|ospf|eigrp|description|ip[\s-]?add)\b/.test(t))) {
     return 'configure_device';
   }
+  // Device CLI — "run show version on sw1", "show running-config", "ping 10.0.0.1".
+  // CLASS FIX (CLI routing): this is a command the operator wants EXECUTED on a
+  // box, not a domain question an agent answers from its own source. It is
+  // detected here, AFTER configure_device (so a config change is still refused
+  // first) and BEFORE the domain intents, so it can never be classified as a
+  // NetOps inventory read and dead-end on "no CLI/SSH session to the box".
+  // The single owner of that path is Config-Keeper (Catalyst Center Command
+  // Runner); live.runDeviceCli hands off out loud when another agent was asked.
+  if (live.isDeviceCliRequest(command)) {
+    return 'device_cli';
+  }
   // Config / compliance
   if (/\b(config|backup|compliance|drift|change|diff|snapshot|baseline|audit|inventory)\b/.test(t)) {
     return 'config_check';
@@ -795,11 +806,23 @@ function runAgentAction(agentId, command) {
     return live.refuseWrite(agentId, command, writeIntent);
   }
 
+  // Class-level CLI routing (works with the reasoning LLM offline): a "run a
+  // command on a device" request — "show version on sw1", "show running-config",
+  // "ping 10.0.0.1", "traceroute …" — reaches the shared Command Runner path,
+  // whichever engineer it was aimed at. Config-Keeper owns that path; any other
+  // agent hands off to it rather than dead-ending with "no CLI session". State
+  // changes are already refused above, so only read-only verbs get here.
+  if (live.isDeviceCliRequest(command)) {
+    return live.runDeviceCli(agentId, command);
+  }
+
   const intent = detectAgentIntent(agentId, command);
 
   switch (intent) {
     // Read-only is enforced before anything reaches a device.
     case 'configure_device': return live.refuseWrite(agentId, command);
+    // Any engineer can be handed a device CLI command; only one path executes it.
+    case 'device_cli':       return live.runDeviceCli(agentId, command);
     case 'ping':             return simulatePing(agentId);
     case 'help':             return showAgentHelp(agentId);
     default:                 return live.handle(agentId, command);
