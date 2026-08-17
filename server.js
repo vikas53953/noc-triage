@@ -1943,6 +1943,33 @@ app.post('/api/triage/:id/message', (req, res) => {
   res.json({ ok: true, message: result.message });
 });
 
+// Bridge roles (wave 1). The operator sets any of commander / scribe / joiners /
+// owner on an open bridge — plain strings, no auth yet. Broadcasts triage_roles.
+// Write-rate-limited (POST via the shared /api/ budget). Path-safe: the id is a
+// pure in-memory lookup (resolveTriage) and is shape-validated (trg-/INC- only),
+// so it never reaches the filesystem. Accepts either the trg- id or the INC- id.
+app.post('/api/triage/:id/roles', (req, res) => {
+  const { commander, scribe, joiners, owner } = req.body || {};
+  const result = triage.setRoles(req.params.id, { commander, scribe, joiners, owner });
+  if (result.error) {
+    const code = result.error === 'not_found' ? 404 : 422;
+    return res.status(code).json({ error: result.reason || 'Could not set roles.' });
+  }
+  res.json(result);
+});
+
+// Acknowledge / MTTA (wave 1). Stamps ackAt once and computes mttaMs
+// (ackAt − openedAt); broadcasts triage_ack. Idempotent — a second call returns
+// the same stamp. Write-rate-limited; path-safe (in-memory, shape-validated id).
+app.post('/api/triage/:id/ack', (req, res) => {
+  const result = triage.acknowledge(req.params.id);
+  if (result.error) {
+    const code = result.error === 'not_found' ? 404 : 422;
+    return res.status(code).json({ error: result.reason || 'Could not acknowledge.' });
+  }
+  res.json(result);
+});
+
 // Re-triage & diff (issue 11 — ops lifecycle). Re-runs the SAME triage (same
 // severity, symptom, scope), links it to the SAME incident id, and returns the
 // REAL delta vs the previous verdict: fronts improved/worsened, faults/alarms

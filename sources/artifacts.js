@@ -112,6 +112,55 @@ const FRONT_LABEL = {
 };
 function frontLabel(f) { return FRONT_LABEL[f] || f; }
 
+// ── Lifecycle roll-up + SLA lines (wave 1) — shared by every doc ──────────────
+// Renders the post-incident roll-up: the four real timestamps, the three human
+// elapsed strings (MTTA = acknowledge time; Time to verdict = open→verdict,
+// wording unchanged; Total = open→close), plus the per-severity SLA target and
+// whether it was breached. Every value traces to a real timestamp; a stage that
+// never happened is labelled honestly, never zeroed. Returns markdown lines.
+function slaHuman(sla) {
+  if (!sla || sla.targetMs == null) return 'not set';
+  const mins = Math.round(sla.targetMs / 60000);
+  return `${mins} minute${mins === 1 ? '' : 's'} (time to verdict)`;
+}
+function lifecycleLines(rec) {
+  const L = [];
+  const lc = rec.lifecycle || null;
+  L.push('## Incident lifecycle (acknowledge → verdict → close)');
+  if (lc) {
+    L.push(`- **Opened:** ${lc.openedAt || '(unknown)'}`);
+    L.push(`- **Acknowledged (MTTA — time to acknowledge):** ${lc.mttaHuman}${lc.ackAt ? ` (at ${lc.ackAt})` : ''}`);
+    L.push(`- **Time to verdict (open→verdict):** ${lc.timeToVerdictHuman}${lc.verdictAt ? ` (at ${lc.verdictAt})` : ''}`);
+    L.push(`- **Total (open→close):** ${lc.totalHuman}${lc.closedAt ? ` (closed ${lc.closedAt})` : ''}`);
+  } else {
+    // Older record with no roll-up — fall back to the timestamps we do have.
+    L.push(`- **Opened:** ${rec.openedAt || '(unknown)'}`);
+    L.push(`- **Acknowledged (MTTA):** ${rec.ackAt ? `at ${rec.ackAt}` : 'not acknowledged'}`);
+    L.push(`- **Time to verdict (open→verdict):** ${rec.mttr ? rec.mttr.mttrHuman : 'unknown'}`);
+    L.push(`- **Total (open→close):** ${rec.durationHuman || 'unknown'}`);
+  }
+  if (rec.sla) {
+    const breach = rec.sla.breached === true ? '⚠️ BREACHED'
+      : rec.sla.breached === false ? 'within SLA'
+      : 'not determined';
+    L.push(`- **SLA target:** ${slaHuman(rec.sla)} — **${breach}**${rec.sla.breachAt ? ` (deadline ${rec.sla.breachAt})` : ''}`);
+  }
+  return L;
+}
+// Bridge roles line for a doc — omitted entirely when the operator set none.
+function rolesLines(rec) {
+  const r = rec.roles || {};
+  const set = [];
+  if (r.commander) set.push(`Incident commander: ${r.commander}`);
+  if (r.scribe) set.push(`Scribe: ${r.scribe}`);
+  if (r.owner) set.push(`Current owner: ${r.owner}`);
+  if (Array.isArray(r.joiners) && r.joiners.length) set.push(`Joined the bridge: ${r.joiners.join(', ')}`);
+  if (!set.length) return [];
+  const L = ['## Bridge roles'];
+  set.forEach((s) => L.push(`- ${s}`));
+  return L;
+}
+
 // ── Build the complete record from the REAL triage + session data ─────────────
 function buildRecord(triage) {
   const t = triage || {};
@@ -198,6 +247,12 @@ function buildRecord(triage) {
     closedAt: t.closedAt || null,
     verdictAt: t.verdictAt || null,
     mttr,                                     // issue 11 — final MTTR (opened→verdict)
+    // ── Wave 1: bridge roles, acknowledge/MTTA, SLA clock + lifecycle roll-up ──
+    roles: t.roles || { commander: '', scribe: '', joiners: [], owner: '' },
+    ackAt: t.ackAt || null,                   // operator acknowledge time (ISO)
+    mttaMs: t.mttaMs != null ? t.mttaMs : null, // mean time to acknowledge
+    sla: t.sla || null,                       // { targetMs, breachAt, breached }
+    lifecycle: t.lifecycle || null,           // open→ack→verdict→close roll-up
     affectedCIs: t.affectedCIs || [],         // real devices/tenants (ServiceNow)
     reTriageDelta: t.reTriageDelta || null,   // real delta vs the prior run, if any
     durationHuman: durationHuman(t.openedAt, t.closedAt),
@@ -376,6 +431,11 @@ function renderServiceNowText(rec, sn) {
   L.push(`- **Time to verdict (open→verdict):** ${sn.mttr ? sn.mttr.mttrHuman : 'unknown'}${sn.mttr && sn.mttr.verdictAt ? ` (verdict at ${sn.mttr.verdictAt})` : ''}`);
   if (sn.reTriageOf) L.push(`- **Re-triage of:** ${sn.reTriageOf}`);
   L.push('');
+  // Bridge roles + lifecycle roll-up (wave 1) — real timestamps + SLA breach.
+  const snRoles = rolesLines(rec);
+  if (snRoles.length) { snRoles.forEach((x) => L.push(x)); L.push(''); }
+  lifecycleLines(rec).forEach((x) => L.push(x));
+  L.push('');
   L.push('## Affected CIs');
   if (sn.affectedCIs.length) sn.affectedCIs.forEach((c) => L.push(`- ${c.ci} (${c.class}, ${c.front})`));
   else L.push('- None nameable from the connected estate this run (see findings).');
@@ -488,6 +548,12 @@ function renderSltDoc(rec) {
   L.push(`The bridge was open for **${rec.durationHuman}** (opened ${rec.openedAt}${rec.closedAt ? `, closed ${rec.closedAt}` : ', still open'}).`);
   L.push('');
 
+  // Bridge roles + lifecycle roll-up (wave 1).
+  const sltRoles = rolesLines(rec);
+  if (sltRoles.length) { sltRoles.forEach((x) => L.push(x)); L.push(''); }
+  lifecycleLines(rec).forEach((x) => L.push(x));
+  L.push('');
+
   // What was done
   L.push('## What the team did');
   L.push(`A tiered squad worked the incident and made **${(rec.commandLog || []).length} live check(s)** against the network — no guesses, only real readings.`);
@@ -539,6 +605,12 @@ function renderEngineerDoc(rec) {
   // label relabelled; the rec.mttr JSON field name stays stable for the UI/record.
   if (rec.mttr) L.push(`- **Time to verdict (open→verdict):** ${rec.mttr.mttrHuman}`);
   L.push(`- **Staffed:** ${(rec.staffed || []).map((s) => `${s.agent} (${s.tier})`).join(', ') || '(none)'}`);
+  L.push('');
+
+  // Bridge roles + lifecycle roll-up (wave 1).
+  const engRoles = rolesLines(rec);
+  if (engRoles.length) { engRoles.forEach((x) => L.push(x)); L.push(''); }
+  lifecycleLines(rec).forEach((x) => L.push(x));
   L.push('');
 
   // Findings per front
