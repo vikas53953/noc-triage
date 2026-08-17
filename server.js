@@ -22,6 +22,7 @@ const chatStore = require('./sources/chat-store');
 const approvals = require('./sources/approvals');
 const artifacts = require('./sources/artifacts');
 const notifier = require('./sources/notifier');
+const capabilities = require('./sources/capabilities');
 const { checkIntent } = require('./sources/guardrails');
 
 // One module owns where the workspace is and how any caller-supplied path is
@@ -201,6 +202,142 @@ app.use('/api/', readLimit);
 app.use('/api/', (req, res, next) => (req.method === 'GET' ? next() : writeLimit(req, res, next)));
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ── CW-1: operator identity + capability honesty ────────────────────────────
+// (One contiguous block: a name-tag middleware and one read-only route. Nothing
+// else in this file changes shape, so this lifts out cleanly if it ever must.)
+//
+// Plain words: the desk asks the operator for their name once and sends it on
+// every request as the header `X-Operator-Name`. This middleware turns that
+// header into `req.operator`, and runs the rest of the request inside an
+// operator context so anything the request triggers — even work that finishes in
+// a later timer — knows who asked for it. No auth in v1 (Gate-1 decision): it is
+// a name tag, not a login.
+//
+// THE GATE: a state-changing call from the COPILOT SURFACE with no name is
+// refused with 428 "Tell me your name first." Read-only GETs always pass, and
+// the classic console (public/index.html) is deliberately NOT part of the
+// copilot surface, so every existing route behaves EXACTLY as before for it.
+//
+// HONEST FRAMING (review of PR #42): the name gate is ATTRIBUTION, NOT ACCESS
+// CONTROL. It exists so every copilot action carries a person's name, and it
+// fails open by design — a caller that sends no Referer (curl, a script) is not
+// stopped, because v1 has no auth at all (Gate-1 decision: open + name tag).
+// SSO/auth bolts on at this same seam when real multi-user arrives.
+//
+// THE AUDIT, BY CONTRAST, IS NOT SCOPED TO THE SURFACE (blocker 2 of that
+// review): surface detection reads a URL string, and one URL has many
+// spellings — /DESK.HTML, //desk.html, /./desk.html all served the same desk
+// page and silently escaped both the gate and the audit. So EVERY
+// state-changing /api/ call is audited, whatever the surface, with
+// who:"unknown" when it carries no name. No path, spelling or missing header
+// can make an action disappear from the log.
+
+// A name is a name: keep printable ASCII only, collapse whitespace, cap at 64.
+// Anything else (control characters, tags, an over-long paste) is stripped
+// before the name can reach a log line, a record, a store or the browser.
+function scrubOperatorName(raw) {
+  if (raw == null) return null;
+  const cleaned = String(raw)
+    .replace(/[^\x20-\x7E]/g, '')   // printable ASCII only
+    .replace(/[<>]/g, '')           // never let a tag start in a name
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 64);
+  return cleaned || null;
+}
+
+// Operator-supplied names arrive on TWO paths: the X-Operator-Name header and
+// body fields (bridge roles — commander / scribe / owner / joiners). One scrub,
+// applied at this one boundary to both, so no route can persist a raw name and
+// no future route has to remember to. (Review: take-ownership persisted a raw
+// <img onerror=…> string into the incident record via the body path.)
+const OPERATOR_NAME_FIELDS = [
+  'operator', 'commander', 'incidentCommander', 'scribe', 'owner', 'currentOwner',
+  'assignee', 'requestedBy', 'joiners',
+];
+function scrubOperatorNamesInBody(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return;
+  for (const field of OPERATOR_NAME_FIELDS) {
+    const v = body[field];
+    if (typeof v === 'string') {
+      body[field] = scrubOperatorName(v) || '';
+    } else if (Array.isArray(v)) {
+      body[field] = v.map((n) => (typeof n === 'string' ? (scrubOperatorName(n) || '') : n));
+    }
+  }
+}
+
+// One URL, many spellings. Normalise before comparing: lower-case, collapse
+// duplicate slashes, resolve "." / ".." segments, drop a trailing slash. So
+// /DESK.HTML, //desk.html and /./desk.html are all the desk — the same page the
+// browser is actually showing.
+function normalizePath(p) {
+  let s = String(p || '').toLowerCase().replace(/\/{2,}/g, '/');
+  s = path.posix.normalize(s);
+  if (s.length > 1) s = s.replace(/\/+$/, '');
+  return s;
+}
+
+function isCopilotSurface(req) {
+  if (normalizePath(req.path).startsWith('/api/copilot/')) return true;
+  const ref = req.headers.referer || req.headers.referrer || '';
+  if (!ref) return false;
+  try {
+    return /^\/desk(?:\.html)?$/.test(normalizePath(new URL(String(ref)).pathname));
+  } catch (e) {
+    return false;
+  }
+}
+
+const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+app.use((req, res, next) => {
+  req.operator = scrubOperatorName(req.headers['x-operator-name']);
+  scrubOperatorNamesInBody(req.body);
+
+  const stateChanging = !READ_ONLY_METHODS.has(req.method);
+  const isApi = normalizePath(req.path).startsWith('/api/');
+
+  if (stateChanging && isApi && isCopilotSurface(req) && !req.operator) {
+    session.audit({
+      who: 'unknown',
+      what: `${req.method} ${req.path}`,
+      result: 'refused (428) — no operator name on a copilot action',
+    });
+    return res.status(428).json({ error: 'Tell me your name first.' });
+  }
+
+  // EVERY state-changing API call is audited at THIS boundary — one place, so
+  // no route, and no spelling of a URL, can leave an action untraceable. An
+  // unnamed action is recorded as who:"unknown"; it is never dropped.
+  if (stateChanging && isApi) {
+    const device = (req.body && (req.body.device || req.body.hostname || req.body.deviceName)) || null;
+    res.on('finish', () => {
+      session.audit({
+        who: req.operator || 'unknown',
+        what: `${req.method} ${req.path}`,
+        device: device ? String(device) : undefined,
+        result: `HTTP ${res.statusCode}`,
+      });
+    });
+  }
+
+  session.runAsOperator(req.operator, next);
+});
+
+// What Jarvis can actually do — straight from the single source of truth
+// (sources/capabilities.js). Anything not available carries a plain-words reason.
+app.get('/api/capabilities', (req, res) => {
+  res.json({ abilities: capabilities.list() });
+});
+
+// The copilot audit trail: who did what, on which device, with what result.
+app.get('/api/copilot/audit', (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 100, 500);
+  res.json({ entries: session.auditAll({ limit }), file: session.AUDIT_FILE });
+});
+// ── end CW-1 block ──────────────────────────────────────────────────────────
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -1032,6 +1169,39 @@ function simulateJarvisAction(agentId, command) {
     }
   }
 
+  // CW-1 honest refusal. Before an open-ended ask reaches the reasoning engine,
+  // it is checked against the capability map (sources/capabilities.js — the
+  // single source of truth). ONLY two things are refused: an ask that plainly
+  // asks Jarvis to PERFORM an ability that is not built yet, and an ask with
+  // nothing to do with this NOC. Everything else passes through to real
+  // reasoning — a wrong refusal would be worse than a slow answer. The refusal
+  // text is built FROM the map, never hardcoded, and touches no device.
+  const check = capabilities.checkAsk(command);
+  if (!check.allowed) {
+    const a = agents[agentId];
+    broadcast('chat_message', {
+      type: 'incoming',
+      agent: agentId,
+      agentName: a ? a.name : 'Jarvis',
+      agentIcon: a ? a.icon : '🎖️',
+      text: check.text,
+      timestamp: new Date().toISOString(),
+    });
+    session.audit({
+      what: `ask: ${String(command).slice(0, 200)}`,
+      result: `honestly refused — ${check.ability ? `${check.ability.key} not available` : 'no capability covers this'} (zero device calls)`,
+    });
+    // The activity line must say what is TRUE of the system's own state: a
+    // matched-but-unbuilt ability is named with its reason; only a genuinely
+    // uncovered ask is recorded as uncovered.
+    const why = check.ability
+      ? `"${check.ability.label}" is not wired up yet — ${check.ability.reason}`
+      : `nothing in my capability map covers this`;
+    appendToActivityLog(`[${new Date().toISOString()}] [Jarvis] Honest refusal — ${why} — asked: "${String(command).slice(0, 60)}"\n`);
+    updateAgentStatus(agentId, 'idle', 'Answered honestly: not something I can do yet');
+    return;
+  }
+
   // Open-ended reasoning (triage/escalate/general/inferred) → REAL agentic Jarvis.
   return jarvis.ask(command);
 }
@@ -1232,14 +1402,25 @@ function updateAgentStatus(agentId, status, lastAction) {
 // event so the Live Activity panel updates the instant any meaningful thing
 // happens (agent engaged, ran X, Jarvis delegated to Y, verdict). One seam, so
 // every caller of appendToActivityLog feeds the feed with no per-site wiring.
+// CW-1: this one seam is also where the operator's name lands. If the request
+// that caused this line carried X-Operator-Name, the line (on disk AND on the
+// live feed) is stamped "— by <name>". No per-call-site wiring, and nothing
+// changes for a request with no name.
 function appendToActivityLog(entry) {
-  safeAppend(PATHS.activityLog, entry, 'activity log');
-  const line = String(entry || '').replace(/\n+$/, '');
+  const operator = session.currentOperator();
+  let text = String(entry || '');
+  if (operator) {
+    const trailing = /\n*$/.exec(text)[0];
+    const body = text.slice(0, text.length - trailing.length);
+    if (body && !body.includes(`— by ${operator}`)) text = `${body} — by ${operator}${trailing}`;
+  }
+  safeAppend(PATHS.activityLog, text, 'activity log');
+  const line = text.replace(/\n+$/, '');
   if (!line) return;
   const m = /^\[([^\]]+)\]\s*\[([^\]]+)\]\s*([\s\S]*)$/.exec(line);
   broadcast('activity_new', m
-    ? { source: m[2], text: m[3], ts: m[1] }
-    : { source: 'System', text: line, ts: new Date().toISOString() });
+    ? { source: m[2], text: m[3], ts: m[1], operator: operator || undefined }
+    : { source: 'System', text: line, ts: new Date().toISOString(), operator: operator || undefined });
 }
 
 // Get tasks from TASKS.md
@@ -1925,14 +2106,16 @@ function createTaskFromCommand(agentId, command, column = 'inbox') {
 app.post('/api/pause', (req, res) => {
   isPaused = true;
   broadcast('pause_state', { paused: true });
-  appendToActivityLog(`[${new Date().toISOString()}] [Dashboard] ⏸ System PAUSED by Vikas\n`);
+  // No hardcoded actor: whoever paused it is stamped by the activity seam when a
+  // name is known (it used to read "PAUSED by Vikas — by <operator>").
+  appendToActivityLog(`[${new Date().toISOString()}] [Dashboard] ⏸ System PAUSED\n`);
   res.json({ success: true, paused: true });
 });
 
 app.post('/api/resume', (req, res) => {
   isPaused = false;
   broadcast('pause_state', { paused: false });
-  appendToActivityLog(`[${new Date().toISOString()}] [Dashboard] ▶ System RESUMED by Vikas\n`);
+  appendToActivityLog(`[${new Date().toISOString()}] [Dashboard] ▶ System RESUMED\n`);
   res.json({ success: true, paused: false });
 });
 

@@ -18,7 +18,9 @@
 // a scrubber strips any token-shaped field that slips through. Lengths, never
 // values.
 
+const path = require('path');
 const { AsyncLocalStorage } = require('async_hooks');
+const workspace = require('../workspace');
 
 const als = new AsyncLocalStorage();
 
@@ -355,7 +357,59 @@ function query({ agentId, source, triageId, limit } = {}) {
   return out;
 }
 
+// ── Who is at the keyboard (CW-1 operator identity) ─────────────────────────
+// The name middleware in server.js wraps each request in runAsOperator, so any
+// code the request reaches — including work that finishes in a later timer —
+// can ask who asked for it, without every function having to pass a name down.
+// No auth in v1 (Gate-1 decision): this is a name tag, not a login.
+const operatorAls = new AsyncLocalStorage();
+
+function runAsOperator(name, fn) {
+  return operatorAls.run({ operator: name || null }, fn);
+}
+function currentOperator() {
+  const s = operatorAls.getStore();
+  return (s && s.operator) || null;
+}
+
+// ── Copilot audit log (design: "every copilot action greppable in one place") ─
+// One structured line per copilot-surface action: { ts, who, what, device?,
+// result }. It lands BOTH in a ring buffer (for an API/UI to read) and appended
+// as one JSON object per line to squad/shared/COPILOT_AUDIT.log, so an engineer
+// can grep the file directly. Every field goes through the same secret scrubber
+// used for wire output — a credential can never reach this file. Never throws:
+// telemetry must not be able to break an action.
+const AUDIT_FILE = path.join(workspace.SQUAD_ROOT, 'shared', 'COPILOT_AUDIT.log');
+const MAX_AUDIT = 500;
+const auditRecords = [];
+
+function audit({ who, what, device, result, detail } = {}) {
+  try {
+    const entry = {
+      ts: new Date().toISOString(),
+      who: scrub(who || currentOperator() || 'unknown'),
+      what: scrub(what == null ? '' : String(what)).slice(0, 500),
+      result: scrub(result == null ? '' : String(result)).slice(0, 500),
+    };
+    if (device) entry.device = scrub(String(device)).slice(0, 120);
+    if (detail) entry.detail = scrub(String(detail)).slice(0, 1000);
+    auditRecords.push(entry);
+    if (auditRecords.length > MAX_AUDIT) auditRecords.splice(0, auditRecords.length - MAX_AUDIT);
+    workspace.safeAppend(AUDIT_FILE, JSON.stringify(entry) + '\n', 'copilot audit log');
+    console.log(`[AUDIT] ${entry.ts} who=${entry.who} what=${entry.what}${entry.device ? ` device=${entry.device}` : ''} result=${entry.result}`);
+    return entry;
+  } catch (e) {
+    return null;
+  }
+}
+
+function auditAll({ limit } = {}) {
+  const out = auditRecords.slice();
+  return limit && out.length > limit ? out.slice(out.length - limit) : out;
+}
+
 module.exports = {
   runWithContext, getContext, record, recordReasoning, emitCommandShare,
   setBroadcast, setCommandShareBroadcast, scrub, all, query,
+  runAsOperator, currentOperator, audit, auditAll, AUDIT_FILE,
 };
