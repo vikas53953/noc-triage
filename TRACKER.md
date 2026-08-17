@@ -28,7 +28,7 @@ Last updated: 2026-08-17 ~22:40 IST · driver: Fable session 7d4aaef3
 | 4 | Keep pushing GitHub + docs inside repo updated | ONGOING — every merge/decision pushed |
 | 5 | Polish repo + every info | DONE (PR #41 merged) |
 | 6 | Fix: "show version on sw" guessed sw1 — must ASK which switch | IN PROGRESS (PR fix/ambiguous-device-asks building) |
-| 7 | Spawn QA agents, test from EVERY angle, don't wait for me | IN PROGRESS — 2/5 QA reports in (wireup, intent); both confirm root cause = deterministic keyword layer wrapping the real LLM planner. 3 still running. |
+| 7 | Spawn QA agents, test from EVERY angle, don't wait for me | IN PROGRESS — 3/5 QA reports in (wireup, intent, adversarial). Root cause = deterministic keyword layer over the real LLM planner. Adversarial: all SAFETY laws held; gate fails-open on bad mode value + 2 stack-trace leaks. 2 running. |
 | 8 | Full autonomous; self-resume on quota reset; live to-do tracker | DONE — this file + wakeup armed |
 
 ## Build waves (copilot) — see docs/copilot-design.md
