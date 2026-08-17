@@ -14,7 +14,9 @@ Both CW-1 agents build to THIS. Neither changes it unilaterally; a needed change
 - Missing header on a state-changing copilot call → 428 `{error:"Tell me your name first."}` (read-only GETs pass).
 
 ## Capability map
-- GET /api/capabilities → `{ abilities: [ {key, label, plain, available, reason?} ] }`
+- GET /api/capabilities → `{ abilities: [ {key, label, plain, available, reason?, example} ] }`
+  - `example` = a short operator-voiced sample ask ("run show version on sw1") — the UI's capability
+    chips prefill THIS, never the ability's self-description.
   - available:false MUST carry `reason` (e.g. "Teams not connected — needs a webhook").
   - The map is the single source of truth in sources/capabilities.js; server routes and honest
     refusals both read from it. Initial keys: ask, run-command, change (available:false reason "change
