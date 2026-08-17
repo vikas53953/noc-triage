@@ -1081,12 +1081,101 @@ pre.cli{
 .sn-copyrow .copied{font-size:.68rem;color:var(--ok);font-weight:700;opacity:0;transition:opacity .2s}
 .sn-copyrow .copied.on{opacity:1}
 
+/* ============================================================
+   WAVE 3 — MULTI-INCIDENT QUEUE · DEDUPE NOTE · ON-CALL NOTIFIER ·
+   APPROVAL-TIMEOUT COUNTDOWN. Built on the existing Evidence Split
+   Console token system — no new palette, same pill/chip/mono vocabulary.
+   ============================================================ */
+/* Incident queue — the left-column board of concurrent + recent bridges. */
+.iq-panel{margin-top:.7rem}
+.iq-panel .panel-head .ev-pill{font-variant-numeric:tabular-nums}
+.iq-list{overflow-y:auto;padding:.4rem;display:flex;flex-direction:column;gap:.4rem;max-height:300px}
+.iq-empty{font-size:.72rem;color:var(--ink3);padding:.6rem .5rem;line-height:1.5}
+.iq-item{
+  position:relative;text-align:left;width:100%;cursor:pointer;
+  background:var(--card);border:1px solid var(--line);border-radius:9px;
+  padding:.5rem .6rem .5rem .78rem;display:flex;flex-direction:column;gap:.32rem;
+  transition:border-color .15s,background .15s,transform .05s;
+}
+.iq-item:hover{border-color:var(--accent);background:var(--hover)}
+.iq-item:active{transform:translateY(1px)}
+.iq-item:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* A left rail keyed to severity — a NOC board reads by colour first. */
+.iq-item::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:9px 0 0 9px;background:var(--ink3)}
+.iq-item.sev-P1::before{background:var(--bad)}
+.iq-item.sev-P2::before{background:var(--warn)}
+.iq-item.sev-P3::before{background:var(--info)}
+.iq-item.active{border-color:var(--accent);background:var(--hover);box-shadow:inset 0 0 0 1px var(--accent)}
+.iq-item.closed{opacity:.62}
+.iq-top{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+.iq-sev{font-size:.6rem;font-weight:800;letter-spacing:.04em;padding:.12rem .34rem;border-radius:4px;font-family:var(--mono)}
+.iq-sev.P1{color:var(--bad);background:var(--bad-bg);border:1px solid var(--bad)}
+.iq-sev.P2{color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn)}
+.iq-sev.P3{color:var(--info);background:var(--info-bg);border:1px solid var(--info)}
+.iq-src{font-size:.72rem}
+.iq-inc{font-size:.66rem;font-weight:700;color:var(--ink2);font-family:var(--mono);margin-left:auto}
+.iq-title{font-size:.75rem;color:var(--ink);line-height:1.35;font-weight:600;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.iq-meta{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;font-size:.63rem;color:var(--ink3)}
+.iq-status{font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.iq-status.open{color:var(--ok)}
+.iq-status.closed{color:var(--ink3)}
+.iq-owner{color:var(--ink2)}
+.iq-owner b{color:var(--ink);font-weight:700}
+.iq-sla{font-weight:700;font-family:var(--mono);color:var(--ink2)}
+.iq-sla.breached{color:var(--bad);background:var(--bad-bg);padding:.05rem .3rem;border-radius:4px;border:1px solid var(--bad)}
+.iq-foot{font-size:.63rem;color:var(--ink3);padding:.35rem .55rem 0;border-top:1px dotted var(--line-soft);margin:.15rem .2rem 0;line-height:1.45}
+
+/* Dedupe note — "possibly related to an open incident" on the live bridge. */
+.dedupe-note{
+  margin:.1rem 0 .2rem;border:1px solid var(--warn);border-left-width:3px;border-radius:9px;
+  background:var(--warn-bg);padding:.55rem .7rem;display:flex;gap:.55rem;align-items:flex-start;
+}
+.dedupe-note[hidden]{display:none}
+.dd-ico{font-size:.95rem;line-height:1.2;flex-shrink:0}
+.dd-body{font-size:.74rem;color:var(--ink);line-height:1.45;min-width:0}
+.dd-body b{font-weight:800}
+.dd-links{display:flex;flex-direction:column;gap:.2rem;margin-top:.3rem}
+.dd-link{
+  align-self:flex-start;font-size:.7rem;font-weight:700;color:var(--warn);
+  background:none;border:none;padding:0;cursor:pointer;text-decoration:underline;text-underline-offset:2px;
+  font-family:inherit;text-align:left;
+}
+.dd-link:hover{color:var(--bad)}
+.dd-link:focus-visible{outline:2px solid var(--warn);outline-offset:2px;border-radius:3px}
+.dd-why{color:var(--ink2);font-weight:400;text-decoration:none}
+
+/* On-call notifier status — an honest header pill. */
+.notif-pill{
+  display:flex;align-items:center;gap:.4rem;font-size:.72rem;font-weight:600;
+  padding:.3rem .6rem;border-radius:999px;border:1px dashed var(--ink3);
+  color:var(--ink3);background:transparent;max-width:230px;
+}
+.notif-pill[hidden]{display:none}
+.notif-pill.armed{border-style:solid;border-color:var(--ok);color:var(--ok);background:var(--ok-bg)}
+.notif-ico{flex-shrink:0}
+.notif-txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.notif-pill.armed .notif-txt b{color:var(--ok)}
+
+/* Approval-timeout countdown — only rendered when a pending prompt carries timeoutAt. */
+.appr-timer{
+  display:inline-flex;align-items:center;gap:.3rem;font-size:.66rem;font-weight:700;
+  font-family:var(--mono);color:var(--warn);background:var(--warn-bg);
+  border:1px solid var(--warn);border-radius:5px;padding:.1rem .4rem;margin-top:.4rem;
+}
+.appr-timer.urgent{color:var(--bad);background:var(--bad-bg);border-color:var(--bad)}
+.appr-timer .at-dot{width:6px;height:6px;border-radius:50%;background:currentColor;animation:pulse 1s infinite}
+
+@media (prefers-reduced-motion:reduce){
+  .appr-timer .at-dot{animation:none}
+}
 @media (max-width:1180px){
   .shell{grid-template-columns:1fr;height:auto}
   .shell.activity-collapsed{grid-template-columns:1fr}
   .stage{min-height:640px}
   .split{grid-template-columns:1fr}
   .bridge{border-right:none;border-bottom:1px solid var(--line);max-height:420px}
+  .iq-list{max-height:220px}
 }
 </style>
 </head>
@@ -1100,6 +1189,7 @@ pre.cli{
   </div>
   <div class="top-right">
     <span class="hdr-alert" id="hdrAlert" hidden title="An alert-triggered incident is live"><span class="ha-dot"></span>⚡ Alert incident</span>
+    <span class="notif-pill" id="notifPill" hidden title="On-call paging status — set ONCALL_WEBHOOK to page an on-call engineer"><span class="notif-ico">📟</span><span class="notif-txt" id="notifTxt">On-call: —</span></span>
     <span class="chip" id="connChip"><span class="dot"></span>Connecting…</span>
     <span class="clock" id="clock">--:--:--</span>
     <button class="iconbtn appr-btn" id="apprBtn" title="Approvals — the permission gate">🛡<span class="appr-count" id="apprCount" hidden>0</span></button>
@@ -1122,6 +1212,18 @@ pre.cli{
       <div class="roster-foot">
         Engineers with no live source are kept <b>off the bridge</b> — they never post,
         and their front shows as a blind spot on the evidence board.
+      </div>
+    </div>
+
+    <div class="panel iq-panel" id="iqPanel" hidden>
+      <div class="panel-head">
+        <h2>🗂 Incident queue</h2>
+        <span class="ev-pill" id="iqCount">0 open</span>
+      </div>
+      <div class="iq-list" id="iqList"></div>
+      <div class="iq-foot">
+        Every open and recently closed bridge. Click one to switch to it — the squad keeps
+        working each one in parallel.
       </div>
     </div>
 
@@ -1203,6 +1305,10 @@ pre.cli{
             <button class="mini-btn rerun" id="rerunBtn" title="Re-run this triage and show what changed">🔁 Re-run this triage</button>
             <button class="mini-btn" id="snBtn" title="Export a ServiceNow-ready summary">📤 Export / ServiceNow</button>
           </span>
+        </div>
+        <div class="dedupe-note" id="dedupeNote" hidden>
+          <span class="dd-ico">⚠</span>
+          <div class="dd-body" id="dedupeBody"></div>
         </div>
         <div class="strip" id="strip"></div>
         <div class="roles-bar" id="rolesBar" hidden>
@@ -2099,6 +2205,7 @@ function resetConsole(){
   var ackBtn = $('ackBtn'); if(ackBtn) ackBtn.hidden = true;
   var ackStamp = $('ackStamp'); if(ackStamp) ackStamp.hidden = true;
   renderLifecycle(null);
+  renderDedupe(null);   // Wave 3 — clear any "possibly related" note on repaint
   clearBridge();
 }
 function clearBridge(){
@@ -2696,6 +2803,8 @@ function handleOpened(d){
   setAckState(d.ack || {});       // ack button, or the stamp if already acked
   startSla(d.sla);                // ticking countdown, or hidden if no SLA in the open
   renderLifecycle(null);          // roll-up stays hidden until close
+  renderDedupe(d);                // Wave 3 - "possibly related to INC-X" note (empty relatedTo -> nothing)
+  refreshIncidents();             // Wave 3 - a new bridge appears in the queue
   pushActivity('NOC Triage', 'opened ' + currentSeverity + ' triage ' + (d.incidentId||'') + ' — "' + (d.title||'') + '"', tsClock(d.openedAt));
 }
 /* ============================================================
@@ -2848,6 +2957,7 @@ function handleClosed(d){
       .then(function(t){ if(t && t.lifecycle && id === currentTriageId) renderLifecycle(t.lifecycle); })
       .catch(function(){ /* no record — roll-up stays hidden */ });
   }
+  refreshIncidents();   // Wave 3 - the queue reflects the close (status -> closed)
   pushActivity('NOC Triage', 'triage concluded — engineers back to idle', nowClock());
 }
 
@@ -3238,6 +3348,55 @@ function apprIngest(rec){
 }
 function apprPendingList(){ return APPR.order.map(function(id){ return APPR.map[id]; }).filter(function(r){ return r && r.state==='pending'; }); }
 
+/* Wave 3 — approval-timeout countdown. A pending approval carries timeoutAt ONLY
+   when the operator enabled the timeout; when it is null/absent we render NO timer
+   and the prompt behaves exactly as before. The backend owns the actual auto-deny;
+   this is the honest visible countdown to it. */
+function apprMsRemaining(r){
+  if(!r || r.state !== 'pending' || !r.timeoutAt) return null;
+  var due = Date.parse(r.timeoutAt);
+  if(!isFinite(due)) return null;
+  return due - Date.now();
+}
+function fmtMSS(ms){
+  if(ms < 0) ms = 0;
+  var s = Math.round(ms / 1000);
+  var m = Math.floor(s / 60);
+  var sec = s % 60;
+  return m + ':' + (sec < 10 ? '0' : '') + sec;
+}
+function apprTimerHtml(r){
+  var ms = apprMsRemaining(r);
+  if(ms === null) return '';   // no timeout enabled -> no timer, unchanged behaviour
+  var urgent = ms <= 15000 ? ' urgent' : '';
+  var label = ms <= 0 ? 'auto-denying…' : ('auto-deny in ' + fmtMSS(ms));
+  return '<span class="appr-timer'+urgent+'" data-timeout-at="'+escapeHtml(String(r.timeoutAt))+'" '+
+           'title="This read auto-denies when the timer runs out — the operator enabled a timeout so a bridge never stalls.">'+
+           '<span class="at-dot"></span>'+escapeHtml(label)+
+         '</span>';
+}
+/* One ticker updates every visible countdown in place (no full re-render -> no flicker).
+   It runs only while at least one timer element is on the page. */
+var apprTicker = null;
+function tickApprTimers(){
+  var els = document.querySelectorAll('.appr-timer[data-timeout-at]');
+  if(!els.length){ if(apprTicker){ clearInterval(apprTicker); apprTicker = null; } return; }
+  [].forEach.call(els, function(el){
+    var due = Date.parse(el.getAttribute('data-timeout-at'));
+    if(!isFinite(due)) return;
+    var ms = due - Date.now();
+    el.classList.toggle('urgent', ms <= 15000);
+    var label = ms <= 0 ? 'auto-denying…' : ('auto-deny in ' + fmtMSS(ms));
+    // Rebuild text after the dot without touching the dot node.
+    el.innerHTML = '<span class="at-dot"></span>' + escapeHtml(label);
+  });
+}
+function ensureApprTicker(){
+  if(apprTicker) return;
+  if(!document.querySelector('.appr-timer[data-timeout-at]')) return;
+  apprTicker = setInterval(tickApprTimers, 1000);
+}
+
 function apprStateBadge(st){
   var label = st==='auto'?'auto-approved':(st==='approved'?'approved':(st==='denied'?'denied':'pending'));
   return '<span class="appr-state '+escapeHtml(st)+'">'+escapeHtml(label)+'</span>';
@@ -3252,7 +3411,7 @@ function apprRowHtml(r, withActions){
       '<button class="mini-btn ok" data-appr="'+escapeHtml(r.id)+'" data-dec="approve-once">✓ Approve once</button>'+
       (r.triageId?'<button class="mini-btn all" data-appr="'+escapeHtml(r.id)+'" data-dec="approve-all">✓✓ Approve all reads this triage</button>':'')+
       '<button class="mini-btn no" data-appr="'+escapeHtml(r.id)+'" data-dec="deny">✕ Deny</button>'+
-      '</div>';
+      '</div>' + apprTimerHtml(r);
   }
   return '<div class="appr-row '+escapeHtml(r.state)+'">'+
     '<div class="appr-row-top"><span class="appr-who">'+who+'</span>'+apprStateBadge(r.state)+
@@ -3285,6 +3444,7 @@ function renderApprovals(){
   if(pend.length){ cnt.hidden=false; cnt.textContent=String(pend.length); btn.classList.add('pulse'); }
   else { cnt.hidden=true; btn.classList.remove('pulse'); }
   renderApprPrompt(pend);
+  ensureApprTicker();   // Wave 3 — start the countdown ticker if any pending row has a timeout
 }
 function renderApprPrompt(pend){
   var box = $('apprPrompt');
@@ -3300,6 +3460,7 @@ function renderApprPrompt(pend){
       (r.triageId?'<button class="mini-btn all" data-appr="'+escapeHtml(r.id)+'" data-dec="approve-all">✓✓ All reads this triage</button>':'')+
       '<button class="mini-btn no" data-appr="'+escapeHtml(r.id)+'" data-dec="deny">✕ Deny</button>'+
     '</div>'+
+    apprTimerHtml(r)+
     (pend.length>1?'<div class="more">+'+(pend.length-1)+' more waiting — open the 🛡 panel to see all</div>':'');
 }
 function apprDecide(id, dec){
@@ -3642,6 +3803,193 @@ function handleInit(data){
   }
 }
 
+/* ============================================================
+   WAVE 3 — MULTI-INCIDENT + ON-CALL (frontend)
+   Contracts (pinned to the backend):
+     GET /api/incidents -> [{triageId,incidentId,severity,source,status,
+                             owner,title,openedAt,sla{targetMs,breached}}]
+     triage_opened.data.relatedTo = [{incidentId, why}]
+     GET /api/notifier/status = {configured, target}
+     pending-approval .timeoutAt (null/absent = timeout disabled)
+   Every widget degrades to nothing if its endpoint/field is absent, so an
+   older backend looks exactly as it did before (single-incident, no queue).
+   ============================================================ */
+
+/* ---------- Dedupe note — "possibly related to an open incident" ---------- */
+/* Driven by triage_opened.data.relatedTo (or a restored record's relatedTo).
+   Empty / absent -> the note is hidden. Each field escaped; the incident link
+   switches to that bridge if we can resolve its triage. */
+function renderDedupe(d){
+  var box = $('dedupeNote'), body = $('dedupeBody');
+  if(!box || !body) return;
+  var rel = d && Array.isArray(d.relatedTo) ? d.relatedTo.filter(function(r){ return r && r.incidentId; }) : [];
+  if(!rel.length){ box.hidden = true; body.innerHTML = ''; return; }
+  var lead = rel.length === 1
+    ? '<b>Possibly related to '+escapeHtml(rel[0].incidentId)+'</b> — this may be the same underlying incident.'
+    : '<b>Possibly related to '+rel.length+' open incidents</b> — this may already be under investigation.';
+  var links = rel.map(function(r){
+    var why = r.why ? ' <span class="dd-why">— '+escapeHtml(String(r.why))+'</span>' : '';
+    return '<button type="button" class="dd-link" data-related-inc="'+escapeHtml(r.incidentId)+'">'+
+             '↗ '+escapeHtml(r.incidentId)+why+
+           '</button>';
+  }).join('');
+  body.innerHTML = lead + '<div class="dd-links">' + links + '</div>';
+  box.hidden = false;
+}
+
+/* ---------- Incident queue — concurrent + recent bridges ---------- */
+/* State: whether the backend exposes /api/incidents at all (endpointOk).
+   If it 404s or returns a non-array, the whole panel stays hidden (graceful)
+   and the app behaves exactly as the single-incident build did. */
+var INCIDENTS = { list: [], endpointOk: null, poll: null, inflight: false };
+
+function refreshIncidents(){
+  if(DEMO) return;
+  if(INCIDENTS.inflight) return;
+  INCIDENTS.inflight = true;
+  fetch('/api/incidents', { headers:{'Accept':'application/json'} })
+    .then(function(r){ if(!r.ok) throw new Error('incidents ' + r.status); return r.json(); })
+    .then(function(list){
+      if(!Array.isArray(list)) throw new Error('incidents: not a list');
+      INCIDENTS.endpointOk = true;
+      INCIDENTS.list = list;
+      renderIncidents();
+    })
+    .catch(function(){
+      // Endpoint absent or errored -> hide the queue, keep the app whole.
+      INCIDENTS.endpointOk = false;
+      var p = $('iqPanel'); if(p) p.hidden = true;
+      if(INCIDENTS.poll){ clearInterval(INCIDENTS.poll); INCIDENTS.poll = null; }
+    })
+    .then(function(){ INCIDENTS.inflight = false; });
+}
+
+function iqSlaText(sla){
+  if(!sla) return '';
+  if(sla.breached) return '<span class="iq-sla breached" title="SLA target breached">SLA breached</span>';
+  if(sla.targetMs != null){
+    var mins = Math.round(sla.targetMs / 60000);
+    return '<span class="iq-sla" title="Severity SLA target">SLA '+escapeHtml(String(mins))+'m</span>';
+  }
+  return '';
+}
+
+function renderIncidents(){
+  var panel = $('iqPanel'), listEl = $('iqList'), count = $('iqCount');
+  if(!panel || !listEl) return;
+  var list = INCIDENTS.list || [];
+  // Nothing to show yet -> keep the panel out of the way until a bridge exists.
+  if(!list.length){ panel.hidden = true; return; }
+  panel.hidden = false;
+  var openN = list.filter(function(i){ return i && i.status === 'open'; }).length;
+  if(count) count.textContent = openN + (openN === 1 ? ' open' : ' open');
+  // Open bridges first (newest first), then recent closed (newest first).
+  var sorted = list.slice().sort(function(a, b){
+    var ao = a && a.status === 'open' ? 1 : 0, bo = b && b.status === 'open' ? 1 : 0;
+    if(ao !== bo) return bo - ao;
+    return (Date.parse(b && b.openedAt) || 0) - (Date.parse(a && a.openedAt) || 0);
+  });
+  listEl.innerHTML = sorted.map(function(i){
+    if(!i) return '';
+    var sev = String(i.severity || 'P?');
+    var sevClass = /^P[123]$/.test(sev) ? sev : '';
+    var isAlert = i.source === 'alert';
+    var srcIco = isAlert ? '⚡' : '🧑‍💻';
+    var srcTitle = isAlert ? 'Alert-triggered' : 'Operator-opened';
+    var status = i.status === 'open' ? 'open' : 'closed';
+    var active = (i.triageId && i.triageId === currentTriageId) ? ' active' : '';
+    var owner = i.owner
+      ? '<span class="iq-owner">owner <b>'+escapeHtml(String(i.owner))+'</b></span>'
+      : '<span class="iq-owner">owner unassigned</span>';
+    return '<button type="button" class="iq-item sev-'+escapeHtml(sevClass)+' '+status+active+'" '+
+             'data-triage="'+escapeHtml(String(i.triageId||''))+'" '+
+             'data-inc="'+escapeHtml(String(i.incidentId||''))+'" '+
+             'title="Switch to '+escapeHtml(String(i.incidentId||'this bridge'))+'">'+
+        '<div class="iq-top">'+
+          '<span class="iq-sev '+escapeHtml(sevClass)+'">'+escapeHtml(sev)+'</span>'+
+          '<span class="iq-src" title="'+srcTitle+'">'+srcIco+'</span>'+
+          '<span class="iq-inc">'+escapeHtml(String(i.incidentId||'INC-—'))+'</span>'+
+        '</div>'+
+        '<div class="iq-title">'+escapeHtml(String(i.title || 'Untitled incident'))+'</div>'+
+        '<div class="iq-meta">'+
+          '<span class="iq-status '+status+'">'+escapeHtml(status)+'</span>'+
+          owner + iqSlaText(i.sla)+
+        '</div>'+
+      '</button>';
+  }).join('');
+}
+
+/* Switch to another bridge — reuse the existing record repaint (no new contract). */
+function switchToTriage(triageId){
+  if(!triageId || DEMO) return;
+  if(triageId === currentTriageId){ openConsole(); return; }
+  fetch('/api/triage/' + encodeURIComponent(triageId))
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(t){
+      if(!t){ return; }
+      repaintFromRecord(t);   // paints the full bridge, live or settled
+      openConsole();
+      renderIncidents();      // re-highlight the active row
+    })
+    .catch(function(){ /* stay on the current bridge */ });
+}
+
+/* Resolve an incidentId (from the dedupe note) to its triage, then switch. */
+function switchToIncident(incidentId){
+  if(!incidentId) return;
+  var hit = (INCIDENTS.list || []).filter(function(i){ return i && i.incidentId === incidentId; })[0];
+  if(hit && hit.triageId){ switchToTriage(hit.triageId); return; }
+  // Queue not loaded (endpoint absent) — fall back to the triage list.
+  fetch('/api/triage').then(function(r){ return r.ok ? r.json() : null; }).then(function(list){
+    if(!Array.isArray(list)) return;
+    var m = list.filter(function(t){ return t && t.incidentId === incidentId; })[0];
+    if(m && (m.id || m.triageId)) switchToTriage(m.id || m.triageId);
+  }).catch(function(){});
+}
+
+/* Clicks: a queue row switches bridges; a dedupe link jumps to the related one. */
+document.addEventListener('click', function(e){
+  var row = e.target.closest && e.target.closest('.iq-item[data-triage]');
+  if(row){ switchToTriage(row.getAttribute('data-triage')); return; }
+  var dl = e.target.closest && e.target.closest('[data-related-inc]');
+  if(dl){ e.preventDefault(); switchToIncident(dl.getAttribute('data-related-inc')); return; }
+});
+
+function startIncidentQueue(){
+  if(DEMO) return;
+  refreshIncidents();  // triage_opened/closed also refresh; poll catches owner/SLA drift
+  INCIDENTS.poll = setInterval(function(){ if(INCIDENTS.endpointOk !== false) refreshIncidents(); }, 8000);
+}
+
+/* ---------- On-call notifier status — honest header pill ---------- */
+/* GET /api/notifier/status = {configured, target}. Absent endpoint -> pill stays
+   hidden (no fake "connected"). Never shows the webhook value, only the target label. */
+function loadNotifierStatus(){
+  if(DEMO) return;
+  fetch('/api/notifier/status', { headers:{'Accept':'application/json'} })
+    .then(function(r){ if(!r.ok) throw new Error('notifier ' + r.status); return r.json(); })
+    .then(function(s){ renderNotifier(s); })
+    .catch(function(){ var p = $('notifPill'); if(p) p.hidden = true; });
+}
+function renderNotifier(s){
+  var pill = $('notifPill'), txt = $('notifTxt'), ico = pill && pill.querySelector('.notif-ico');
+  if(!pill || !txt) return;
+  if(s && s.configured){
+    pill.hidden = false;
+    pill.className = 'notif-pill armed';
+    pill.title = 'On-call paging is armed — a page fires to this target when configured to.';
+    if(ico) ico.textContent = '📟';
+    var tgt = s.target ? String(s.target) : 'webhook';
+    txt.innerHTML = 'On-call: <b>' + escapeHtml(tgt) + '</b> ✓';
+  } else {
+    pill.hidden = false;
+    pill.className = 'notif-pill';
+    pill.title = 'On-call paging is not set up. Set ONCALL_WEBHOOK to page an on-call engineer.';
+    if(ico) ico.textContent = '📟';
+    txt.textContent = 'On-call: not configured — set ONCALL_WEBHOOK to page';
+  }
+}
+
 /* ---------- WebSocket ---------- */
 var ws = null, wsRetry = 0;
 function setConn(state){
@@ -3754,6 +4102,7 @@ function repaintFromRecord(t){
   setAckState(ackRec);
   if(live) startSla(t.sla); else { stopSlaTick(); var sb=$('sla'); if(sb) sb.hidden = true; }
   if(!live && t.lifecycle) renderLifecycle(t.lifecycle); else renderLifecycle(null);
+  renderDedupe(t);   // Wave 3 - restore the "possibly related" note from the record (empty -> nothing)
   setBridgeInput(live);
   pushActivity('NOC Triage', 'restored ' + currentSeverity + ' triage ' + (t.incidentId||'') + ' — "' + (t.title||'') + '"', tsClock(t.openedAt));
 }
@@ -3803,6 +4152,8 @@ if(DEMO){
   seedSession();
   seedApprovals();
   loadSources();
+  startIncidentQueue();   // Wave 3 — incident queue (hides itself if /api/incidents is absent)
+  loadNotifierStatus();   // Wave 3 — on-call notifier status pill (honest, or hidden)
 }
 </script>
 
