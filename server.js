@@ -452,6 +452,11 @@ process.on('uncaughtException', (err) => reportSystemError('Unexpected error', e
 // It stays out of server internals; this is the only seam between them.
 live.init({
   agents,
+  // Which conversation is this message part of? Device memory (the box the
+  // operator picked) is scoped to THIS id and nothing wider — never global,
+  // never across operators. A surface that sends no id gets 'default', so a
+  // single console is one conversation until it says otherwise.
+  conversationId: () => (currentRequest() || {}).conversationId || 'default',
   say(agentId, text) {
     const a = agents[agentId] || {};
     broadcast('chat_message', {
@@ -596,6 +601,9 @@ function handleCommand(data) {
     question,
     agent: (data && data.agent) || null,
     askedAt: new Date().toISOString(),
+    // The conversation this message belongs to. Carries the device the operator
+    // picked (live-agents device memory) no further than this conversation.
+    conversationId: String((data && data.conversationId) || 'default'),
   };
   return requestContext.run(ctxValue, () => handleCommandInner(data));
 }
@@ -921,6 +929,15 @@ function simulateAgentAction(agentId, command) {
 function runAgentAction(agentId, command) {
   const agent = agents[agentId];
   if (!agent) return;
+
+  // AMBIGUITY → ASK, NEVER ASSUME (the law, 2026-08-17). When this conversation
+  // has a parked "which device?" question, the operator's next word is an ANSWER
+  // ("sw2", "2", "the second one", "all"), not a fresh request — so it finishes
+  // the command they already typed. Checked here, before every other route, so
+  // BOTH surfaces inherit it: Jarvis and a direct @mention. It returns false for
+  // anything that is not an answer, and that message routes normally as before.
+  if (live.maybeForget(agentId, command)) return;
+  if (live.resumeClarification(agentId, command)) return;
 
   updateAgentStatus(agentId, 'active', `Processing: ${command}`);
 
@@ -2458,11 +2475,11 @@ app.post('/api/triage/:id/retry/:front', async (req, res) => {
 });
 
 app.post('/api/command', (req, res) => {
-  const { agent, command } = req.body;
+  const { agent, command, conversationId } = req.body;
   if (!agent || !command) {
     return res.status(400).json({ error: 'Agent and command required' });
   }
-  handleCommand({ agent, command });
+  handleCommand({ agent, command, conversationId });
   res.json({ success: true, message: 'Command queued' });
 });
 

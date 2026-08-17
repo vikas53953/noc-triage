@@ -319,11 +319,18 @@ async function routerExpertSdwan(agentId) {
 //   2. READ-ONLY GUARDRAIL, run TWICE: once on the RAW matched fragment (before
 //      any whitespace normalisation, so a "\n" or "|" separator still trips the
 //      chaining check) and once on the canonicalised command.
-//   3. THE NAMED DEVICE. The device the operator named is resolved against the
-//      live inventory and the command runs on THAT box. An unknown name is
-//      refused honestly — it NEVER silently falls back to the first reachable
-//      device, because answering "sw3's running-config" with sw1's config is a
-//      wrong answer wearing a right answer's clothes.
+//   3. THE TARGET — resolved, or ASKED ABOUT. The device is resolved against the
+//      live inventory and the command runs on THAT box. AMBIGUITY → ASK, NEVER
+//      ASSUME (Vikas's law, 2026-08-17): exactly one candidate can serve the ask
+//      → run it. NO candidate → the honest "no such device" refusal. SEVERAL
+//      candidates — a prefix like "sw", or nothing named at all — → run NOTHING,
+//      list the real candidates (hostname, mgmt IP, reachability, read live) and
+//      ASK which one. Guessing "the first reachable one" and saying so out loud
+//      is still a guess: it is a wrong answer wearing a right answer's clothes,
+//      and a senior engineer would ask instead. The operator's answer ("sw2",
+//      "2", "the second one", or "all") is resolved by resumeClarification()
+//      below and REMEMBERED for the rest of that conversation, so follow-ups
+//      ("now show the interfaces") land on the same box until another is named.
 //   4. THE PERMISSION GATE, wrapped around the wire calls themselves. Putting it
 //      here rather than in each caller is what makes "deny = zero wire calls"
 //      true for every caller, including ones written after this line. Gates
@@ -332,10 +339,12 @@ async function routerExpertSdwan(agentId) {
 //
 // Returns a structured result; callers only render it.
 //   { refused, kind, text }            — nothing ran (write intent / no command /
-//                                        guardrail / unknown or unreachable device)
+//                                        guardrail / unknown or unreachable device /
+//                                        AMBIGUOUS target — see rule 3 below)
 //   { denied: true, command }          — the operator denied it; zero wire calls
 //   { ok, command, target, body, note} — it ran; body is the REAL device output
-async function executeDeviceCli({ agentId, request, purpose, announce }) {
+//   { ok, multi: true, runs: [...] }   — the operator said "all"; one real run per box
+async function executeDeviceCli({ agentId, request, purpose, announce, device, all }) {
   const raw = String(request || '');
   const agentName = (ctx.agents[agentId] && ctx.agents[agentId].name) || agentId;
 
@@ -372,14 +381,30 @@ async function executeDeviceCli({ agentId, request, purpose, announce }) {
   }
   const named = namedAll[0] || null;
 
+  // 3a. What the operator pointed at, in the three shapes it can arrive in:
+  //     a resolved choice handed back by resumeClarification (`device`), a
+  //     concrete name in the text (`named`), a partial/loose hint ("on sw",
+  //     "on the switches"), or "all". Nothing here touches the wire.
+  const wantAll = Boolean(all) || (!device && !named && wantsAllDevices(raw));
+  const hint = (!device && !named && !wantAll) ? deviceHintIn(raw) : null;
+  // Nothing pointed at anything → the device this conversation already settled
+  // on (rule 3: remembered until another is named). Never global: keyed by the
+  // conversation id the surface sends.
+  const remembered = (!device && !named && !wantAll && !hint) ? rememberedDevice() : null;
+
   if (announce) {
     // Deliberately NOT "submitting…" — nothing has been submitted yet, and the
     // named device may not even exist. The submit line comes after resolution.
+    const pointing =
+      device ? `Target you picked: ${device}. Checking it against the live inventory…`
+      : named ? `Target named in your request: ${named}. Checking it against the live inventory…`
+      : wantAll ? `You asked for every device. Reading the live inventory…`
+      : hint ? `You pointed at "${hint}" — checking which devices that actually matches…`
+      : remembered ? `No device named this time — checking ${remembered}, the box we have been working on…`
+      : `No device named in your request. Reading the live inventory to see which devices could serve this…`;
     say(agentId,
       `📋 You asked: "${raw.slice(0, 140)}"\n` +
-      `I read that as the read-only command: "${verdict.command}" — guardrail passed.\n` +
-      (named ? `Target named in your request: ${named}. Checking it against the live inventory…`
-             : `No device named in your request. Looking up a reachable one…`));
+      `I read that as the read-only command: "${verdict.command}" — guardrail passed.\n` + pointing);
   }
 
   // 4. The gate wraps every wire call below: inventory read, command submit,
@@ -387,40 +412,106 @@ async function executeDeviceCli({ agentId, request, purpose, announce }) {
   const g = await approvals.gate({
     agentId, agentName,
     command: verdict.command,
-    target: named
-      ? `${named} (named in the request) via Catalyst Center Command Runner`
-      : 'the first reachable Catalyst Center switch (no device named) via Command Runner',
+    target: device ? `${device} (the device you picked) via Catalyst Center Command Runner`
+      : named ? `${named} (named in the request) via Catalyst Center Command Runner`
+      : wantAll ? 'every reachable Catalyst Center switch (you said "all") via Command Runner'
+      : hint ? `whatever "${hint}" resolves to in the live inventory — if it matches more than one I will ask, not guess`
+      : remembered ? `${remembered} (remembered from earlier in this conversation) via Command Runner`
+      : 'a Catalyst Center switch — none named, so I will list the candidates and ask rather than pick one',
     reason: purpose || `operator asked: "${raw.slice(0, 80)}"`,
     cli: verdict.command,
   }, async () => {
     const devices = await catalyst.getDevices();
-    const pick = resolveTargetDevice(devices, named);
+    const pick = resolveTargetDevice(devices, device || named, { hint, remembered, wantAll });
     if (pick.error) return { unknownDevice: pick.error, detail: pick.error };
+    if (pick.ambiguous) return { ambiguous: pick.ambiguous, detail: 'ambiguous target — asked the operator, ran nothing' };
 
+    const targets = pick.all || [pick.target];
     if (announce) {
-      say(agentId, `🎯 Target: ${pick.target.hostname} (${pick.target.ip}, ${pick.target.platform})` +
+      say(agentId, `🎯 Target: ${targets.map((t) => `${t.hostname} (${t.ip}, ${t.platform})`).join(' · ')}` +
         (pick.note ? ` — ${pick.note}` : '') +
         `.\nSubmitting "${verdict.command}" to Catalyst Center Command Runner — ${catalyst.host}. ` +
-        `The sandbox runner is slow; this can take up to a minute.`);
+        `The sandbox runner is slow; this can take up to a minute${targets.length > 1 ? ' per device' : ''}.`);
     }
 
-    const file = await catalyst.runShowCommand([pick.target.id], verdict.command);
-    const out = extractCommandOutput(file, verdict.command);
-    // Scrub at the source: this string is about to become chat text, debate
-    // text and a Jarvis finding. Anything credential-shaped in a device's own
-    // output is redacted here, not at some later sink.
-    const body = session.scrub(out ? String(out.text) : JSON.stringify(file)).slice(0, 2000);
+    const runs = [];
+    for (const target of targets) {
+      const file = await catalyst.runShowCommand([target.id], verdict.command);
+      const out = extractCommandOutput(file, verdict.command);
+      // Scrub at the source: this string is about to become chat text, debate
+      // text and a Jarvis finding. Anything credential-shaped in a device's own
+      // output is redacted here, not at some later sink.
+      const body = session.scrub(out ? String(out.text) : JSON.stringify(file)).slice(0, 2000);
+      runs.push({ target, body, ok: !(out && out.ok === false) });
+    }
     return {
-      target: pick.target, note: pick.note || null, body,
-      ok: !(out && out.ok === false),
-      detail: `${verdict.command} on ${pick.target.hostname}`,
+      runs, multi: Boolean(pick.all), note: pick.note || null,
+      detail: `${verdict.command} on ${runs.map((r) => r.target.hostname).join(', ')}`,
     };
   });
 
   if (g.denied) return { denied: true, command: verdict.command };
   const r = g.result || {};
   if (r.unknownDevice) return { refused: true, kind: 'unknown-device', reason: r.unknownDevice, command: verdict.command };
-  return { ok: true, command: verdict.command, target: r.target, note: r.note, body: r.body, deviceOk: r.ok };
+  if (r.ambiguous) {
+    // Ran NOTHING. Park the request so the operator's next word ("sw2", "2",
+    // "all") finishes the job they actually asked for — the question is useless
+    // if answering it makes them retype the command.
+    rememberPendingChoice({
+      agentId, request: raw, command: verdict.command, purpose,
+      candidates: r.ambiguous.candidates,
+    });
+    return {
+      refused: true, kind: 'ambiguous', command: verdict.command,
+      candidates: r.ambiguous.candidates,
+      reason: ambiguityQuestion(raw, verdict.command, r.ambiguous),
+    };
+  }
+  const runs = r.runs || [];
+  if (r.multi) return { ok: true, multi: true, command: verdict.command, runs, note: r.note };
+  const one = runs[0];
+  // This conversation is now working on THIS box: a follow-up that names no
+  // device lands here instead of starting the guessing game over.
+  if (one) rememberDevice(one.target.hostname);
+  return { ok: true, command: verdict.command, target: one.target, note: r.note, body: one.body, deviceOk: one.ok };
+}
+
+// ── Conversation memory + the parked question ───────────────────────────────
+// Scope: ONE chat conversation (the id the surface sends with the command).
+// Never global, never shared between operators, never persisted — a device the
+// operator settled on in one conversation must not silently steer another.
+const deviceMemory = new Map();   // conversationId -> hostname
+const pendingChoice = new Map();  // conversationId -> parked request awaiting a pick
+
+function conversationId() {
+  try { return (ctx && typeof ctx.conversationId === 'function' && ctx.conversationId()) || 'default'; }
+  catch (e) { return 'default'; }
+}
+function rememberDevice(hostname) { if (hostname) deviceMemory.set(conversationId(), String(hostname)); }
+function rememberedDevice() { return deviceMemory.get(conversationId()) || null; }
+function forgetConversation() {
+  deviceMemory.delete(conversationId());
+  pendingChoice.delete(conversationId());
+}
+function rememberPendingChoice(p) { pendingChoice.set(conversationId(), { ...p, at: Date.now() }); }
+function pendingChoiceNow() { return pendingChoice.get(conversationId()) || null; }
+
+// The question itself. Built here, in the choke point, so every surface — direct
+// chat, an @mention, a Jarvis delegation — asks the SAME question with the SAME
+// real candidate list, and none of them can paraphrase the options away.
+function candidateLine(c) {
+  return `• ${c.hostname} — ${c.ip || 'mgmt IP not reported'} — ${c.reachability || 'reachability not reported'}`;
+}
+function ambiguityQuestion(raw, command, amb) {
+  const list = amb.candidates || [];
+  const names = list.map((c) => c.hostname);
+  return `Which device? I ran nothing.\n${RULE}\n` +
+    `You asked: "${String(raw).slice(0, 140)}"\n` +
+    `${amb.why} I am not going to pick one for you and pass its output off as the answer.\n\n` +
+    `Live from ${catalyst.label} (${catalyst.host}) just now:\n` +
+    `${list.map(candidateLine).join('\n')}\n\n` +
+    `Reply with a name ("${names[0] || 'sw1'}"), its number ("2"), or "all" to run it on every reachable one. ` +
+    `"${command}" is ready to go — nothing has been sent to any device yet.`;
 }
 
 // Plain-words rendering of a choke-point result. Shared by every caller so the
@@ -438,10 +529,20 @@ function cliResultText(res, raw) {
         `. Nothing was sent to any device, and I did NOT run something else in its place.`;
     }
     if (res.kind === 'guardrail') return `${res.reason} Nothing was sent to any device.`;
-    if (res.kind === 'unknown-device' || res.kind === 'multi-device') return res.reason;
+    // The ambiguity question travels VERBATIM into a Jarvis finding, so the
+    // operator sees the real candidate list rather than a paraphrase of it.
+    if (res.kind === 'unknown-device' || res.kind === 'multi-device' || res.kind === 'ambiguous') return res.reason;
     return (res.note ? `${res.note} ` : '') +
       `I could not find a read command in that, so I ran nothing — I will not answer a different ` +
       `question than the one you asked. I can run ${READ_VERBS.join(' / ')} against real kit.`;
+  }
+  if (res.multi) {
+    return `You asked for every device, so I ran "${res.command}" on each reachable one via ` +
+      `${catalyst.label} Command Runner — real output per box, labelled:\n` +
+      res.runs.map((r) =>
+        `── ${r.target.hostname} (${r.target.ip}) ──\n${r.body}` +
+        (r.ok === false ? `\n(The device rejected the command — real output above, nothing invented.)` : '')
+      ).join('\n\n');
   }
   return `Ran "${res.command}" live on ${res.target.hostname} (${res.target.ip}, ${res.target.platform}) ` +
     `via ${catalyst.label} Command Runner` + (res.note ? ` — ${res.note}` : '') + `:\n${res.body}\n` +
@@ -497,42 +598,216 @@ function namedDeviceIn(text) {
   return hits.length ? hits[0] : null;
 }
 
-// Resolve the named device against the LIVE inventory. Honest on every miss:
-// an unknown name is refused with the names that do exist, an unreachable box is
-// refused as unreachable — never silently swapped for a different device.
-// With nothing named, the first reachable device is used and SAYS so.
-function resolveTargetDevice(devices, named) {
+// "run it on all of them" / "on every switch" / a bare "all" as the answer to
+// the question below. Only an explicit ALL counts — "the switches" is vague and
+// must be asked about, not silently expanded to the whole estate.
+const ALL_DEVICES = /\b(?:on\s+)?(?:all|every|each)\s+(?:of\s+)?(?:the\s+|them\b|those\s+)?(?:reachable\s+)?(?:devices?|switches|switch|boxes|box|kit|of\s+them)?\b/i;
+function wantsAllDevices(text) {
+  const t = String(text || '').trim().toLowerCase();
+  if (/^(all|all of them|all devices|all switches|every one|everyone|each of them|both)[.!]?$/.test(t)) return true;
+  if (/\b(?:on|for|across)\s+(?:all|every|each)\b/.test(t)) return true;
+  return /\b(?:all|every|each)\s+(?:of\s+the\s+)?(?:the\s+)?(?:devices?|switches|boxes)\b/.test(t);
+}
+
+// A LOOSE device pointer — the thing the strict namedDevicesIn() cannot see
+// because it carries no digit: "on sw", "of core", "on the switches". This is
+// exactly the shape that used to fall through to "no device named → first
+// reachable". It is not an answer; it is the reason to ask.
+// Generic English is NOT a pointer: "on the switches" names no box, and is
+// handled by the same "several candidates → ask" branch as naming nothing.
+const HINT_MENTION = /\b(?:on|of|from|against|for)\s+(?:the\s+)?(?:device\s+|switch\s+|router\s+|host\s+|box\s+)?([a-z][a-z0-9_.-]*)\b/i;
+const GENERIC_WORDS = new Set([
+  'the', 'a', 'an', 'it', 'them', 'they', 'this', 'that', 'those', 'these', 'device', 'devices',
+  'switch', 'switches', 'router', 'routers', 'host', 'hosts', 'box', 'boxes', 'kit', 'gear',
+  'network', 'fabric', 'campus', 'estate', 'everything', 'all', 'each', 'every', 'both',
+  'me', 'us', 'my', 'our', 'please', 'now', 'again', 'live', 'production', 'prod',
+]);
+function deviceHintIn(text) {
+  const m = HINT_MENTION.exec(String(text || ''));
+  if (!m) return null;
+  const tok = m[1].toLowerCase();
+  if (GENERIC_WORDS.has(tok)) return null;
+  return tok;
+}
+
+const hostOf = (d) => String(d.hostname || '').toLowerCase();
+const shortOf = (d) => hostOf(d).split('.')[0];
+const ipOf = (d) => String(d.ip || '').toLowerCase();
+function candidatesOf(list) {
+  return list.map((d) => ({ hostname: d.hostname, ip: d.ip, reachability: d.reachability }));
+}
+
+// Resolve what the operator pointed at against the LIVE inventory.
+//
+// Honest on every outcome:
+//   • exactly one candidate  → run it (that is not a guess, it is the answer)
+//   • no candidate           → the "no such device" refusal, with the real names
+//   • several candidates     → { ambiguous } — the caller asks and runs NOTHING
+//   • "all"                  → every reachable box, each output labelled
+// It NEVER falls back to "the first reachable one": the operator asked about a
+// device, and answering with a different one is wrong even when you admit it.
+function resolveTargetDevice(devices, named, opts) {
   const list = Array.isArray(devices) ? devices : [];
-  if (named) {
-    const want = String(named).toLowerCase();
-    const match = list.find((d) => {
-      const host = String(d.hostname || '').toLowerCase();
-      return host === want || host.split('.')[0] === want || String(d.ip || '').toLowerCase() === want;
-    });
-    if (!match) {
+  const { hint, remembered, wantAll } = opts || {};
+  const reachable = list.filter((d) => d.reachability === 'Reachable');
+
+  if (wantAll) {
+    if (!reachable.length) {
       return { error:
-        `There is no device called "${named}" in the live inventory, so I ran nothing. ` +
+        `You asked for every device, but Catalyst Center (${catalyst.host}) reports none of them reachable ` +
+        `right now (${list.map((d) => `${d.hostname} ${d.reachability}`).join(', ') || 'no devices at all'}), so I ran nothing.` };
+    }
+    return { all: reachable, note: `you said "all", so I ran it on each reachable device in turn` };
+  }
+
+  const want = named ? String(named).toLowerCase() : (hint || remembered || null);
+  const fromMemory = !named && !hint && Boolean(remembered);
+
+  if (want) {
+    const exact = list.find((d) => hostOf(d) === want || shortOf(d) === want || ipOf(d) === want);
+    const matches = exact ? [exact]
+      : list.filter((d) => shortOf(d).startsWith(want) || hostOf(d).startsWith(want) || ipOf(d).startsWith(want));
+
+    if (!matches.length) {
+      return { error:
+        `There is no device called "${want}" in the live inventory, so I ran nothing. ` +
         `Catalyst Center (${catalyst.host}) currently knows: ` +
         `${list.map((d) => `${d.hostname} (${d.ip})`).join(', ') || 'no devices at all'}. ` +
         `I will not run your command on a different box and pass it off as the answer.` };
     }
+    if (matches.length > 1) {
+      return { ambiguous: {
+        candidates: candidatesOf(matches),
+        why: `"${want}" matches ${matches.length} devices in the live inventory, not one.`,
+      } };
+    }
+    const match = matches[0];
     if (match.reachability !== 'Reachable') {
       return { error:
         `${match.hostname} (${match.ip}) is in the inventory but Catalyst Center reports it as ` +
         `"${match.reachability}", so I ran nothing. No output is better than another device's output.` };
     }
-    return { target: match, note: `the device you named` };
+    return { target: match, note: fromMemory
+      ? `you named no device, so I used ${match.hostname} — the box you picked earlier in this conversation. Name another and I will switch.`
+      : exact ? `the device you named`
+      : `the only device in the inventory matching "${want}"` };
   }
-  const target = list.find((d) => d.reachability === 'Reachable');
-  if (!target) throw new Error('no reachable device to read from');
-  return { target, note: `you named no device, so I used the first reachable one` };
+
+  // Nothing named, nothing remembered. One reachable box can serve the ask
+  // unambiguously; more than one cannot, and picking is guessing.
+  if (!reachable.length) {
+    return { error:
+      `You named no device, and Catalyst Center (${catalyst.host}) reports nothing reachable right now ` +
+      `(${list.map((d) => `${d.hostname} ${d.reachability}`).join(', ') || 'no devices at all'}), so I ran nothing.` };
+  }
+  if (reachable.length === 1) {
+    return { target: reachable[0], note: `you named no device, and ${reachable[0].hostname} is the only reachable one — no ambiguity to resolve` };
+  }
+  return { ambiguous: {
+    candidates: candidatesOf(reachable),
+    why: `You did not name a device, and ${reachable.length} reachable ones could serve that command.`,
+  } };
+}
+
+// ── The operator answers the question ───────────────────────────────────────
+// Called on EVERY message, on every surface, before anything else routes it. It
+// does something only when THIS conversation has a parked question. That is what
+// makes the ask worth asking: "sw2" finishes the original command instead of
+// being read as a fresh, meaningless request.
+//
+// Returns false when the message is not an answer — the caller then routes it
+// normally, so an ordinary sentence is never swallowed.
+const ORDINAL_WORDS = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, last: -1 };
+
+function resumeClarification(agentId, message) {
+  const p = pendingChoiceNow();
+  if (!p) return false;
+  const text = String(message || '').trim();
+  const t = text.toLowerCase().replace(/[.!?]+$/, '');
+  const cands = p.candidates || [];
+
+  // "forget it" — drop the parked command, run nothing.
+  if (/^(cancel|never ?mind|forget it|forget that|drop it|stop|no thanks|nothing)$/.test(t)) {
+    pendingChoice.delete(conversationId());
+    say(p.agentId, `👍 Dropped it — "${p.command}" was never sent to any device.`);
+    ctx.updateAgentStatus(p.agentId, 'idle', 'Operator cancelled — ran nothing');
+    return true;
+  }
+
+  // "all" → run it on every reachable box, each output labelled.
+  if (wantsAllDevices(t)) {
+    pendingChoice.delete(conversationId());
+    configKeeper(p.agentId, p.request, { allDevices: true });
+    return true;
+  }
+
+  // A name or a management IP from the list we just showed.
+  const byName = cands.find((c) => {
+    const h = String(c.hostname || '').toLowerCase();
+    const short = h.split('.')[0];
+    return new RegExp(`(^|[^a-z0-9])(${escapeRe(h)}|${escapeRe(short)}|${escapeRe(String(c.ip || 'no-ip'))})([^a-z0-9]|$)`, 'i').test(t);
+  });
+  if (byName) return pickCandidate(p, byName);
+
+  // "2", "#2", "number 2", "the second one", "the last one".
+  const num = /^(?:the\s+)?(?:#|no\.?\s*|number\s*|option\s*)?(\d{1,2})(?:st|nd|rd|th)?(?:\s+one)?$/.exec(t);
+  const wordOrd = Object.keys(ORDINAL_WORDS).find((w) => new RegExp(`^(?:the\\s+)?${w}(?:\\s+one)?$`).test(t));
+  let idx = null;
+  if (num) idx = Number(num[1]);
+  else if (wordOrd) idx = ORDINAL_WORDS[wordOrd] === -1 ? cands.length : ORDINAL_WORDS[wordOrd];
+  if (idx != null) {
+    if (idx >= 1 && idx <= cands.length) return pickCandidate(p, cands[idx - 1]);
+    say(p.agentId,
+      `🤔 There is no option ${idx} — I listed ${cands.length}. I ran nothing.\n${RULE}\n` +
+      `${cands.map(candidateLine).join('\n')}\n\nReply with a name, a number 1–${cands.length}, or "all".`);
+    return true;
+  }
+
+  // Not an answer, but a whole new request (a real command, or a full sentence)
+  // → let go of the parked question and route it normally. Never swallow it.
+  if (isDeviceCliRequest(text) || t.split(/\s+/).length > 6) {
+    pendingChoice.delete(conversationId());
+    return false;
+  }
+
+  // Short and unclear ("the blue one", "yes") → ask again, with the same list.
+  say(p.agentId,
+    `🤔 I could not tell which device "${text.slice(0, 60)}" means, so I still ran nothing.\n${RULE}\n` +
+    `${cands.map(candidateLine).join('\n')}\n\n` +
+    `Reply with a name ("${cands[0] ? cands[0].hostname : 'sw1'}"), a number 1–${cands.length}, or "all". ` +
+    `"${p.command}" is still waiting.`);
+  return true;
+}
+
+function pickCandidate(p, c) {
+  pendingChoice.delete(conversationId());
+  rememberDevice(c.hostname);
+  say(p.agentId, `👍 ${c.hostname} it is — running "${p.command}" there now. I will keep using ${c.hostname} for follow-ups until you name another.`);
+  configKeeper(p.agentId, p.request, { device: c.hostname });
+  return true;
+}
+
+function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// "forget the device" / "new conversation" — a deliberate reset the operator can
+// ask for out loud, so a remembered box is never stuck to them.
+const FORGET = /^(?:forget (?:the )?(?:device|it|that|sw\w*)|new conversation|start over|reset (?:the )?(?:context|conversation|device))$/i;
+function maybeForget(agentId, message) {
+  if (!FORGET.test(String(message || '').trim())) return false;
+  const had = rememberedDevice();
+  forgetConversation();
+  say(agentId, had
+    ? `👍 Forgotten — I am no longer assuming ${had}. Name a device with your next command, or I will ask.`
+    : `👍 Nothing to forget — I was not holding a device for this conversation.`);
+  return true;
 }
 
 // ── Config-Keeper — real show output via Catalyst Center Command Runner ──────
 // The direct chat path. All the safety lives in executeDeviceCli above; this
 // function is presentation plus the task board.
-async function configKeeper(agentId, command) {
+async function configKeeper(agentId, command, opts) {
   const raw = String(command || '');
+  const { device, allDevices } = opts || {};
   const agentName = (ctx.agents[agentId] && ctx.agents[agentId].name) || agentId;
   const taskTitle = 'Config read';
 
@@ -541,7 +816,7 @@ async function configKeeper(agentId, command) {
 
   try {
     const res = await executeDeviceCli({
-      agentId, request: raw, announce: true,
+      agentId, request: raw, announce: true, device, all: allDevices,
       purpose: `operator asked: "${raw.slice(0, 80)}"`,
     });
 
@@ -564,6 +839,13 @@ async function configKeeper(agentId, command) {
         `Nothing was sent to any device. This squad is read-only against real kit by design — ` +
         `I can run ${READ_VERBS.join(' / ')} and nothing else.`);
       ctx.updateAgentStatus(agentId, 'idle', 'Blocked a non-read-only command');
+    } else if (res.refused && res.kind === 'ambiguous') {
+      // AMBIGUITY → ASK. Nothing was submitted to Command Runner; the question
+      // carries the real candidate list and the parked command.
+      say(agentId, `🤔 ${res.reason}`);
+      ctx.appendToActivityLog(
+        `[${new Date().toISOString()}] [${agentName}] Ambiguous target — asked which device, ran nothing: "${raw.slice(0, 60)}"\n`);
+      ctx.updateAgentStatus(agentId, 'idle', 'Asked which device — ran nothing');
     } else if (res.refused && (res.kind === 'unknown-device' || res.kind === 'multi-device')) {
       say(agentId, `🛑 I did not run that.\n${RULE}\n${res.reason}`);
       ctx.updateAgentStatus(agentId, 'idle',
@@ -575,12 +857,35 @@ async function configKeeper(agentId, command) {
         `and I am not going to invent a result. Approve it in the approval panel and ask again to run it for real.`);
       ctx.appendToActivityLog(`[${new Date().toISOString()}] [${agentName}] ${taskTitle} DENIED by operator — ran nothing\n`);
       ctx.updateAgentStatus(agentId, 'idle', 'Read denied — ran nothing');
+    } else if (res.multi) {
+      // "all" — one labelled block per box, so no output can be mistaken for
+      // another device's, and one share record per real run.
+      for (const r of res.runs) {
+        say(agentId,
+          `📡 ${r.target.hostname} — ${res.command}\n${RULE}\n${r.body}\n${RULE}\n` +
+          (r.ok === false
+            ? `⚠️ ${r.target.hostname} rejected that command. Real output above — nothing invented, no configuration sent.`
+            : `Real output, read live from ${r.target.hostname} (${r.target.ip}). No configuration was sent.`));
+        session.emitCommandShare({
+          agent: agentId, agentName, tier: null,
+          purpose: `read "${res.command}" on ${r.target.hostname}`,
+          command: res.command, raw: r.body,
+          reasoning: `Operator asked for every device: "${raw.slice(0, 100)}". Parsed to the read-only CLI ` +
+            `"${res.command}" (guardrail passed) and ran it on ${r.target.hostname} via Catalyst Center Command Runner.`,
+          conclusion: r.ok === false
+            ? `${r.target.hostname} rejected "${res.command}" — real output above, nothing invented, no configuration sent.`
+            : `Real "${res.command}" output read live from ${r.target.hostname} (${r.target.ip}). Read-only; no configuration sent.`,
+          ok: r.ok !== false,
+        });
+      }
+      ctx.updateAgentStatus(agentId, 'idle', `${taskTitle} complete on ${res.runs.length} devices (live data)`);
     } else {
       say(agentId,
         `📡 ${res.target.hostname} — ${res.command}\n${RULE}\n${res.body}\n${RULE}\n` +
         (res.deviceOk === false
           ? `⚠️ The device rejected that command. Real output above — nothing was invented, and no configuration was sent.`
-          : `Real output, read live from ${res.target.hostname} (${res.target.ip}). No configuration was sent.`));
+          : `Real output, read live from ${res.target.hostname} (${res.target.ip}). No configuration was sent.`) +
+        (res.note ? `\nWhy this device: ${res.note}` : ''));
 
       // ONE clean command_share for this direct read: the exact CLI command the
       // device ran, its real raw output, why it ran, and what it means. Emitted
@@ -1436,4 +1741,8 @@ module.exports = {
   canAnswer, cannotAnswer, CAPABILITIES,
   isDeviceCliRequest, runDeviceCli,
   debateContribution, gatherForJarvis,
+  // Ambiguity → ask, never assume: the parked-question resume + the explicit
+  // "forget the device" reset. server.js calls these BEFORE it routes anything,
+  // so both surfaces (Jarvis and a direct @mention) inherit the same behaviour.
+  resumeClarification, maybeForget,
 };
