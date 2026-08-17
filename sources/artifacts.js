@@ -239,6 +239,9 @@ function buildRecord(triage) {
     id: t.id,
     incidentId: t.incidentId || null,        // issue 11 — stable operator-facing id
     reTriageOf: t.reTriageOf || null,         // set when this run is a re-triage
+    // ── Wave 2: alert-driven ingestion — how the triage was opened + the alert ──
+    source: t.source || 'operator',           // 'operator' | 'alert'
+    alert: t.alert || null,                    // originating alert (secret-scrubbed raw), null on operator path
     severity: t.severity,
     title: t.title,
     description: t.description,

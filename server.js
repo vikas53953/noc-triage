@@ -1918,6 +1918,43 @@ app.post('/api/triage', (req, res) => {
   res.json({ triageId: result.triageId });
 });
 
+// ── Alert-driven ingestion (Wave 2) ─────────────────────────────────────────
+// POST an inbound monitoring alert (vManage / Catalyst / SNMP / Splunk-style) and
+// AUTO-OPEN a triage from it. The alert is normalized, its severity mapped onto
+// P1/P2/P3, and a triage description derived DETERMINISTICALLY (no LLM). A
+// malformed payload, or an alert that names nothing real, is refused with a clean
+// 422 — no phantom triage. Write-rate-limited via the shared /api/ budget.
+//
+// Contract: on success returns { triageId, incidentId, severity, source:'alert',
+// alert:{...} }. The bridge then streams triage_opened (data.source='alert',
+// data.alert={...}) + an "Alert-triggered triage" activity_new line.
+//
+// A `sample:true` flag substitutes a clearly-labelled SAMPLE alert (same as the
+// dedicated /api/alerts/sample endpoint) so the flow can be tested without a real
+// inbound — the opened triage is real, only the alert is marked sample:true.
+app.post('/api/alerts', (req, res) => {
+  const body = req.body || {};
+  const useSample = body.sample === true;
+  const payload = useSample ? triage.sampleAlert() : body;
+  const result = triage.startTriageFromAlert(payload, { sample: useSample });
+  if (result.error) {
+    // Both 'malformed' and 'nonsense' are the operator's/monitor's bad input → 422.
+    return res.status(422).json({ error: result.reason || 'Alert could not be ingested.' });
+  }
+  res.json(result);
+});
+
+// DEV helper: post a realistic SAMPLE alert to watch the alert→triage flow end to
+// end without a real inbound. The opened triage is REAL (there is no fake path) —
+// the alert is just marked sample:true so it is never mistaken for production.
+app.post('/api/alerts/sample', (req, res) => {
+  const result = triage.startTriageFromAlert(triage.sampleAlert(), { sample: true });
+  if (result.error) {
+    return res.status(422).json({ error: result.reason || 'Sample alert could not be ingested.' });
+  }
+  res.json({ ...result, note: 'This is a clearly-labelled SAMPLE alert (sample:true). It opened a real triage for testing.' });
+});
+
 // List of recent triages (id, severity, title, status, openedAt).
 app.get('/api/triage', (req, res) => {
   res.json(triage.listTriages());
