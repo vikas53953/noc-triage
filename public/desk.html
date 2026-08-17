@@ -233,6 +233,8 @@ button,input,select,textarea{font-family:inherit}
 }
 .suggest button:hover{border-color:var(--accent);color:var(--ink)}
 .suggest button[disabled]{opacity:.5;cursor:not-allowed;border-style:dashed}
+/* no operator-voiced example on this ability — the chip fills nothing, and says so */
+.suggest button[data-noexample]{border-style:dashed;opacity:.8}
 .askbar{
   display:flex;gap:.5rem;padding:.6rem .7rem;border-top:1px solid var(--line);
   flex-shrink:0;background:var(--panel);align-items:center;flex-wrap:wrap
@@ -873,15 +875,24 @@ function renderCaps(){
         return esc(a.label || a.key) + ' — ' + esc(a.reason || 'no reason given');
       }).join(' · ') + '</div>'
     : '';
+  /* A chip prefills the ability's `example` — an OPERATOR-VOICED sample ask.
+     `plain` is Jarvis's own description of itself; putting that in the box would
+     send Jarvis's words to Jarvis as if the operator had typed them. So it is
+     used only as the hover explanation. No example -> the chip fills nothing and
+     just puts the cursor in the box, so whatever gets sent is the operator's. */
   sug.innerHTML = av.map(function(a){
-    return '<button type="button" data-cap="' + esc(a.plain || a.label || a.key) + '" title="' +
-      esc(a.plain || '') + '">' + esc(a.label || a.key) + '</button>';
+    var ex = (typeof a.example === 'string') ? a.example.trim() : '';
+    var tip = ex ? (a.plain || a.label || a.key)
+                 : ((a.plain ? a.plain + ' — ' : '') + 'no sample ask given, type your own');
+    return '<button type="button" data-cap="' + esc(ex) + '"' + (ex ? '' : ' data-noexample="1"') +
+      ' title="' + esc(tip) + '">' + esc(a.label || a.key) + '</button>';
   }).join('');
 }
 $('suggest').addEventListener('click', function(e){
   var b = e.target.closest && e.target.closest('button[data-cap]');
   if(!b) return;
-  $('ask').value = b.getAttribute('data-cap');
+  var ex = b.getAttribute('data-cap');
+  if(ex) $('ask').value = ex;   // no example -> leave the box exactly as the operator left it
   $('ask').focus();
 });
 
