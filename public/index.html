@@ -825,6 +825,65 @@ pre.cli{
 .inc-actions .mini-btn.rerun:hover{background:rgba(139,92,246,.1)}
 .inc-actions .mini-btn:disabled{opacity:.55;cursor:default}
 
+/* ---------- SLA countdown (bridge header) ---------- */
+/* hidden must win over the display:flex on these widgets (same guard the
+   approval prompt / mention popover already use). */
+.sla[hidden],.roles-bar[hidden],.ack-stamp[hidden]{display:none}
+.sla{display:flex;align-items:center;gap:.4rem;font-size:.72rem;color:var(--ink2);
+  padding:.2rem .5rem;border-radius:7px;border:1px solid transparent}
+.sla .sla-lbl{font-size:.58rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3)}
+.sla .sla-val{font-family:var(--mono);font-size:.82rem;font-weight:800;font-variant-numeric:tabular-nums;color:var(--info)}
+.sla .sla-dot{width:7px;height:7px;border-radius:50%;background:var(--info);animation:pulse 1.6s infinite}
+/* getting close to the target — amber warning band */
+.sla.warn{background:var(--warn-bg);border-color:var(--warn)}
+.sla.warn .sla-val{color:var(--warn)} .sla.warn .sla-dot{background:var(--warn)}
+/* past the target — clear breached state */
+.sla.breach{background:var(--bad-bg);border-color:var(--bad)}
+.sla.breach .sla-val,.sla.breach .sla-lbl{color:var(--bad)}
+.sla.breach .sla-dot{background:var(--bad);animation:pulse 1s infinite}
+
+/* ---------- Acknowledge action + MTTA stamp ---------- */
+.ack-btn{font:inherit;font-size:.68rem;font-weight:800;padding:.3rem .6rem;border-radius:7px;
+  border:1px solid var(--warn);background:var(--warn-bg);color:var(--warn);cursor:pointer;white-space:nowrap}
+.ack-btn:hover{background:var(--warn);color:#fff}
+.ack-btn:disabled{opacity:.55;cursor:default}
+.ack-stamp{display:flex;align-items:center;gap:.4rem;font-size:.7rem;color:var(--ink2)}
+.ack-stamp .ack-check{color:var(--ok);font-weight:800}
+.ack-stamp .ack-mtta{font-family:var(--mono);font-weight:800;color:var(--ok);font-variant-numeric:tabular-nums}
+
+/* ---------- Bridge roles bar ---------- */
+.roles-bar{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;
+  padding:.5rem .75rem;border-bottom:1px solid var(--line);background:var(--card);flex-shrink:0}
+.roles-title{font-size:.58rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3);display:flex;align-items:center;gap:.3rem}
+.role-field{display:flex;align-items:center;gap:.35rem}
+.role-lbl{font-size:.58rem;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--ink3);white-space:nowrap}
+.role-input{font:inherit;font-size:.72rem;color:var(--ink);background:var(--panel);
+  border:1px solid var(--line);border-radius:6px;padding:.24rem .45rem;width:8.4rem}
+.role-input::placeholder{color:var(--ink3)}
+.role-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(59,130,246,.18)}
+.role-input.owner{border-color:rgba(59,130,246,.45)}
+.handoff-btn{font:inherit;font-size:.62rem;font-weight:700;padding:.24rem .5rem;border-radius:6px;
+  border:1px solid var(--line);background:transparent;color:var(--ink2);cursor:pointer;white-space:nowrap}
+.handoff-btn:hover{border-color:var(--accent);color:var(--accent)}
+.joiners-wrap{display:flex;align-items:center;gap:.3rem;flex-wrap:wrap}
+.joiner-chip{display:inline-flex;align-items:center;gap:.35rem;font-size:.68rem;
+  background:var(--hover);border:1px solid var(--line);border-radius:999px;padding:.16rem .2rem .16rem .55rem;color:var(--ink)}
+.joiner-x{cursor:pointer;color:var(--ink3);font-weight:800;border:none;background:none;
+  font-size:.85rem;line-height:1;padding:0 .25rem;border-radius:50%}
+.joiner-x:hover{color:var(--bad)}
+.joiner-add{width:6.5rem}
+.roles-saved{font-size:.6rem;font-weight:700;color:var(--ok);opacity:0;transition:opacity .2s}
+.roles-saved.on{opacity:1}
+
+/* ---------- Post-incident lifecycle roll-up ---------- */
+.lifecycle-rollup{margin:.6rem;padding:.7rem .8rem;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.lr-title{font-size:.6rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3);margin-bottom:.55rem;display:flex;align-items:center;gap:.35rem}
+.lr-grid{display:flex;gap:.5rem;flex-wrap:wrap}
+.lr-tile{flex:1 1 5rem;min-width:5rem;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:.45rem .55rem;text-align:center}
+.lr-lbl{font-size:.56rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3);margin-bottom:.2rem}
+.lr-val{font-family:var(--mono);font-size:.82rem;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums}
+.lr-tile.total .lr-val{color:var(--accent)}
+
 /* ---------- symptom scope bar (why faults are counted / excluded) ---------- */
 .scope-bar{
   margin:.6rem .7rem 0;border:1px solid var(--line);border-radius:10px;background:var(--card);
@@ -1096,12 +1155,37 @@ pre.cli{
           <span class="inc-id" id="incId">INC-—</span>
           <span class="inc-retag" id="incRetag" hidden>re-triage</span>
           <span class="mttr running" id="mttr" title="Open → verdict (time to diagnose)"><span class="mttr-dot"></span><span class="mttr-lbl">Time to verdict</span><span class="mttr-val" id="mttrVal">0s</span></span>
+          <span class="sla" id="sla" hidden title="Live countdown to the severity SLA target"><span class="sla-dot"></span><span class="sla-lbl" id="slaLbl">SLA</span><span class="sla-val" id="slaVal">—</span></span>
+          <button class="ack-btn" id="ackBtn" hidden title="Acknowledge this incident — stamps the response time (MTTA)">Acknowledge</button>
+          <span class="ack-stamp" id="ackStamp" hidden><span class="ack-check">✓</span><span id="ackText">Acked</span></span>
           <span class="inc-actions">
             <button class="mini-btn rerun" id="rerunBtn" title="Re-run this triage and show what changed">🔁 Re-run this triage</button>
             <button class="mini-btn" id="snBtn" title="Export a ServiceNow-ready summary">📤 Export / ServiceNow</button>
           </span>
         </div>
         <div class="strip" id="strip"></div>
+        <div class="roles-bar" id="rolesBar" hidden>
+          <span class="roles-title">👥 Bridge roles</span>
+          <div class="role-field">
+            <span class="role-lbl">Commander</span>
+            <input class="role-input" id="roleCommander" data-role="incidentCommander" placeholder="unassigned" autocomplete="off">
+          </div>
+          <div class="role-field">
+            <span class="role-lbl">Scribe</span>
+            <input class="role-input" id="roleScribe" data-role="scribe" placeholder="unassigned" autocomplete="off">
+          </div>
+          <div class="role-field">
+            <span class="role-lbl">Owner</span>
+            <input class="role-input owner" id="roleOwner" data-role="currentOwner" placeholder="unassigned" autocomplete="off">
+            <button class="handoff-btn" id="handoffBtn" title="Hand off — reassign the current owner">Hand off →</button>
+          </div>
+          <div class="role-field">
+            <span class="role-lbl">Joiners</span>
+            <div class="joiners-wrap" id="joinersWrap"></div>
+            <input class="role-input joiner-add" id="joinerAdd" placeholder="add…" autocomplete="off">
+          </div>
+          <span class="roles-saved" id="rolesSaved">saved ✓</span>
+        </div>
         <div class="split">
 
           <!-- bridge -->
@@ -1131,6 +1215,7 @@ pre.cli{
                 <span id="verdictSub">Cards fill in as each engineer reports.</span>
               </div>
             </div>
+            <div class="lifecycle-rollup" id="lifecycleRollup" hidden></div>
             <div class="board-grid" id="board"></div>
           </div>
 
@@ -1501,6 +1586,216 @@ function settleMttr(mttr){
   }
 }
 
+/* ============================================================
+   BRIDGE ROLES · ACK/MTTA · SLA COUNTDOWN · LIFECYCLE ROLL-UP
+   (Wave 1 — build to the pinned backend contract.)
+   WS:  triage_roles {triageId,roles} · triage_ack {triageId,ackAt,mttaMs}
+   REST: POST /api/triage/:id/roles · POST /api/triage/:id/ack
+   open: triage_opened.data.sla={targetMs,openedAt} + .roles
+   record: lifecycle{openedAt,ackAt,verdictAt,closedAt,mttaHuman,
+           timeToVerdictHuman,totalHuman}
+   Every widget degrades gracefully: a missing field just hides its widget.
+   ============================================================ */
+
+/* mm:ss for SLA targets / countdowns (distinct from fmtDur's "2m 10s"). */
+function fmtMMSS(ms){
+  if(ms == null || !isFinite(ms)) return '—';
+  var neg = ms < 0; ms = Math.abs(ms);
+  var s = Math.floor(ms/1000), m = Math.floor(s/60), rs = s % 60;
+  return (neg?'':'')+m+':'+pad2(rs);
+}
+
+/* ---------- roles ---------- */
+var ROLE_INPUTS = { incidentCommander:'roleCommander', scribe:'roleScribe', currentOwner:'roleOwner' };
+var joinersState = [];
+function readRole(roles, keys){
+  if(!roles) return '';
+  for(var i=0;i<keys.length;i++){ if(roles[keys[i]] != null) return String(roles[keys[i]]); }
+  return '';
+}
+/* Paint the roles bar from a roles object. Never clobber a field the operator is
+   mid-edit in (respects focus), so an incoming WS echo doesn't fight typing. */
+function applyRoles(roles){
+  var bar = $('rolesBar'); if(!bar) return;
+  bar.hidden = false;
+  roles = roles || {};
+  var map = {
+    roleCommander: readRole(roles, ['incidentCommander','commander','ic']),
+    roleScribe:    readRole(roles, ['scribe']),
+    roleOwner:     readRole(roles, ['currentOwner','owner'])
+  };
+  Object.keys(map).forEach(function(id){
+    var el = $(id); if(!el) return;
+    if(document.activeElement === el) return;   // don't overwrite live typing
+    el.value = map[id];
+  });
+  var j = roles.joiners;
+  if(Array.isArray(j)){ joinersState = j.map(String); renderJoiners(); }
+}
+function renderJoiners(){
+  var host = $('joinersWrap'); if(!host) return;
+  host.innerHTML = joinersState.map(function(name, i){
+    return '<span class="joiner-chip">'+escapeHtml(name)+
+      '<button class="joiner-x" data-i="'+i+'" title="Remove '+escapeHtml(name)+'">×</button></span>';
+  }).join('');
+}
+function flashRolesSaved(){
+  var s = $('rolesSaved'); if(!s) return;
+  s.classList.add('on');
+  clearTimeout(flashRolesSaved._t);
+  flashRolesSaved._t = setTimeout(function(){ s.classList.remove('on'); }, 1400);
+}
+/* POST only the changed field(s). Backend not merged yet → a 404/failed POST is
+   swallowed quietly (no console error); the local edit still stands. */
+function postRoles(partial){
+  if(DEMO || !currentTriageId) return;
+  fetch('/api/triage/'+encodeURIComponent(currentTriageId)+'/roles', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(partial)
+  }).then(function(r){ if(r.ok) flashRolesSaved(); }).catch(function(){ /* stays local */ });
+}
+function commitRoleInput(el){
+  var key = el.getAttribute('data-role'); if(!key) return;
+  var body = {}; body[key] = el.value.trim();
+  postRoles(body);
+}
+function wireRoles(){
+  Object.keys(ROLE_INPUTS).forEach(function(key){
+    var el = $(ROLE_INPUTS[key]); if(!el) return;
+    el.addEventListener('change', function(){ commitRoleInput(el); });
+    el.addEventListener('keydown', function(e){ if(e.key === 'Enter'){ el.blur(); } });
+  });
+  // Hand off — jump focus to Current Owner for a quick reassignment.
+  var ho = $('handoffBtn');
+  if(ho) ho.addEventListener('click', function(){
+    var o = $('roleOwner'); if(!o) return;
+    o.focus(); o.select();
+  });
+  // Joiners — add on Enter, remove via the chip ×.
+  var add = $('joinerAdd');
+  if(add) add.addEventListener('keydown', function(e){
+    if(e.key !== 'Enter') return;
+    var name = add.value.trim(); if(!name) return;
+    if(joinersState.indexOf(name) === -1){ joinersState.push(name); renderJoiners(); postRoles({ joiners: joinersState.slice() }); }
+    add.value = '';
+  });
+  var wrap = $('joinersWrap');
+  if(wrap) wrap.addEventListener('click', function(e){
+    var x = e.target.closest('.joiner-x'); if(!x) return;
+    var i = Number(x.getAttribute('data-i'));
+    if(i >= 0 && i < joinersState.length){ joinersState.splice(i,1); renderJoiners(); postRoles({ joiners: joinersState.slice() }); }
+  });
+}
+function resetRoles(){
+  joinersState = [];
+  ['roleCommander','roleScribe','roleOwner','joinerAdd'].forEach(function(id){ var el=$(id); if(el) el.value=''; });
+  renderJoiners();
+  var bar = $('rolesBar'); if(bar) bar.hidden = true;
+}
+function handleRoles(d){
+  if(!d) return;
+  if(currentTriageId && d.triageId && d.triageId !== currentTriageId) return;
+  applyRoles(d.roles);
+}
+
+/* ---------- acknowledge + MTTA ---------- */
+var ackState = { acked:false };
+function showAckStamp(ackAt, mttaMs, mttaHuman){
+  var btn = $('ackBtn'), stamp = $('ackStamp'), txt = $('ackText');
+  if(btn) btn.hidden = true;
+  if(!stamp || !txt) return;
+  stamp.hidden = false;
+  var mtta = mttaHuman || (mttaMs != null ? fmtDur(mttaMs) : '—');
+  txt.innerHTML = 'Acked '+escapeHtml(tsClock(ackAt))+' · <span class="ack-mtta">MTTA '+escapeHtml(mtta)+'</span>';
+}
+function setAckState(a){
+  a = a || {};
+  if(a.acked || a.ackAt){
+    ackState = { acked:true, ackAt:a.ackAt, mttaMs:a.mttaMs };
+    showAckStamp(a.ackAt, a.mttaMs, a.mttaHuman);
+  } else {
+    ackState = { acked:false };
+    var btn = $('ackBtn'), stamp = $('ackStamp');
+    if(stamp) stamp.hidden = true;
+    if(btn){ btn.hidden = false; btn.disabled = false; }
+  }
+}
+function postAck(){
+  if(DEMO || !currentTriageId) return;
+  var btn = $('ackBtn'); if(btn) btn.disabled = true;
+  fetch('/api/triage/'+encodeURIComponent(currentTriageId)+'/ack', { method:'POST' })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){ if(d) setAckState({ acked:true, ackAt:d.ackAt, mttaMs:d.mttaMs, mttaHuman:d.mttaHuman }); else if(btn) btn.disabled = false; })
+    .catch(function(){ if(btn) btn.disabled = false; });
+}
+function handleAck(d){
+  if(!d) return;
+  if(currentTriageId && d.triageId && d.triageId !== currentTriageId) return;
+  setAckState({ acked:true, ackAt:d.ackAt, mttaMs:d.mttaMs, mttaHuman:d.mttaHuman });
+}
+(function wireAck(){ var b = $('ackBtn'); if(b) b.addEventListener('click', postAck); })();
+
+/* ---------- SLA countdown (bridge header) ---------- */
+var slaTick = null, slaTargetMs = null, slaOpenedMs = null;
+function stopSlaTick(){ if(slaTick){ clearInterval(slaTick); slaTick = null; } }
+function startSla(sla){
+  stopSlaTick();
+  var box = $('sla'); if(!box) return;
+  if(!sla || sla.targetMs == null){ box.hidden = true; return; }   // graceful hide
+  slaTargetMs = Number(sla.targetMs);
+  slaOpenedMs = sla.openedAt ? Date.parse(sla.openedAt) : Date.now();
+  if(!isFinite(slaOpenedMs)) slaOpenedMs = Date.now();
+  box.hidden = false;
+  var lbl = $('slaLbl');
+  if(lbl) lbl.textContent = (currentSeverity || '') + ' SLA ' + fmtMMSS(slaTargetMs);
+  function tick(){
+    var el = $('slaVal'); if(!el) return;
+    var elapsed = Date.now() - slaOpenedMs;
+    var remaining = slaTargetMs - elapsed;
+    if(remaining <= 0){
+      box.className = 'sla breach';
+      el.textContent = 'BREACHED +' + fmtMMSS(-remaining);
+    } else {
+      // Warn band inside the last 20% (min 60s) before the target.
+      var warnAt = Math.max(slaTargetMs * 0.2, 60000);
+      box.className = 'sla' + (remaining <= warnAt ? ' warn' : '');
+      el.textContent = fmtMMSS(remaining) + ' left';
+    }
+  }
+  tick();
+  slaTick = setInterval(tick, 1000);
+}
+
+/* ---------- post-incident lifecycle roll-up ---------- */
+function lrTile(label, val, mod){
+  return '<div class="lr-tile'+(mod?(' '+mod):'')+'"><div class="lr-lbl">'+escapeHtml(label)+
+    '</div><div class="lr-val">'+escapeHtml(val || '—')+'</div></div>';
+}
+function renderLifecycle(lc){
+  var box = $('lifecycleRollup'); if(!box) return;
+  if(!lc){ box.hidden = true; box.innerHTML = ''; return; }   // graceful hide
+  // ack→verdict→close durations, from human strings or derived from stamps.
+  function dur(aKey, bKey){
+    if(lc[aKey] == null || lc[bKey] == null) return null;
+    var a = Date.parse(lc[aKey]), b = Date.parse(lc[bKey]);
+    if(!isFinite(a) || !isFinite(b)) return null;
+    return fmtDur(b - a);
+  }
+  var mtta   = lc.mttaHuman || dur('openedAt','ackAt');
+  var toVerd = lc.timeToVerdictHuman || dur(lc.ackAt ? 'ackAt' : 'openedAt','verdictAt');
+  var toClose= dur('verdictAt','closedAt');
+  var total  = lc.totalHuman || dur('openedAt','closedAt');
+  box.hidden = false;
+  box.innerHTML =
+    '<div class="lr-title">🧭 Incident lifecycle · open → ack → verdict → close</div>'+
+    '<div class="lr-grid">'+
+      lrTile('Ack (MTTA)', mtta)+
+      lrTile('Ack → verdict', toVerd)+
+      lrTile('Verdict → close', toClose)+
+      lrTile('Total', total, 'total')+
+    '</div>';
+}
+
 /* ---------- theme toggle (persisted) ---------- */
 (function initTheme(){
   var saved = null;
@@ -1752,6 +2047,13 @@ function resetConsole(){
   var v = $('verdict'); v.className = 'verdict';
   $('verdictTitle').textContent = 'Waiting for the first sweep…';
   $('verdictSub').textContent = 'Cards fill in as each engineer reports.';
+  // Wave 1 widgets — clear roles, ack, SLA clock and the lifecycle roll-up.
+  resetRoles();
+  setAckState({});
+  var slaBox = $('sla'); if(slaBox){ stopSlaTick(); slaBox.hidden = true; }
+  var ackBtn = $('ackBtn'); if(ackBtn) ackBtn.hidden = true;
+  var ackStamp = $('ackStamp'); if(ackStamp) ackStamp.hidden = true;
+  renderLifecycle(null);
   clearBridge();
 }
 function clearBridge(){
@@ -1770,6 +2072,8 @@ $('closeTriageBtn').onclick = function(){
   triageLive = false;
   setBridgeInput(false);
   stopMttrTick();
+  stopSlaTick();
+  resetRoles();
   var ribbon = $('incRibbon'); if(ribbon) ribbon.hidden = true;
   currentTriageId = null;
   currentIncidentId = null;
@@ -2337,6 +2641,11 @@ function handleOpened(d){
   (d.staffed||[]).forEach(function(s){ markOnBridge(s.agent); });
   addReporterMsg(d.description, currentSeverity, d.openedAt);
   setBridgeInput(true);
+  // Wave 1 — bridge roles (operator-entered), acknowledge action, live SLA clock.
+  applyRoles(d.roles);            // shows the roles bar (empty if none yet)
+  setAckState(d.ack || {});       // ack button, or the stamp if already acked
+  startSla(d.sla);                // ticking countdown, or hidden if no SLA in the open
+  renderLifecycle(null);          // roll-up stays hidden until close
   pushActivity('NOC Triage', 'opened ' + currentSeverity + ' triage ' + (d.incidentId||'') + ' — "' + (d.title||'') + '"', tsClock(d.openedAt));
 }
 /* Symptom parse — the real window + scope the reads were filtered by, so the
@@ -2395,6 +2704,16 @@ function handleClosed(d){
   // shut. The backend idles the real agent status in parallel (per-triage).
   clearBridge();
   setBridgeInput(false);
+  stopSlaTick();   // the SLA clock stops when the bridge closes
+  // Post-incident roll-up: use the lifecycle on the close event if present, else
+  // pull the persisted record so the durations show even on an older close payload.
+  if(d && d.lifecycle){ renderLifecycle(d.lifecycle); }
+  else if(currentTriageId && !DEMO){
+    var id = currentTriageId;
+    fetch('/api/triage/'+encodeURIComponent(id)).then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(t){ if(t && t.lifecycle && id === currentTriageId) renderLifecycle(t.lifecycle); })
+      .catch(function(){ /* no record — roll-up stays hidden */ });
+  }
   pushActivity('NOC Triage', 'triage concluded — engineers back to idle', nowClock());
 }
 
@@ -2410,6 +2729,8 @@ function dispatchTriageEvent(type, d){
     case 'triage_evidence': handleEvidence(d); break;
     case 'triage_verdict':  handleVerdict(d);  break;
     case 'triage_retriage_delta': handleRetriageDelta(d); break;
+    case 'triage_roles':    handleRoles(d);    break;
+    case 'triage_ack':      handleAck(d);      break;
     case 'triage_closed':   handleClosed(d);   break;
   }
 }
@@ -3283,6 +3604,13 @@ function repaintFromRecord(t){
   (t.progress||[]).forEach(function(p){ setStep(p.tier, p.status); });
   if(t.verdict) renderVerdictCard(t.verdict);
   if(t.reTriageDelta) renderRetriageDelta(t.reTriageDelta);
+  // Wave 1 — restore roles, ack/MTTA, the live SLA clock (open triages) and, on a
+  // closed one, the lifecycle roll-up. Read from the record; each degrades if absent.
+  applyRoles(t.roles);
+  var ackRec = t.ack || (t.lifecycle && t.lifecycle.ackAt ? { acked:true, ackAt:t.lifecycle.ackAt, mttaMs:t.lifecycle.mttaMs, mttaHuman:t.lifecycle.mttaHuman } : {});
+  setAckState(ackRec);
+  if(live) startSla(t.sla); else { stopSlaTick(); var sb=$('sla'); if(sb) sb.hidden = true; }
+  if(!live && t.lifecycle) renderLifecycle(t.lifecycle); else renderLifecycle(null);
   setBridgeInput(live);
   pushActivity('NOC Triage', 'restored ' + currentSeverity + ' triage ' + (t.incidentId||'') + ' — "' + (t.title||'') + '"', tsClock(t.openedAt));
 }
@@ -3321,6 +3649,7 @@ function demoStart(sev, desc){
 }
 
 /* ---------- boot ---------- */
+wireRoles();
 if(DEMO){
   $('demoTag').style.display = 'inline-block';
   setConn('up');
