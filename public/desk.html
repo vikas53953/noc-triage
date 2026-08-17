@@ -286,6 +286,71 @@ pre.term{
 }
 .soon b{color:var(--warn);display:block;margin-bottom:.3rem;font-size:.8rem}
 
+/* ---------- CW-2: five-step change rail (approved mock's design) ---------- */
+.rail{list-style:none;padding:.3rem .2rem .2rem;margin:0}
+.rail li{display:flex;gap:.65rem;position:relative;padding-bottom:.85rem}
+.rail li:last-child{padding-bottom:0}
+.rail li::before{content:"";position:absolute;left:11px;top:24px;bottom:0;width:2px;background:var(--line)}
+.rail li:last-child::before{display:none}
+.rail li.done::before{background:var(--ok)}
+.step-dot{
+  width:24px;height:24px;border-radius:50%;flex-shrink:0;border:2px solid var(--line);
+  background:var(--card);display:flex;align-items:center;justify-content:center;
+  font-size:.66rem;font-weight:800;color:var(--ink3);z-index:1
+}
+.rail li.done .step-dot{border-color:var(--ok);background:var(--ok-bg);color:var(--ok)}
+.rail li.active .step-dot{border-color:var(--accent);background:var(--info-bg);color:var(--accent);
+  animation:pulse 1.4s infinite}
+.rail li.failed .step-dot{border-color:var(--bad);background:var(--bad-bg);color:var(--bad)}
+.rail li.blocked .step-dot{border-color:var(--warn);background:var(--warn-bg);color:var(--warn)}
+.step-txt{min-width:0;flex:1;padding-top:.12rem}
+.step-name{font-size:.78rem;font-weight:700;display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
+.step-note{font-size:.68rem;color:var(--ink3);line-height:1.45;overflow-wrap:anywhere}
+.rail li.done .step-note{color:var(--ink2)}
+.rail li.failed .step-note{color:var(--bad)}
+.rail li.blocked .step-note{color:var(--warn)}
+
+/* line diff (change + drift share it) */
+.diff{font-family:var(--mono);font-size:.7rem;line-height:1.6;border-radius:8px;
+  border:1px solid var(--line);overflow:auto;max-height:300px}
+.diff div{padding:.14rem .55rem;white-space:pre-wrap;overflow-wrap:anywhere}
+.diff .minus{background:var(--bad-bg);color:var(--bad)}
+.diff .plus{background:var(--ok-bg);color:var(--ok)}
+.diff .same{color:var(--ink3)}
+
+.pill{font-size:.58rem;font-weight:800;padding:.1rem .35rem;border-radius:4px;text-transform:uppercase}
+.pill.ok{background:var(--ok-bg);color:var(--ok)}
+.pill.off{background:var(--bad-bg);color:var(--bad)}
+.pill.warn{background:var(--warn-bg);color:var(--warn)}
+.pill.grey{background:rgba(148,163,184,.16);color:var(--ink3)}
+.btn-danger{background:var(--bad);color:#fff}
+.btn-danger:hover{filter:brightness(1.12)}
+
+.tool{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;margin-bottom:.6rem}
+.tool input,.tool select{
+  background:var(--panel);border:1px solid var(--line);border-radius:8px;color:var(--ink);
+  padding:.4rem .55rem;font-size:.76rem;min-width:0;flex:1
+}
+.tool input:focus,.tool select:focus{outline:none;border-color:var(--accent)}
+.verdictline{font-size:.85rem;font-weight:700;line-height:1.5}
+.footnote{font-size:.68rem;color:var(--ink3);line-height:1.5;margin-top:.5rem}
+.expl{display:inline-block;font-size:.63rem;font-weight:700;padding:.1rem .4rem;border-radius:5px;
+  background:var(--purple-bg);color:var(--purple);border:1px solid var(--purple);cursor:pointer;margin-left:.3rem}
+
+/* change proposal card in chat — the ONLY way a change starts */
+.proposal{border:1px solid var(--accent);border-radius:10px;background:var(--info-bg);
+  padding:.6rem .7rem;margin-top:.55rem}
+.proposal .r-lbl{color:var(--accent)}
+.proposal label{display:block;font-size:.63rem;font-weight:800;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink3);margin-top:.45rem}
+.proposal input,.proposal textarea{
+  width:100%;background:var(--card);border:1px solid var(--line);border-radius:7px;color:var(--ink);
+  padding:.4rem .55rem;font-size:.76rem;font-family:var(--mono);margin-top:.2rem
+}
+.proposal textarea{resize:vertical;min-height:58px}
+.proposal input:focus,.proposal textarea:focus{outline:none;border-color:var(--accent)}
+.proposal .acts{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.6rem}
+
 .state{font-size:.58rem;font-weight:800;padding:.1rem .35rem;border-radius:4px;text-transform:uppercase}
 .state.red{background:var(--bad-bg);color:var(--bad)}
 .state.amber{background:var(--warn-bg);color:var(--warn)}
@@ -368,6 +433,15 @@ pre.term{
   .shell .pane.active{display:flex}
   .shell.show-right .pane.right{position:static;inset:auto;border-radius:12px}
   .top .clock,.top .dirtag{display:none}
+  /* at phone width the brand was sitting on top of the connection chip — it
+     gives way instead of overlapping (pre-existing CW-1 header, fixed here). */
+  .top{gap:.4rem}
+  .brand{flex:1 1 auto;overflow:hidden;min-width:120px}
+  .brand h1{overflow:hidden;text-overflow:ellipsis;font-size:.98rem}
+  .top-right{min-width:0;gap:.35rem}
+  /* the live/not-connected wording is long; the dot still carries the state */
+  .top-right .chip{max-width:92px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .whotag span{max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 }
 </style>
 </head>
@@ -390,7 +464,7 @@ pre.term{
 <header class="top">
   <div class="brand">
     <h1>Jarvis Copilot Desk</h1>
-    <span class="dirtag">Cockpit · CW-1</span>
+    <span class="dirtag">Cockpit · CW-2</span>
   </div>
   <div class="top-right">
     <span class="chip wait" id="connChip"><span class="dot"></span>Connecting…</span>
@@ -477,7 +551,7 @@ pre.term{
     <div class="evtabs" id="evtabs">
       <button class="on" data-p="ev-find">Findings</button>
       <button data-p="ev-out">Output</button>
-      <button data-p="ev-chg">Change</button>
+      <button data-p="ev-chg">Change wrap</button>
       <button data-p="ev-drift">Drift</button>
       <button data-p="ev-bridge">Bridge</button>
     </div>
@@ -501,21 +575,20 @@ pre.term{
       </div>
 
       <div class="evpage" id="ev-chg">
-        <div class="soon">
-          <b>Change wrap arrives in CW-2.</b>
-          Jarvis cannot change a device yet — this desk is read-only today. When the change engine
-          lands, every change will walk five steps in the open here: before picture, apply,
-          after picture, what moved, and a one-click undo. Nothing is shown here until it is real.
+        <div class="tool">
+          <button class="btn btn-ghost btn-sm" id="chgDraft">✏️ Draft a change</button>
+          <button class="btn btn-ghost btn-sm" id="chgRefresh" title="Re-read the change record from the server">↻ Refresh</button>
+          <select id="chgPick" hidden title="Pick a change record to show"></select>
         </div>
+        <div id="chgWrap"></div>
       </div>
 
       <div class="evpage" id="ev-drift">
-        <div class="soon">
-          <b>Drift check arrives in CW-2.</b>
-          Comparing a device against its standard build needs the deviation engine, which is not
-          built yet. No drift table is drawn from guesses — this stays empty until the real
-          comparison exists.
+        <div class="tool">
+          <input id="driftDev" placeholder="Device name, e.g. sw1" autocomplete="off" maxlength="64">
+          <button class="btn btn-primary btn-sm" id="driftGo">Check drift</button>
         </div>
+        <div id="driftWrap"></div>
       </div>
 
       <div class="evpage" id="ev-bridge">
@@ -807,6 +880,10 @@ function sendAsk(){
   if(!OP){ $('whoTag').click(); return; }
   box.value = '';
   meMsg(t);
+  /* An ask that reads like a change gets a proposal card too. The ask itself
+     still goes to Jarvis untouched — nothing is hijacked, and no change is
+     fired by typing. The card is the only trigger, and it needs a press. */
+  if(looksLikeChange(t)) proposalCard({ device:'', commands:[], reason:t }, 'you');
   api('/api/command', { method:'POST', body: JSON.stringify({ agent:'jarvis', command:t }) })
     .then(function(r){
       if(!r.ok) return r.json().catch(function(){ return {}; }).then(function(b){
@@ -856,7 +933,7 @@ function loadCaps(){
       CAPS = { state:'ok', abilities:d.abilities, error:'' };
     })
     .catch(function(err){ CAPS = { state:'error', abilities:[], error: err.message || String(err) }; })
-    .then(renderCaps);
+    .then(function(){ renderCaps(); renderChange(); renderDrift(); });
 }
 function renderCaps(){
   var bar = $('capBar'), sug = $('suggest');
@@ -964,6 +1041,7 @@ function evTab(name){
     p.classList.toggle('on', p.id === name);
   });
   if(window.innerWidth <= 1080 && window.innerWidth > 760) $('shell').classList.add('show-right');
+  if(name === 'ev-chg') loadChangeHistory();
 }
 $('evtabs').addEventListener('click', function(e){
   var b = e.target.closest && e.target.closest('button[data-p]');
@@ -1202,6 +1280,784 @@ function landCommand(d){
 }
 
 /* ============================================================
+   CW-2 — CHANGE WRAP + DRIFT.  REAL records only.
+     POST /api/copilot/change                  → start a wrapped change
+     GET  /api/copilot/change/:id              → the real change record
+     GET  /api/copilot/change                  → history (optional; honest if absent)
+     POST /api/copilot/change/:id/rollback     → replay the undo through the same engine
+     GET  /api/copilot/drift/:device           → live config vs baseline
+     POST /api/copilot/drift/:device/rebaseline
+   Nothing on these two tabs is drawn unless the server said it. When a route is
+   not there yet (404) the screen says exactly that — the CW-1 fallback pattern.
+   ============================================================ */
+var CHG = { recs:{}, order:[], sel:null, err:'', history:'unknown', busy:false };
+var DRIFT = { state:'idle', device:'', data:null, err:'' };
+var TERMINAL = { applied:1, failed:1, denied:1, 'rolled-back':1, rolledback:1 };
+
+/* The capability map is the honest source for "is this built yet". */
+function capOf(key){
+  if(CAPS.state !== 'ok') return null;
+  for(var i=0;i<CAPS.abilities.length;i++){
+    var a = CAPS.abilities[i];
+    if(a && a.key === key) return a;
+  }
+  return null;
+}
+function notBuiltBox(key, whatFor){
+  var a = capOf(key);
+  if(a && a.available === false){
+    return '<div class="soon"><b>' + esc(a.label || whatFor) + ' is not available yet.</b>' +
+      esc(a.reason || 'The server did not say why.') + '</div>';
+  }
+  return '';
+}
+function engineGoneBox(what, why){
+  return '<div class="soon"><b>' + esc(what) + ' is not available yet.</b>' +
+    esc(why) + ' Nothing is shown here rather than something invented.</div>';
+}
+function httpWhy(status){
+  return status === 404
+    ? 'The server has no such route yet (404) — the change engine has not landed on this build.'
+    : 'The server answered HTTP ' + status + '.';
+}
+
+/* ---------- tolerant, never-inventing diff renderer ----------
+   The contract fixes drift lines as [{added|removed, line}]. A change record's
+   diff shape is not pinned, so every plausible shape is read; anything we cannot
+   read is shown as raw text rather than guessed at. */
+function diffRows(diff){
+  var rows = [];
+  function cls(tag){
+    tag = String(tag||'').toLowerCase();
+    if(tag === 'added' || tag === 'add' || tag === '+' || tag === 'plus') return 'plus';
+    if(tag === 'removed' || tag === 'remove' || tag === '-' || tag === 'minus' || tag === 'deleted') return 'minus';
+    return 'same';
+  }
+  function fromString(s){
+    String(s).split(/\r?\n/).forEach(function(l){
+      if(l === '') return;
+      var c = l.charAt(0) === '+' ? 'plus' : (l.charAt(0) === '-' ? 'minus' : 'same');
+      rows.push({ c:c, t:l });
+    });
+  }
+  if(diff == null) return rows;
+  if(typeof diff === 'string'){ fromString(diff); return rows; }
+  if(Array.isArray(diff)){
+    diff.forEach(function(d){
+      if(d == null) return;
+      if(typeof d === 'string'){ fromString(d); return; }
+      var line = (d.line != null) ? d.line : (d.text != null ? d.text : (d.value != null ? d.value : ''));
+      var tag = d.type || d.op || d.kind || d.change ||
+                (d.added === true ? 'added' : (d.removed === true ? 'removed' : ''));
+      if(!tag && typeof d.added === 'string') tag = 'added';
+      rows.push({ c: cls(tag), t: (cls(tag) === 'plus' ? '+ ' : cls(tag) === 'minus' ? '- ' : '  ') + String(line) });
+    });
+    return rows;
+  }
+  if(typeof diff === 'object'){
+    if(typeof diff.text === 'string' || typeof diff.unified === 'string'){
+      fromString(diff.text || diff.unified); return rows;
+    }
+    (Array.isArray(diff.removed) ? diff.removed : []).forEach(function(l){
+      rows.push({ c:'minus', t:'- ' + String(l && l.line != null ? l.line : l) });
+    });
+    (Array.isArray(diff.added) ? diff.added : []).forEach(function(l){
+      rows.push({ c:'plus', t:'+ ' + String(l && l.line != null ? l.line : l) });
+    });
+    if(Array.isArray(diff.lines)) return diffRows(diff.lines);
+  }
+  return rows;
+}
+function diffHtml(diff){
+  var rows = diffRows(diff);
+  if(!rows.length) return '';
+  return '<div class="diff">' + rows.map(function(r){
+    return '<div class="' + r.c + '">' + esc(r.t) + '</div>';
+  }).join('') + '</div>';
+}
+function diffCount(diff){
+  var rows = diffRows(diff), a = 0, r = 0;
+  rows.forEach(function(x){ if(x.c === 'plus') a++; else if(x.c === 'minus') r++; });
+  return { added:a, removed:r, total:a + r };
+}
+function plainCount(n, one, many){ return esc(n) + ' ' + (Number(n) === 1 ? one : many); }
+
+/* ---------- the five steps of the wrap ---------- */
+var STEPS = [
+  { key:'pre',      name:'Before picture',   plain:'Read the running config off the device and keep it with this record.' },
+  { key:'apply',    name:'Apply the change', plain:'Send exactly the commands you confirmed — nothing else.' },
+  { key:'post',     name:'After picture',    plain:'Read the config back off the device, not from what was sent.' },
+  { key:'validate', name:'What moved',       plain:'Before vs after line by line, plus a health read of the device.' },
+  { key:'rollback', name:'Undo ready',       plain:'The exact commands that put the device back the way it was.' }
+];
+function normState(s){
+  s = String(s == null ? '' : s).toLowerCase();
+  if(/^(done|ok|pass|passed|complete|completed|success|succeeded|applied)/.test(s)) return 'done';
+  if(/^(running|active|in.?progress|started|working)/.test(s)) return 'active';
+  if(/^(fail|error|refused)/.test(s)) return 'failed';
+  if(/^(block|skip|unavailable|not.?possible|no.?path|denied|frozen|impossible)/.test(s)) return 'blocked';
+  return '';
+}
+function filled(v){
+  if(v == null) return false;
+  if(typeof v === 'string') return v.trim() !== '';
+  if(Array.isArray(v)) return v.length > 0;
+  if(typeof v === 'object') return Object.keys(v).length > 0;
+  return true;
+}
+/* "no write path to this device yet" is a TRUTH, not an error — it gets its own
+   amber state and its own plain sentence, never dressed up as a failure to hide. */
+function blockedNote(rec){
+  var bits = [ rec.error, rec.failure, rec.statusReason, rec.reason_blocked, rec.note,
+    rec.apply && (rec.apply.reason || rec.apply.error || rec.apply.message || rec.apply.note) ];
+  var t = bits.filter(function(x){ return typeof x === 'string' && x.trim(); }).join(' · ');
+  return t;
+}
+function isNoWritePath(rec){
+  return /no write path|no way to write|write transport|cannot write to this device/i.test(blockedNote(rec));
+}
+function stepStates(rec){
+  /* If the backend records its own per-step states, they win — verbatim. */
+  var given = {};
+  var raw = rec.steps || rec.wrap || rec.stages;
+  if(Array.isArray(raw)){
+    raw.forEach(function(s){
+      if(!s) return;
+      var k = String(s.key || s.step || s.name || '').toLowerCase();
+      STEPS.forEach(function(d){ if(k.indexOf(d.key) === 0 || k === d.key) given[d.key] = s; });
+    });
+  } else if(raw && typeof raw === 'object'){
+    STEPS.forEach(function(d){ if(raw[d.key]) given[d.key] = raw[d.key]; });
+  }
+
+  var st = String(rec.status || '').toLowerCase();
+  var frozen = st === 'failed' || st === 'denied';
+  var noPath = isNoWritePath(rec);
+  var has = {
+    pre: filled(rec.pre),
+    apply: st === 'applied' || st === 'rolled-back' || (rec.apply && (rec.apply.ok === true || normState(rec.apply.state) === 'done')),
+    post: filled(rec.post),
+    validate: rec.diff != null || filled(rec.validation),
+    rollback: filled(rec.rollback)
+  };
+  var out = [], stopped = false;
+  for(var i=0;i<STEPS.length;i++){
+    var d = STEPS[i], g = given[d.key], state = '', note = '';
+    if(g){
+      state = normState(g.state || g.status || (g.ok === true ? 'done' : (g.ok === false ? 'failed' : '')));
+      note = (typeof g === 'object' && (g.note || g.detail || g.reason || g.message)) || '';
+    }
+    if(!state){
+      if(has[d.key]) state = 'done';
+      else if(stopped) state = 'pending';
+      else if(st === 'denied') state = 'blocked';
+      else if(frozen) state = noPath ? 'blocked' : 'failed';
+      else if(st === 'proposed' || st === 'approved' || !st) state = i === 0 ? 'active' : 'pending';
+      else state = 'active';
+    }
+    if(state === 'failed' || state === 'blocked' || state === 'pending') stopped = true;
+    out.push({ def:d, state:state, note:note });
+  }
+  return out;
+}
+function stepFactHtml(rec, key){
+  /* Only real numbers from the record — no line counts are ever guessed. */
+  if(key === 'pre' || key === 'post'){
+    var snap = rec[key];
+    if(!filled(snap)) return '';
+    var lines = null, ts = null;
+    if(typeof snap === 'object'){
+      lines = (snap.lines != null) ? snap.lines : (typeof snap.config === 'string' ? snap.config.split(/\r?\n/).length : null);
+      ts = snap.ts || snap.capturedAt || null;
+    } else if(typeof snap === 'string'){ lines = snap.split(/\r?\n/).length; }
+    var bits = [];
+    if(lines != null) bits.push(esc(lines) + ' lines');
+    if(ts) bits.push('at ' + esc(clockOf(ts)));
+    return bits.length ? '<span class="stamp">' + bits.join(' · ') + '</span>' : '';
+  }
+  if(key === 'validate' && filled(rec.diff)){
+    var c = diffCount(rec.diff);
+    return '<span class="stamp">' + esc(c.added) + ' added · ' + esc(c.removed) + ' removed</span>';
+  }
+  return '';
+}
+function approvalRow(rec){
+  var a = rec.approval || rec.gate;
+  if(!a){
+    return '<div class="metric"><span>Permission gate</span><b><span class="pill grey">not recorded</span></b></div>' +
+      '<div class="footnote">The record does not say how this change was approved, so nothing is claimed about it.</div>';
+  }
+  var d = String(a.decision || a.state || a.status || a.mode || '').toLowerCase();
+  var who = a.by || a.decidedBy || a.operator || rec.who || '';
+  var pill, words;
+  if(/deny|denied|refus/.test(d)){
+    pill = '<span class="pill off">denied</span>';
+    words = 'Denied at the gate — <b>nothing was sent to the device</b>. No wire call was made.';
+  } else if(/pending|ask|wait/.test(d)){
+    pill = '<span class="pill warn">waiting</span>';
+    words = 'Waiting for a decision in the approval queue. Nothing has reached the device yet.';
+  } else if(/auto/.test(d)){
+    pill = '<span class="pill ok">auto-approved</span>';
+    words = 'The desk is in auto mode, so the gate let it through and logged it.';
+  } else if(/approv|allow|ok|granted/.test(d)){
+    pill = '<span class="pill ok">approved</span>';
+    words = 'Approved' + (who ? ' by <b>' + esc(who) + '</b>' : '') + '.';
+  } else {
+    pill = '<span class="pill grey">' + esc(d || 'unknown') + '</span>';
+    words = 'The gate recorded that state; it is shown as the server sent it.';
+  }
+  return '<div class="metric"><span>Permission gate</span><b>' + pill + '</b></div>' +
+    '<div class="footnote">' + words + '</div>';
+}
+function validationHtml(rec){
+  var v = rec.validation;
+  if(!filled(v)) return '';
+  var pass = (v === true) || (typeof v === 'object' && (v.ok === true || v.pass === true ||
+    /^(pass|passed|ok|clean|healthy|good)/i.test(String(v.verdict || v.state || v.status || ''))));
+  var failWord = (typeof v === 'object') && /fail|bad|degrad|unhealth/i.test(String(v.verdict || v.state || v.status || ''));
+  var note = (typeof v === 'object') ? (v.note || v.detail || v.summary || v.reason || '') : '';
+  var head;
+  if(pass) head = '<span class="pill ok">validation passed</span> The device answered afterwards and no new criticals came up.';
+  else if(failWord) head = '<span class="pill off">validation failed</span> The check after the change did not come back clean.';
+  else head = '<span class="pill grey">' + esc(String(v.verdict || v.state || v.status || 'recorded')) + '</span> Shown exactly as the engine recorded it.';
+  return '<div class="metric" style="border:none;padding-top:.5rem"><span></span></div>' +
+    '<div style="font-size:.78rem;line-height:1.55">' + head +
+    (note ? '<div class="footnote">' + esc(note) + '</div>' : '') + '</div>';
+}
+function statusPill(st, rec){
+  st = String(st || '').toLowerCase();
+  /* "nowhere to write" is a capability truth, not a fault — it does not wear
+     the red failure badge, it says what it is. */
+  if(st === 'failed' && rec && isNoWritePath(rec)) return '<span class="pill warn">frozen — no write path</span>';
+  if(st === 'applied') return '<span class="pill ok">applied</span>';
+  if(st === 'rolled-back' || st === 'rolledback') return '<span class="pill warn">rolled back</span>';
+  if(st === 'denied') return '<span class="pill off">denied</span>';
+  if(st === 'failed') return '<span class="pill off">frozen — failed</span>';
+  if(st === 'approved') return '<span class="pill warn">approved · running</span>';
+  if(st === 'proposed') return '<span class="pill grey">proposed</span>';
+  return '<span class="pill grey">' + esc(st || 'unknown') + '</span>';
+}
+function changeCard(rec){
+  var id = rec.id || rec.changeId || '';
+  var st = String(rec.status || '').toLowerCase();
+  var cmds = Array.isArray(rec.commands) ? rec.commands : (rec.commands ? [rec.commands] : []);
+  var h = '<div class="evcard"><header><b>Change on ' + esc(rec.device || 'an unnamed device') + '</b>' +
+    '<span>' + statusPill(st, rec) + ' <span class="stamp">' + esc(id || '—') +
+      (rec.who ? ' · by ' + esc(rec.who) : '') + (rec.ts ? ' · ' + esc(clockOf(rec.ts)) : '') + '</span></span>' +
+    '</header><div class="body">';
+
+  h += '<div><b>Why:</b> ' + esc(rec.reason || 'no reason was recorded') + '</div>';
+  h += '<div style="margin-top:.4rem"><span class="r-lbl">The exact commands</span>' +
+    (cmds.length
+      ? '<pre class="term">' + cmds.map(function(c){ return esc(String(c)); }).join('\n') + '</pre>'
+      : '<span style="color:var(--ink3)">No commands are recorded on this change.</span>') + '</div>';
+
+  h += '<div style="margin-top:.55rem">' + approvalRow(rec) + '</div>';
+
+  var noPath = isNoWritePath(rec);
+  var freeze = blockedNote(rec);
+  h += '<ul class="rail" style="margin-top:.7rem">';
+  stepStates(rec).forEach(function(s, i){
+    var mark = s.state === 'done' ? '✓' : (s.state === 'failed' ? '!' : (s.state === 'blocked' ? '–' : (i + 1)));
+    var note = s.note;
+    if(!note){
+      if(s.state === 'done') note = s.def.plain;
+      else if(s.state === 'active') note = 'Running now — ' + s.def.plain.charAt(0).toLowerCase() + s.def.plain.slice(1);
+      else if(s.state === 'blocked') note = (i === 1 && noPath)
+        ? (freeze || 'There is no write path to this device yet, so this step cannot run.')
+        : 'This step could not run, so the change is frozen here.' + (freeze ? ' ' + freeze : '');
+      else if(s.state === 'failed') note = 'This step failed.' + (freeze ? ' ' + freeze : '') +
+        ' The change is frozen here — it was not half-applied silently.';
+      else note = 'Not reached. ' + s.def.plain;
+    }
+    h += '<li class="' + esc(s.state) + '"><div class="step-dot">' + esc(mark) + '</div>' +
+      '<div class="step-txt"><div class="step-name">' + esc(s.def.name) + ' ' + stepFactHtml(rec, s.def.key) + '</div>' +
+      '<div class="step-note">' + esc(note) + '</div></div></li>';
+  });
+  h += '</ul>';
+
+  if(noPath){
+    h += '<div class="soon" style="margin-top:.7rem"><b>No write path to this device yet.</b>' +
+      esc(freeze) + ' Nothing was sent and nothing was pretended — the record is kept exactly as it stands.</div>';
+  }
+
+  /* A diff that exists but is EMPTY is a real answer — "nothing moved" — and is
+     exactly what a good rollback leaves behind. It is not the same as no diff
+     being recorded at all, and the two never get shown as one thing. */
+  if(rec.diff != null){
+    var c = diffCount(rec.diff);
+    h += '<div style="margin-top:.7rem"><span class="r-lbl">What moved — before vs after</span>' +
+      (c.total ? diffHtml(rec.diff) : '') +
+      '<div class="footnote">' + (c.total
+        ? plainCount(c.added, 'line added', 'lines added') + ', ' + plainCount(c.removed, 'line removed', 'lines removed') + ' — read back off the device.'
+        : 'Nothing moved — the config read back off the device is line-for-line what it was before.') +
+      '</div></div>';
+  } else if(st === 'applied'){
+    h += '<div class="footnote" style="margin-top:.6rem">The record carries no diff, so none is drawn.</div>';
+  }
+
+  h += validationHtml(rec);
+
+  var rb = rec.rollback;
+  if(filled(rb)){
+    var rbCmds = Array.isArray(rb) ? rb : (Array.isArray(rb.commands) ? rb.commands : (typeof rb === 'string' ? [rb] : []));
+    h += '<div style="margin-top:.7rem"><span class="r-lbl">The undo, ready</span>' +
+      (rbCmds.length ? '<pre class="term">' + rbCmds.map(function(c){ return esc(String(c)); }).join('\n') + '</pre>'
+                     : '<div class="footnote">A rollback is stored but its commands are not in this record.</div>');
+    if(st === 'applied'){
+      h += '<div style="margin-top:.55rem"><button class="btn btn-danger btn-sm" id="rbBtn" data-id="' + esc(id) + '">' +
+        '↩ Roll it back</button></div>';
+    } else if(st === 'rolled-back' || st === 'rolledback'){
+      h += '<div class="footnote">Already rolled back — the undo was replayed through the same wrap, gate included.</div>';
+    }
+    h += '</div>';
+  }
+  return h + '</div></div>';
+}
+function renderChange(){
+  var w = $('chgWrap');
+  if(!w) return;
+  var pick = $('chgPick');
+  if(pick){
+    if(CHG.order.length > 1){
+      pick.hidden = false;
+      pick.innerHTML = CHG.order.map(function(id){
+        var r = CHG.recs[id] || {};
+        return '<option value="' + esc(id) + '"' + (id === CHG.sel ? ' selected' : '') + '>' +
+          esc(id) + ' · ' + esc(r.device || '—') + ' · ' + esc(r.status || '—') + '</option>';
+      }).join('');
+    } else pick.hidden = true;
+  }
+  if(CHG.err){ w.innerHTML = engineGoneBox('The change engine', CHG.err); return; }
+  var rec = CHG.sel && CHG.recs[CHG.sel];
+  if(!rec){
+    var nb = notBuiltBox('change', 'The change engine');
+    w.innerHTML = nb || ('<div class="empty"><span class="big">🧰</span>' +
+      'No change has been wrapped from this desk yet.<br>' +
+      'Ask Jarvis for one in plain words, or press <b>Draft a change</b> — either way you see the exact ' +
+      'commands and press go yourself before anything reaches a device.</div>');
+    return;
+  }
+  w.innerHTML = changeCard(rec);
+  if(CHG.history !== 'ok'){
+    var f = document.createElement('div');
+    f.className = 'footnote';
+    f.textContent = 'Only changes started from this desk since it was opened are listed — this build has no ' +
+      'change-history route, so no older change is claimed to exist.';
+    w.appendChild(f);
+  }
+  var b = $('rbBtn');
+  if(b) b.addEventListener('click', function(){ doRollback(b.getAttribute('data-id'), b); });
+}
+function readChange(id, then){
+  return api('/api/copilot/change/' + encodeURIComponent(id))
+    .then(function(r){
+      if(!r.ok) throw new Error(httpWhy(r.status));
+      return r.json();
+    })
+    .then(function(rec){
+      if(!rec || typeof rec !== 'object') throw new Error('The change record came back in an unexpected shape.');
+      var real = rec.change || rec.record || rec;
+      real.id = real.id || real.changeId || id;
+      CHG.recs[real.id] = real;
+      if(CHG.order.indexOf(real.id) < 0) CHG.order.unshift(real.id);
+      CHG.err = '';
+      if(!CHG.sel) CHG.sel = real.id;
+      renderChange();
+      if(typeof then === 'function') then(real);
+      return real;
+    })
+    .catch(function(err){
+      CHG.err = err.message || String(err);
+      renderChange();
+    });
+}
+var pollT = null, pollN = 0;
+function pollChange(id){
+  clearTimeout(pollT); pollN = 0;
+  (function loop(){
+    readChange(id, function(rec){
+      var st = String(rec.status || '').toLowerCase();
+      if(TERMINAL[st] || pollN++ > 120) return;
+      pollT = setTimeout(loop, 1200);
+    });
+  })();
+}
+function doRollback(id, btn){
+  if(!id) return;
+  var rec = CHG.recs[id] || {};
+  var rb = rec.rollback;
+  var rbCmds = Array.isArray(rb) ? rb : (rb && Array.isArray(rb.commands) ? rb.commands : []);
+  var ok = window.confirm(
+    'Roll back ' + id + ' on ' + (rec.device || 'this device') + '?\n\n' +
+    'These exact commands go through the same wrap — permission gate, before picture, apply, after ' +
+    'picture, diff:\n\n' + (rbCmds.length ? rbCmds.join('\n') : '(the record does not list them)') +
+    '\n\nStamped as ' + OP + '.');
+  if(!ok) return;
+  if(btn){ btn.disabled = true; btn.textContent = 'Rolling back…'; }
+  api('/api/copilot/change/' + encodeURIComponent(id) + '/rollback', { method:'POST', body:'{}' })
+    .then(function(r){
+      return r.json().catch(function(){ return {}; }).then(function(b){ return { ok:r.ok, status:r.status, body:b }; });
+    })
+    .then(function(res){
+      if(!res.ok){
+        toast('Rollback refused — ' + ((res.body && res.body.error) || httpWhy(res.status)), true);
+        sysMsg('Rollback of <b>' + esc(id) + '</b> was refused — ' +
+          esc((res.body && res.body.error) || httpWhy(res.status)) + '. The device was not touched.');
+        if(btn){ btn.disabled = false; btn.textContent = '↩ Roll it back'; }
+        return;
+      }
+      var newId = (res.body && (res.body.id || res.body.changeId)) || id;
+      toast('Rollback started — by ' + OP);
+      sysMsg('Rollback of <b>' + esc(id) + '</b> started by <b>' + esc(OP) +
+        '</b>. It walks the same five steps, gate included. ' + jumpBtn('ev-chg','Watch the wrap'));
+      CHG.sel = newId;
+      pollChange(newId);
+      if(newId !== id) pollChange(id);
+    })
+    .catch(function(err){
+      toast('Could not reach the server: ' + (err.message || err), true);
+      if(btn){ btn.disabled = false; btn.textContent = '↩ Roll it back'; }
+    });
+}
+/* A change HISTORY route is a nicety the contract does not promise, so it is
+   never probed speculatively: only when the operator opens the tab, and only
+   when the capability map says the change engine is actually there. Otherwise
+   the tab lists the changes made from this desk and says so. */
+var histTried = false;
+function loadChangeHistory(){
+  if(histTried) return;
+  var cap = capOf('change');
+  if(CAPS.state !== 'ok' || !cap || cap.available !== true) return;
+  histTried = true;
+  api('/api/copilot/change')
+    .then(function(r){ if(!r.ok) throw new Error(httpWhy(r.status)); return r.json(); })
+    .then(function(d){
+      var list = Array.isArray(d) ? d : (d && Array.isArray(d.changes) ? d.changes : null);
+      if(!list) throw new Error('history came back in an unexpected shape');
+      CHG.history = 'ok';
+      list.forEach(function(rec){
+        if(!rec) return;
+        var id = rec.id || rec.changeId;
+        if(!id) return;
+        CHG.recs[id] = rec;
+        if(CHG.order.indexOf(id) < 0) CHG.order.push(id);
+      });
+      if(!CHG.sel && CHG.order.length) CHG.sel = CHG.order[0];
+      renderChange();
+    })
+    .catch(function(){ CHG.history = 'none'; });
+}
+$('chgRefresh').addEventListener('click', function(){
+  if(CHG.sel) readChange(CHG.sel); else { histTried = false; loadChangeHistory(); }
+});
+$('chgPick').addEventListener('change', function(){ CHG.sel = this.value; renderChange(); });
+$('chgDraft').addEventListener('click', function(){
+  proposalCard({ device:'', commands:[], reason:'' }, 'you');
+  if(window.innerWidth <= 760) mobPane(1);
+});
+
+/* ============================================================
+   THE PROPOSAL CARD — the only door a change can walk through.
+   Chat never fires a change. Jarvis may DRAFT one; the operator
+   reads the exact commands and presses go. Nothing before that.
+   ============================================================ */
+var draftCard = null;
+function proposalCard(p, drafter){
+  p = p || {};
+  var cmds = Array.isArray(p.commands) ? p.commands : (p.commands ? String(p.commands).split(/\r?\n/) : []);
+  var byJarvis = drafter && drafter !== 'you';
+  var html =
+    '<div class="proposal">' +
+      '<span class="r-lbl">⚠️ Change proposal — nothing has been sent</span>' +
+      '<div style="font-size:.79rem;line-height:1.55">' +
+        (byJarvis
+          ? 'Jarvis drafted this. <b>Read it</b> — you are the one pressing go, and your name goes on it.'
+          : 'Write the exact change. Nothing reaches the device until you press <b>Run this change</b>.') +
+      '</div>' +
+      '<label>Device</label><input class="p-dev" value="' + esc(p.device || '') + '" placeholder="e.g. sw2" maxlength="64">' +
+      '<label>Commands — one per line</label><textarea class="p-cmd" placeholder="interface GigabitEthernet1/0/10&#10;description set by the NOC desk">' +
+        esc(cmds.join('\n')) + '</textarea>' +
+      '<label>Why this change</label><input class="p-why" value="' + esc(p.reason || '') + '" placeholder="the reason this is being done" maxlength="200">' +
+      '<div class="acts">' +
+        '<button class="btn btn-primary btn-sm p-go">Run this change</button>' +
+        '<button class="btn btn-ghost btn-sm p-no">Discard</button>' +
+      '</div>' +
+      '<div class="footnote">It walks the wrap in the open: permission gate, before picture, apply, after picture, ' +
+      'diff and validation, undo ready. Any step that cannot run freezes the change and says why.</div>' +
+    '</div>';
+  var el = bubble('jv', (byJarvis ? 'Jarvis' : 'Desk') + ' · ' + nowClock(),
+    (byJarvis ? 'That is a change, so it does not just happen. Here is what I would run:' :
+      'Draft the change here.') + html, true);
+  /* If Jarvis drafts the real thing right after our own blank draft, the blank
+     one goes — two cards for one intent would be two doors. */
+  if(byJarvis && draftCard && draftCard.parentNode) draftCard.parentNode.removeChild(draftCard);
+  draftCard = el;
+
+  var q = function(c){ return el.querySelector(c); };
+  q('.p-no').addEventListener('click', function(){
+    el.querySelector('.proposal').innerHTML =
+      '<span class="r-lbl">Discarded</span><div style="font-size:.79rem">' +
+      'Dropped. Nothing was sent to any device.</div>';
+  });
+  q('.p-go').addEventListener('click', function(){
+    var dev = q('.p-dev').value.trim();
+    var cmdList = q('.p-cmd').value.split(/\r?\n/).map(function(s){ return s.trim(); }).filter(Boolean);
+    var why = q('.p-why').value.trim();
+    var errBox = el.querySelector('.p-err');
+    if(!errBox){
+      errBox = document.createElement('div');
+      errBox.className = 'p-err formerr';
+      errBox.style.marginTop = '.4rem';
+      el.querySelector('.acts').parentNode.insertBefore(errBox, el.querySelector('.footnote'));
+    }
+    errBox.textContent = '';
+    if(!dev){ errBox.textContent = 'Name the device first.'; return; }
+    if(!cmdList.length){ errBox.textContent = 'Type the exact commands — nothing is invented for you.'; return; }
+    if(!why){ errBox.textContent = 'Say why. The change record and the approval both carry it.'; return; }
+    var go = window.confirm(
+      'Run this change on ' + dev + '?\n\n' + cmdList.join('\n') +
+      '\n\nWhy: ' + why + '\n\nIt goes through the permission gate first and is stamped as ' + OP + '.');
+    if(!go) return;
+    var btn = q('.p-go');
+    btn.disabled = true; btn.textContent = 'Sending to the wrap…';
+    api('/api/copilot/change', { method:'POST',
+      body: JSON.stringify({ device:dev, commands:cmdList, reason:why, operatorTz:TZ }) })
+      .then(function(r){
+        return r.json().catch(function(){ return {}; }).then(function(b){ return { ok:r.ok, status:r.status, body:b }; });
+      })
+      .then(function(res){
+        if(!res.ok){
+          if(res.status === 428){ errBox.textContent = 'The desk needs your name before a change — set it top right.'; }
+          else if(res.status === 404){
+            el.querySelector('.proposal').outerHTML =
+              '<div class="soon"><b>The change engine is not available yet.</b>' +
+              'The server has no <code>/api/copilot/change</code> route on this build (404). ' +
+              'Nothing was sent to any device.</div>';
+            return;
+          } else errBox.textContent = (res.body && res.body.error) || ('The server refused it — HTTP ' + res.status + '. Nothing was sent.');
+          btn.disabled = false; btn.textContent = 'Run this change';
+          return;
+        }
+        var rec = res.body && (res.body.change || res.body.record || res.body);
+        var id = (rec && (rec.id || rec.changeId)) || '';
+        el.querySelector('.proposal').innerHTML =
+          '<span class="r-lbl">✅ Sent into the wrap</span>' +
+          '<div style="font-size:.79rem;line-height:1.55">Change <b>' + esc(id || '(no id returned)') +
+          '</b> on <b>' + esc(dev) + '</b>, stamped <b>' + esc(OP) + '</b>. ' +
+          'Watch the five steps on the right — they are the real record, not an animation.</div>' +
+          jumpBtn('ev-chg','Watch the wrap');
+        if(rec && typeof rec === 'object' && id){
+          rec.id = id;
+          CHG.recs[id] = rec;
+          if(CHG.order.indexOf(id) < 0) CHG.order.unshift(id);
+          CHG.sel = id; CHG.err = '';
+          renderChange();
+        }
+        toast('Change ' + (id || '') + ' sent into the wrap — by ' + OP);
+        evTab('ev-chg');
+        if(id) pollChange(id);
+      })
+      .catch(function(err){
+        errBox.textContent = 'Could not reach the server: ' + (err.message || err) + '. Nothing was sent.';
+        btn.disabled = false; btn.textContent = 'Run this change';
+      });
+  });
+  return el;
+}
+/* An ask that reads like a change gets a proposal card ALONGSIDE Jarvis's own
+   answer — the ask still goes to Jarvis untouched, so nothing is hijacked and
+   no read question is stolen. */
+var CHANGE_INTENT = /^\s*(?:please\s+|can you\s+|could you\s+|jarvis[,:]?\s+)*(change|set|configure|configur\w*|add|create|remove|delete|shut\s?down|shut|unshut|no\s+shut\w*|apply|push|update|enable|disable|assign|rename|reload|restart|bounce|clear\s+counters)\b/i;
+var READ_ONLY_START = /^\s*(what|why|when|who|which|how|is|are|was|were|did|does|do|can|could|should|show|list|check|read|find|tell|give|explain|any|has|have)\b/i;
+function looksLikeChange(t){
+  t = String(t || '');
+  if(/\?\s*$/.test(t)) return false;
+  if(READ_ONLY_START.test(t)) return false;
+  return CHANGE_INTENT.test(t);
+}
+
+/* ============================================================
+   DRIFT — real GET /api/copilot/drift/:device
+   ============================================================ */
+function driftVerdictLine(d){
+  var dev = esc(d.device || DRIFT.device);
+  var v = String(d.verdict || '').toLowerCase();
+  var lines = Array.isArray(d.driftLines) ? d.driftLines : [];
+  var c = { added:0, removed:0 };
+  lines.forEach(function(l){
+    if(!l) return;
+    if(l.added || /^add/i.test(String(l.type || l.op || ''))) c.added++;
+    else if(l.removed || /^rem|^del/i.test(String(l.type || l.op || ''))) c.removed++;
+  });
+  if(v === 'clean'){
+    return '<div class="verdictline" style="color:var(--ok)">✅ ' + dev +
+      ' matches its saved baseline. Nothing has drifted.</div>';
+  }
+  if(v === 'no-baseline' || v === 'nobaseline'){
+    return '<div class="verdictline" style="color:var(--ink2)">📄 There is no saved baseline for ' + dev +
+      ' yet, so there is nothing to compare against.</div>' +
+      '<div class="footnote">That is an honest state, not a fault. Save today\'s config as the baseline below ' +
+      'and every future check measures against it.</div>';
+  }
+  if(v === 'drifted'){
+    var total = lines.length || (c.added + c.removed);
+    return '<div class="verdictline" style="color:var(--warn)">⚠️ ' + dev + ' has drifted from its baseline — ' +
+      plainCount(total, 'line is different', 'lines are different') + '.</div>' +
+      '<div class="footnote">' + plainCount(c.added, 'line added', 'lines added') + ', ' +
+      plainCount(c.removed, 'line removed', 'lines removed') +
+      ' since the baseline was taken. Every one is listed below.</div>';
+  }
+  return '<div class="verdictline">' + dev + ' — the server reported verdict "' + esc(d.verdict || 'none') +
+    '".</div><div class="footnote">Shown exactly as it came back; nothing is interpreted for you.</div>';
+}
+function explainedChip(ex){
+  if(!ex) return '';
+  var id = typeof ex === 'string' ? ex : (ex.id || ex.changeId || '');
+  var who = (typeof ex === 'object' && (ex.who || ex.by)) || (CHG.recs[id] && CHG.recs[id].who) || '';
+  if(!id) return '';
+  return '<span class="expl" data-chg="' + esc(id) + '">explained by change ' + esc(id) +
+    (who ? ' (by ' + esc(who) + ')' : '') + '</span>';
+}
+function driftLinesHtml(lines){
+  if(!Array.isArray(lines) || !lines.length) return '';
+  return '<div class="diff" style="margin-top:.5rem">' + lines.map(function(l){
+    if(l == null) return '';
+    if(typeof l === 'string') return '<div class="same">' + esc(l) + '</div>';
+    var add = l.added === true || /^add/i.test(String(l.type || l.op || ''));
+    var rem = l.removed === true || /^rem|^del/i.test(String(l.type || l.op || ''));
+    var cls = add ? 'plus' : (rem ? 'minus' : 'same');
+    var pre = add ? '+ ' : (rem ? '- ' : '  ');
+    var txt = (l.line != null) ? l.line : (l.text != null ? l.text : '');
+    return '<div class="' + cls + '">' + esc(pre + String(txt)) + explainedChip(l.explainedBy) + '</div>';
+  }).join('') + '</div>';
+}
+function renderDrift(){
+  var w = $('driftWrap');
+  if(!w) return;
+  if(DRIFT.state === 'idle'){
+    var nb = notBuiltBox('drift', 'The drift check');
+    w.innerHTML = nb || ('<div class="empty"><span class="big">📐</span>' +
+      'Type a device above and press <b>Check drift</b>.<br>' +
+      'It reads the live config off the box and compares it with the saved baseline — no guesses, ' +
+      'no cached picture.</div>');
+    return;
+  }
+  if(DRIFT.state === 'loading'){
+    w.innerHTML = '<div class="empty"><span class="big">⏳</span>Reading the live config off ' +
+      esc(DRIFT.device) + ' and comparing it with the baseline…</div>';
+    return;
+  }
+  if(DRIFT.state === 'error'){
+    w.innerHTML = engineGoneBox('The drift check on ' + DRIFT.device, DRIFT.err);
+    return;
+  }
+  var d = DRIFT.data || {};
+  var lines = Array.isArray(d.driftLines) ? d.driftLines : [];
+  var v = String(d.verdict || '').toLowerCase();
+  var unexplained = lines.filter(function(l){ return l && !l.explainedBy; }).length;
+  var h = '<div class="evcard"><header><b>Drift · ' + esc(d.device || DRIFT.device) + '</b>' +
+    '<span class="stamp">' + (d.baselineTs ? 'baseline saved ' + esc(clockOf(d.baselineTs)) : 'no baseline saved') +
+    ' · checked ' + esc(nowClock()) + ' for ' + esc(OP) + '</span></header><div class="body">' +
+    driftVerdictLine(d);
+
+  if(d.explainedBy && !lines.some(function(l){ return l && l.explainedBy; })){
+    h += '<div style="margin-top:.45rem">All of it ' + explainedChip(d.explainedBy) + '</div>';
+  }
+  h += driftLinesHtml(lines);
+  if(v === 'drifted' && lines.length){
+    h += '<div class="footnote">' + (unexplained === 0
+      ? 'Every drifted line is accounted for by a change record — nobody went round the desk.'
+      : plainCount(unexplained, 'line is not explained', 'lines are not explained') +
+        ' by any change record on this desk. Somebody changed it outside the wrap, or it pre-dates the records.') +
+      '</div>';
+  }
+  if(d.note) h += '<div class="footnote">' + esc(d.note) + '</div>';
+
+  h += '<div style="margin-top:.7rem;display:flex;gap:.4rem;flex-wrap:wrap">' +
+    '<button class="btn btn-ghost btn-sm" id="rebaseBtn">' +
+    (v === 'no-baseline' ? '📌 Save this config as the baseline' : '📌 Re-baseline — accept this as the new normal') +
+    '</button></div>' +
+    '<div class="footnote">Re-baselining is logged with your name. It does not change the device — it changes ' +
+    'what "normal" means for the next check.</div>';
+  w.innerHTML = h + '</div></div>';
+
+  var rb = $('rebaseBtn');
+  if(rb) rb.addEventListener('click', function(){ doRebaseline(d.device || DRIFT.device, rb); });
+}
+function checkDrift(dev){
+  dev = String(dev || '').trim();
+  if(!dev){ toast('Name a device first', true); return; }
+  DRIFT = { state:'loading', device:dev, data:null, err:'' };
+  renderDrift();
+  api('/api/copilot/drift/' + encodeURIComponent(dev))
+    .then(function(r){
+      if(!r.ok){
+        return r.json().catch(function(){ return {}; }).then(function(b){
+          throw new Error((b && b.error) || httpWhy(r.status));
+        });
+      }
+      return r.json();
+    })
+    .then(function(d){
+      if(!d || typeof d !== 'object') throw new Error('The drift result came back in an unexpected shape.');
+      DRIFT.state = 'ok'; DRIFT.data = d;
+      /* fill in "(by who)" from the real change record — never invented */
+      var ids = {};
+      (Array.isArray(d.driftLines) ? d.driftLines : []).forEach(function(l){
+        var e = l && l.explainedBy;
+        var id = typeof e === 'string' ? e : (e && (e.id || e.changeId));
+        if(id && !CHG.recs[id]) ids[id] = 1;
+      });
+      var todo = Object.keys(ids);
+      renderDrift();
+      if(todo.length) Promise.all(todo.map(function(id){ return readChange(id); })).then(function(){
+        if(DRIFT.state === 'ok') renderDrift();
+      });
+    })
+    .catch(function(err){ DRIFT.state = 'error'; DRIFT.err = err.message || String(err); renderDrift(); });
+}
+function doRebaseline(dev, btn){
+  var ok = window.confirm('Re-baseline ' + dev + '?\n\n' +
+    'The config on the device right now becomes the new "normal". Future drift checks measure against ' +
+    'it, and the old baseline stops being the reference.\n\nLogged as ' + OP + '. The device is not changed.');
+  if(!ok) return;
+  if(btn){ btn.disabled = true; btn.textContent = 'Saving the new baseline…'; }
+  api('/api/copilot/drift/' + encodeURIComponent(dev) + '/rebaseline', { method:'POST', body:'{}' })
+    .then(function(r){
+      return r.json().catch(function(){ return {}; }).then(function(b){ return { ok:r.ok, status:r.status, body:b }; });
+    })
+    .then(function(res){
+      if(!res.ok){
+        toast('Re-baseline refused — ' + ((res.body && res.body.error) || httpWhy(res.status)), true);
+        if(btn){ btn.disabled = false; btn.textContent = '📌 Re-baseline'; }
+        return;
+      }
+      toast(dev + ' re-baselined — by ' + OP);
+      sysMsg('Baseline for <b>' + esc(dev) + '</b> re-saved by <b>' + esc(OP) +
+        '</b>. From now on drift is measured against the config as it is now.');
+      checkDrift(dev);
+    })
+    .catch(function(err){
+      toast('Could not reach the server: ' + (err.message || err), true);
+      if(btn){ btn.disabled = false; btn.textContent = '📌 Re-baseline'; }
+    });
+}
+$('driftGo').addEventListener('click', function(){ checkDrift($('driftDev').value); });
+$('driftDev').addEventListener('keydown', function(e){
+  if(e.key === 'Enter'){ e.preventDefault(); checkDrift(this.value); }
+});
+/* "explained by change chg-X" anywhere → open that real record on the change tab */
+document.addEventListener('click', function(e){
+  var c = e.target.closest && e.target.closest('.expl[data-chg]');
+  if(!c) return;
+  var id = c.getAttribute('data-chg');
+  CHG.sel = id; CHG.err = '';
+  evTab('ev-chg');
+  readChange(id);
+});
+
+/* ============================================================
    LIVE — the same WebSocket the classic console uses
    ============================================================ */
 var ws = null, wsRetry = 0;
@@ -1230,6 +2086,16 @@ function connectWS(){
         '. Decide it in the classic console — nothing was sent to any device.');
       return;
     }
+    /* CW-2: a change the engine drafted, waiting for a human press. */
+    if(m.type === 'change_proposal' && m.data){ proposalCard(m.data, 'jarvis'); evTab('ev-chg'); return; }
+    /* CW-2: any step of a wrap moved → re-read the REAL record, never paint from the event. */
+    if(m.type.indexOf('change_') === 0 && m.data){
+      var cid = m.data.id || m.data.changeId;
+      if(cid){ CHG.sel = cid; CHG.err = ''; readChange(cid); }
+      return;
+    }
+    if(m.type.indexOf('drift_') === 0 && m.data && DRIFT.state === 'ok' &&
+       m.data.device && m.data.device === DRIFT.device){ checkDrift(DRIFT.device); return; }
     if(m.type.indexOf('triage_') === 0){ onTriage(m.type, m.data); return; }
   };
 }
@@ -1238,6 +2104,10 @@ function scheduleReconnect(){ wsRetry = Math.min(wsRetry + 1, 6); setTimeout(con
 function onChat(d){
   if(d.type === 'outgoing') return;   // our own asks are already on screen
   jvMsg(d.agentName || d.agent || 'Jarvis', d.text || '', d.timestamp);
+  /* A reply may carry a drafted change. It is still only a PROPOSAL —
+     the engine is not called until the operator presses go. */
+  var p = d.proposal || d.changeProposal;
+  if(p && typeof p === 'object') proposalCard(p, 'jarvis');
 }
 function onShare(d){
   landCommand(d);
@@ -1311,6 +2181,8 @@ function boot(){
   refreshQueue();
   setInterval(refreshQueue, 8000);
   loadCaps();
+  renderChange();
+  renderDrift();
   connectWS();
   bubble('jv', 'Jarvis · ' + nowClock(),
     'Desk is yours, <b>' + esc(OP.split(/\s+/)[0]) + '</b>. Everything on this screen is read live from the ' +
