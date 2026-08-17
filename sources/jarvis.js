@@ -313,9 +313,16 @@ function reasoningError(q, err) {
 // a sensible recent default and says it did.
 const SYMPTOM_SYSTEM =
 `You extract the incident shape from a NOC operator's plain-words complaint.
+You are told the OPERATOR'S timezone and the current time in that timezone. Absolute /
+bare clock times the operator states ("2pm", "09:30", "from 14:00") are in the OPERATOR'S
+LOCAL timezone, NOT UTC — reason about them in that local zone.
 Return ONLY:
-- timeAnchor: an ISO-8601 timestamp for when the problem STARTED, resolved against the
-  current time you are given (e.g. "since 2pm" -> today at 14:00). null if none is stated.
+- timeAnchor: an ISO-8601 timestamp for when the problem STARTED. For a bare/absolute
+  clock time, interpret it in the operator's LOCAL timezone and anchor it to the MOST
+  RECENT PAST occurrence (if "2pm" has not happened yet today in the operator's zone,
+  it means yesterday's 2pm). For a relative phrase ("last 30 minutes", "an hour ago"),
+  offset from the current time you are given. Return the timestamp with an explicit UTC
+  offset or as UTC (…Z). null if no time is stated.
 - scope: the array of fronts the problem is IN, chosen from exactly these keys —
   campus, fabric, wan, incidents, firewall, loadbalancer, security — plus any named
   sites. A front the operator says is FINE is NOT in scope. null if the complaint
@@ -324,15 +331,116 @@ Return ONLY:
 - rawSymptom: the operator's own words for what is wrong.
 Reason only about what is stated. Do not invent a time or a front that was not implied.`;
 
-async function extractSymptom(description) {
+// Resolve the timezone the operator's absolute clock times should be read in. A valid
+// IANA string from the client wins; otherwise fall back to the server's local zone and
+// SAY so (source: 'server') — never silently assume UTC.
+function resolveTz(operatorTz) {
+  const server = (() => {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; }
+    catch (e) { return 'UTC'; }
+  })();
+  const tz = typeof operatorTz === 'string' && operatorTz.trim() ? operatorTz.trim() : null;
+  if (tz && tzIsValid(tz)) return { tz, source: 'operator' };
+  return { tz: server, source: 'server' };
+}
+
+function tzIsValid(tz) {
+  try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; }
+  catch (e) { return false; }
+}
+
+// Offset (local − UTC, in ms) that timezone `tz` was at the UTC instant `dateMs`.
+function tzOffsetMs(tz, dateMs) {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+  const map = {};
+  for (const p of dtf.formatToParts(new Date(dateMs))) map[p.type] = p.value;
+  const asUTC = Date.UTC(+map.year, +map.month - 1, +map.day, +map.hour, +map.minute, +map.second);
+  return asUTC - dateMs;
+}
+
+// Real UTC ms for a wall-clock (y,mo,d,h,mi) that is stated in timezone `tz`.
+function zonedWallClockToUtcMs(y, mo, d, h, mi, tz) {
+  const guess = Date.UTC(y, mo, d, h, mi, 0);
+  // Two-pass to settle DST near a transition.
+  let utc = guess - tzOffsetMs(tz, guess);
+  utc = guess - tzOffsetMs(tz, utc);
+  return utc;
+}
+
+// The date (y,mo,d) it is RIGHT NOW in timezone `tz`.
+function todayInTz(tz, nowMs) {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+  });
+  const map = {};
+  for (const p of dtf.formatToParts(new Date(nowMs))) map[p.type] = p.value;
+  return { y: +map.year, mo: +map.month - 1, d: +map.day };
+}
+
+// Human "now" in tz, for the reasoning prompt (e.g. "2026-08-17 12:10 Asia/Kolkata").
+function nowInTzLabel(tz, nowMs) {
+  try {
+    const dtf = new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz, hourCycle: 'h23',
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    });
+    const map = {};
+    for (const p of dtf.formatToParts(new Date(nowMs))) map[p.type] = p.value;
+    return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute} ${tz}`;
+  } catch (e) { return `${new Date(nowMs).toISOString()} ${tz}`; }
+}
+
+// Deterministic, timezone-correct anchor for a BARE/ABSOLUTE clock time in the text.
+// Interprets the clock in `tz` and anchors to the MOST RECENT PAST occurrence — so it is
+// never in the future and never mis-read as UTC. Relative phrasing ("last 30 minutes")
+// has no absolute clock and returns null (the caller keeps the relative anchor). Returns
+// { iso, ms, hour, min } or null.
+function absoluteClockToUtc(text, tz, nowMs) {
+  const s = String(text || '');
+  const m = /\b(?:since|from|around|at|about)?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i.exec(s);
+  if (!m) return null;
+  // Require real clock-time context, not a stray number.
+  if (!/\b(since|from|around|at|about)\b/i.test(s) && !/(am|pm|:)/i.test(s)) return null;
+  let hr = Number(m[1]);
+  const min = m[2] ? Number(m[2]) : 0;
+  const ap = (m[3] || '').toLowerCase();
+  if (!ap && !m[2] && hr > 23) return null;
+  if (ap === 'pm' && hr < 12) hr += 12;
+  if (ap === 'am' && hr === 12) hr = 0;
+  if (hr < 0 || hr > 23 || min < 0 || min > 59) return null;
+  const today = todayInTz(tz, nowMs);
+  let ms = zonedWallClockToUtcMs(today.y, today.mo, today.d, hr, min, tz);
+  if (ms > nowMs) ms -= 24 * 60 * 60 * 1000; // not reached yet today -> yesterday's occurrence
+  // Recompute against the shifted day so a DST change on the boundary is honoured.
+  if (ms > nowMs) ms = nowMs;
+  return { iso: new Date(ms).toISOString(), ms, hour: hr, min };
+}
+
+async function extractSymptom(description, operatorTz) {
   const desc = String(description || '').trim();
-  const base = { timeAnchor: null, timeAnchorMs: null, scope: null, rawSymptom: desc };
+  const nowMs = Date.now();
+  const { tz, source: tzSource } = resolveTz(operatorTz);
+  const tzTag = { operatorTz: tz, tzSource };
+  const base = { timeAnchor: null, timeAnchorMs: null, scope: null, rawSymptom: desc, ...tzTag };
+  // Deterministic tz-correct anchor for any bare/absolute clock time (class-level fix:
+  // ALWAYS interpret absolute clocks in the operator's zone, past-anchored — regardless
+  // of what the reasoning returns).
+  const clk = absoluteClockToUtc(desc, tz, nowMs);
+  const tzNote = tzSource === 'operator'
+    ? `Absolute clock times read in the operator's timezone (${tz}).`
+    : `No operator timezone sent — absolute clock times read in the server's local timezone (${tz}).`;
 
   if (!claude.hasKey()) {
-    const h = heuristicSymptom(desc);
-    return { ...base, ...h, note: h.timeAnchor || h.scope
+    const h = heuristicSymptom(desc, tz, nowMs);
+    // Prefer the deterministic tz-correct clock anchor when present.
+    if (clk) { h.timeAnchor = clk.iso; h.timeAnchorMs = clk.ms; }
+    return { ...base, ...h, note: (h.timeAnchor || h.scope
       ? 'Parsed the complaint with a simple keyword pass (no API key for full reasoning).'
-      : 'No API key to reason about the complaint, and no obvious time/scope keywords — using a recent default window.',
+      : 'No API key to reason about the complaint, and no obvious time/scope keywords — using a recent default window.') + ' ' + tzNote,
       source: h.timeAnchor || h.scope ? 'heuristic' : 'none' };
   }
 
@@ -352,44 +460,45 @@ async function extractSymptom(description) {
     const res = await claude.reason({
       system: SYMPTOM_SYSTEM,
       messages: [{ role: 'user', content:
-        `Current time (UTC): ${new Date().toISOString()}\n\nComplaint:\n"${desc}"` }],
+        `Operator timezone: ${tz} (${tzSource === 'operator' ? 'sent by the client' : 'server local — client sent none'})\n` +
+        `Current time in the operator's timezone: ${nowInTzLabel(tz, nowMs)}\n` +
+        `Current time (UTC): ${new Date(nowMs).toISOString()}\n\nComplaint:\n"${desc}"` }],
       maxTokens: 1500, effort: 'medium', format,
     });
-    if (res.refused) { const h = heuristicSymptom(desc); return { ...base, ...h, note: 'Reasoning declined; used a keyword pass.', source: h.timeAnchor || h.scope ? 'heuristic' : 'none' }; }
+    if (res.refused) { const h = heuristicSymptom(desc, tz, nowMs); if (clk) { h.timeAnchor = clk.iso; h.timeAnchorMs = clk.ms; } return { ...base, ...h, note: 'Reasoning declined; used a keyword pass. ' + tzNote, source: h.timeAnchor || h.scope ? 'heuristic' : 'none' }; }
     const parsed = JSON.parse(res.text);
-    const ms = toMsSafe(parsed.timeAnchor);
+    let timeAnchor = parsed.timeAnchor || null;
+    let ms = toMsSafe(timeAnchor);
+    // Override with the deterministic tz-correct clock anchor whenever the complaint
+    // names an absolute clock — this is the guard against a UTC misread.
+    if (clk) { timeAnchor = clk.iso; ms = clk.ms; }
     const scope = Array.isArray(parsed.scope) && parsed.scope.length ? parsed.scope.map(String) : null;
     return {
-      timeAnchor: parsed.timeAnchor || null,
+      ...tzTag,
+      timeAnchor,
       timeAnchorMs: ms,
       scope,
       rawSymptom: parsed.rawSymptom || desc,
-      note: 'Extracted from the complaint by real reasoning.',
+      note: 'Extracted from the complaint by real reasoning. ' + tzNote,
       source: 'claude',
     };
   } catch (err) {
-    const h = heuristicSymptom(desc);
-    return { ...base, ...h, note: `Reasoning unavailable (${err && err.message ? err.message : 'error'}); used a keyword pass.`, source: h.timeAnchor || h.scope ? 'heuristic' : 'none' };
+    const h = heuristicSymptom(desc, tz, nowMs);
+    if (clk) { h.timeAnchor = clk.iso; h.timeAnchorMs = clk.ms; }
+    return { ...base, ...h, note: `Reasoning unavailable (${err && err.message ? err.message : 'error'}); used a keyword pass. ` + tzNote, source: h.timeAnchor || h.scope ? 'heuristic' : 'none' };
   }
 }
 
-// Deterministic fallback: pull a clock time ("2pm", "14:00", "2:30pm") relative to
-// today, and a coarse scope from front keywords. Honest and clearly labelled.
-function heuristicSymptom(desc) {
+// Deterministic fallback: pull a clock time ("2pm", "14:00", "2:30pm") anchored in the
+// operator's timezone to the most-recent-past occurrence, and a coarse scope from front
+// keywords. Honest and clearly labelled.
+function heuristicSymptom(desc, tz, nowMs) {
   const text = String(desc || '');
+  const zone = tz || (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch (e) { return 'UTC'; } })();
+  const at = typeof nowMs === 'number' ? nowMs : Date.now();
   let timeAnchor = null, timeAnchorMs = null;
-  const m = /\b(?:since|from|around|at)?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i.exec(text);
-  if (m && /\b(since|from|around|at|pm|am|:)\b/i.test(text)) {
-    let hr = Number(m[1]); const min = m[2] ? Number(m[2]) : 0; const ap = (m[3] || '').toLowerCase();
-    if (ap === 'pm' && hr < 12) hr += 12;
-    if (ap === 'am' && hr === 12) hr = 0;
-    if (hr >= 0 && hr <= 23) {
-      const d = new Date();
-      d.setHours(hr, min, 0, 0);
-      if (d.getTime() > Date.now()) d.setDate(d.getDate() - 1); // "2pm" already passed today
-      timeAnchor = d.toISOString(); timeAnchorMs = d.getTime();
-    }
-  }
+  const clk = absoluteClockToUtc(text, zone, at);
+  if (clk) { timeAnchor = clk.iso; timeAnchorMs = clk.ms; }
   const scope = [];
   const S = [
     ['campus', /\b(campus|catalyst|switch|access|sw\d)\b/i],

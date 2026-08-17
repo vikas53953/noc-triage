@@ -1907,8 +1907,11 @@ app.get('/api/debates/:id', (req, res) => {
 // A description that names no real network subject is refused here (422) and no
 // bridge is started — the honesty rule, enforced at the entry point.
 app.post('/api/triage', (req, res) => {
-  const { severity, description } = req.body || {};
-  const result = triage.startTriage(severity, description);
+  // operatorTz (gap 1): the client sends its IANA timezone (e.g. "Asia/Kolkata") so a
+  // bare clock time like "since 2pm" is read in the OPERATOR's zone, not UTC. Absent
+  // (older client) -> the engine falls back to the server's local zone and says so.
+  const { severity, description, operatorTz } = req.body || {};
+  const result = triage.startTriage(severity, description, operatorTz);
   if (result.refused) {
     return res.status(422).json({ error: result.reason });
   }

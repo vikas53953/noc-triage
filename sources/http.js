@@ -30,6 +30,18 @@ function rawRequest(opts, body) {
   const agent = new https.Agent({ rejectUnauthorized: opts.verifyTls !== false, keepAlive: true });
 
   return new Promise((resolve) => {
+    // Deterministic teardown (listener/socket-leak class fix): a NEW keepAlive agent is
+    // created per request, so its socket is never reused — left alone it lingers idle
+    // (holding close/end/error listeners) until GC. Destroy the agent the instant the
+    // read settles so nothing accumulates across a long triage run. `settled` guards
+    // against a late timeout/close firing after we've already resolved.
+    let settled = false;
+    const settle = (result) => {
+      if (settled) return;
+      settled = true;
+      try { agent.destroy(); } catch (e) { /* teardown must never throw into a read */ }
+      resolve(result);
+    };
     const req = https.request({
       host: opts.host,
       port: opts.port || 443,
@@ -41,11 +53,11 @@ function rawRequest(opts, body) {
     }, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => resolve({ ok: res.statusCode < 400, status: res.statusCode, body: data, headers: res.headers }));
+      res.on('end', () => settle({ ok: res.statusCode < 400, status: res.statusCode, body: data, headers: res.headers }));
     });
 
-    req.on('error', (err) => resolve({ ok: false, error: err.code || err.message }));
-    req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'timeout' }); });
+    req.on('error', (err) => settle({ ok: false, error: err.code || err.message }));
+    req.on('timeout', () => { req.destroy(); settle({ ok: false, error: 'timeout' }); });
 
     if (body) req.write(body);
     req.end();

@@ -176,9 +176,18 @@ function log(line) {
 // Human window label for the notes, e.g. "the 14:00 window".
 function windowLabel(sym) {
   if (!sym || !sym.timeAnchor) return 'the recent window';
-  // Render in UTC so the label matches the ISO anchor the symptom parse produced
-  // (e.g. "2pm" -> 14:00Z -> "the 14:00 UTC window"), not a locale-shifted time.
   const d = new Date(sym.timeAnchor);
+  // Prefer the operator's local time (e.g. "the 14:00 Asia/Kolkata window") so the label
+  // reads as the wall-clock the operator meant, not a UTC-shifted hour. Fall back to UTC.
+  const tz = sym.operatorTz;
+  if (tz) {
+    try {
+      const dtf = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' });
+      const map = {};
+      for (const p of dtf.formatToParts(d)) map[p.type] = p.value;
+      return `the ${map.hour}:${map.minute} ${tz} window`;
+    } catch (e) { /* fall through to UTC */ }
+  }
   const hh = String(d.getUTCHours()).padStart(2, '0');
   const mm = String(d.getUTCMinutes()).padStart(2, '0');
   return `the ${hh}:${mm} UTC window`;
@@ -507,9 +516,20 @@ async function runBridge(triage) {
   try {
     // ── Parse the SYMPTOM first (gap 1) — real reasoning about the complaint's
     // time window + scope, so every read below can filter to the incident. ──
-    const sym = await jarvis.extractSymptom(triage.description).catch(() => null)
+    const sym = await jarvis.extractSymptom(triage.description, triage.operatorTz).catch(() => null)
       || { timeAnchor: null, timeAnchorMs: null, scope: null, rawSymptom: triage.description, note: 'symptom parse unavailable', source: 'none' };
     sym.severity = triage.severity;
+    // HARD GUARD (gap 1): a computed window start must be ≤ now. A future anchor would
+    // put nothing in-window and mislabel everything "pre-existing" — clamp it back to now
+    // and say so out loud. A window start in the future must never happen.
+    const nowMs = Date.now();
+    if (sym.timeAnchorMs && sym.timeAnchorMs > nowMs) {
+      sym.timeAnchorFuture = sym.timeAnchor;
+      sym.timeAnchorMs = nowMs;
+      sym.timeAnchor = new Date(nowMs).toISOString();
+      sym.note = (sym.note ? sym.note + ' ' : '') +
+        `The parsed window start was in the FUTURE (${sym.timeAnchorFuture}) — clamped back to now so nothing is mislabelled.`;
+    }
     triage.symptom = sym;
     // Rank the blind spots by relevance to THIS symptom (gap 6).
     triage.rankedBlindSpots = jarvis.rankBlindSpots(BLIND_SPOTS, sym.rawSymptom || triage.description);
@@ -1280,12 +1300,13 @@ async function retriage(id) {
   const severity = (live && live.severity) || (rec && rec.severity);
   const description = (live && live.description) || (rec && rec.description);
   const incidentId = (live && live.incidentId) || (rec && rec.incidentId) || null;
+  const operatorTz = (live && live.operatorTz) || (rec && rec.operatorTz) || null;
   if (!severity || !description) return { error: 'not_found', reason: 'That triage has no severity/description to re-run.' };
 
   // Build the new run, carrying the SAME incident id and a link to the run it
   // re-triages. runBridge persists its own record (linked by incidentId).
   const newTriage = buildTriage(severity, description, {
-    incidentId, reTriageOf: id, parentIncidentId: incidentId,
+    incidentId, reTriageOf: id, parentIncidentId: incidentId, operatorTz,
   });
   if (newTriage.refused) return { error: 'refused', reason: newTriage.reason };
 
@@ -1326,8 +1347,8 @@ async function retriage(id) {
 
 // Start a triage. Returns { triageId } on success, or { refused, reason } if
 // the description names no real network subject (the landlord-problem fix).
-function startTriage(severity, description) {
-  const triage = buildTriage(severity, description);
+function startTriage(severity, description, operatorTz) {
+  const triage = buildTriage(severity, description, { operatorTz });
   if (triage.refused) return { refused: true, reason: triage.reason };
 
   emitOpened(triage);
@@ -1380,6 +1401,7 @@ function buildTriage(severity, description, opts = {}) {
     id,
     incidentId,                          // stable human-readable id (issue 11)
     reTriageOf: opts.reTriageOf || null, // set when this run is a re-triage
+    operatorTz: opts.operatorTz || null, // IANA tz for reading absolute clock times (gap 1)
     severity: sev,
     title: titleFrom(desc),
     description: desc,
@@ -1467,6 +1489,21 @@ function titleFrom(desc) {
   return t.length <= 80 ? t : t.slice(0, 77).replace(/\s+\S*$/, '') + '…';
 }
 
+// Resolve a triage by its id (trg-…) OR its operator-facing incident id (INC-…). The
+// UI surfaces the incident id prominently, so a client may send either — accepting both
+// removes a whole class of "No such triage" 404s. On an incident id with more than one
+// run (a re-triage), the most recently opened run wins.
+function resolveTriage(idOrIncident) {
+  const key = String(idOrIncident || '');
+  const direct = triages.get(key);
+  if (direct) return direct;
+  let best = null;
+  for (const t of triages.values()) {
+    if (t.incidentId === key && (!best || t.openedAt > best.openedAt)) best = t;
+  }
+  return best;
+}
+
 // Full record for reconnect/refresh.
 function getTriage(id) {
   const t = triages.get(id);
@@ -1540,10 +1577,19 @@ function postOperatorMessage(triageId, text) {
 // the fresh read), and return the real outcome. No fake success: if the source
 // is still down, the card goes suspect again with the new error string.
 async function retryFront(triageId, front) {
-  const t = triages.get(triageId);
+  // Accept EITHER the triage id (trg-…) OR the operator-facing incident id (INC-…) —
+  // the frontend may hold whichever, and passing the incident id was the real cause of
+  // the 404 (issue: per-front retry). Resolve by id first, then by incidentId.
+  const t = resolveTriage(triageId);
   if (!t) return { error: 'not_found', reason: 'No such triage.' };
+  // Normalise the front key: the contract is the lowercase front key
+  // (campus|fabric|wan|incidents). Tolerate case/whitespace so "WAN"/"Fabric" still work.
+  front = String(front || '').trim().toLowerCase();
   if (!READERS[front]) {
-    return { error: 'not_retryable', reason: `The ${front} front has no live source to re-read (it is a blind spot).` };
+    if (BLIND_FRONTS.includes(front)) {
+      return { error: 'not_retryable', reason: `The ${front} front is a blind spot — no live source to re-read.` };
+    }
+    return { error: 'not_retryable', reason: `"${front}" is not a live front. Retryable fronts: ${LIVE_FRONTS.join(', ')}.` };
   }
   // Which engineer owns this front (for the session-log tag + the bridge note).
   const owner = { campus: 'netops', fabric: 'router-expert', wan: 'router-expert', incidents: 'incident-handler' }[front] || 'monitor-eye';
