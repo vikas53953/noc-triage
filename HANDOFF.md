@@ -18,6 +18,12 @@ Jarvis default model = `claude-opus-5` (`JARVIS_MODEL` env overrides). Never fak
   recommendation. Fix the CLASS, not the case. No "done" without fresh live evidence — he confirms, never discovers.
 
 ## Laws (absolute, never regress)
+**No static bindings — intent first** (Vikas, 2026-08-17): this is a purely agentic console. Jarvis
+UNDERSTANDS the operator's intent (LLM), delegates to the agent capable of serving it, and composes the
+answer from what comes back. Hardcoded phrase→action bindings, keyword regexes that ANSWER (rather than
+safety-refuse), and fixed assumptions about what the operator meant are defects. Deterministic code is
+for SAFETY ONLY (write refusal, gates, scrubbing) — it may refuse, it must never answer or route in
+place of intent. When a rule and intent disagree: safety refuses; everything else follows intent.
 **Ambiguity → ask, never assume** (Vikas, 2026-08-17): when an operator request is ambiguous (device not
 named / several candidates / unclear target), Jarvis runs NOTHING and asks, listing the real options.
 Auto-run only when exactly one candidate can serve the ask. The chosen answer is remembered for the rest
