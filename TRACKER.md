@@ -198,3 +198,16 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
 - AFTER those: guardrail PR gets independent review + merge → THEN Class 9 rebuild (fix/chat-sees-incidents,
   shares server.js) → THEN Class 5+6. resumeClarification replay bug + polite-imperative regex gap stay
   queued (ambiguity-law adjacent, log in Class 9/5+6 scope if cheap).
+
+## 2026-08-18 — PR #51 MERGED (doc-accuracy-2, all 7 #48-audit items verified)
+- Reviewer verdict: items 1-4,6 FIXED with line+test evidence; item 5 honest (labelled UTC, right date).
+  52 doc tests + 67 guardrail tests green. Adversarial sweep (empty/null verdicts, invalid tz, site-only
+  scope) clean. Live-checked on :3105 via deterministic alert path (no LLM).
+- Reviewer ALSO found+fixed a real defect at class level: alert-opened docs claimed "N new alarms appeared
+  during this incident" from sdwan's default rolling-24h split. Now all timing claims gate on
+  verdict.window.timeAnchor; undated ⇒ honest "cannot say when they started". +6 tests.
+- FOLLOW-UP LOGGED: triage.js frontIsActive() has the same rolling-24h weakness UPSTREAM (engine's own
+  activeInWindow split soft on undated bridges) — doc layer no longer amplifies it; fix in engine later.
+- Residual (deliberate): next-steps / could-not-see sections pass engine strings verbatim (DNAC_*, FMC).
+- Honest limits: populated what-broke path unit-tested only (clone had no source creds); LLM hypothesis
+  path pending credits (regression guard in place).
