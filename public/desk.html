@@ -419,6 +419,11 @@ pre.term{
 .round-conf{font-size:.6rem;font-weight:800;color:var(--ink3);margin-left:auto}
 .probe{font-size:.77rem;line-height:1.5;margin-bottom:.3rem;overflow-wrap:anywhere}
 .probe .r-lbl{color:var(--accent);margin-bottom:.1rem}
+.probe-why{font-size:.68rem;color:var(--ink3);line-height:1.45;margin-top:.15rem;font-style:italic}
+.report .stance{display:inline-block;font-size:.56rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
+  padding:.06rem .32rem;border-radius:4px;background:rgba(148,163,184,.22);color:var(--ink2);margin-right:.4rem;vertical-align:middle}
+.inv-q .qlist{list-style:disc;margin:.1rem 0 .5rem 1.1rem;padding:0}
+.inv-q .qlist li{font-size:.8rem;line-height:1.5;font-weight:600;margin-bottom:.25rem;overflow-wrap:anywhere}
 .report{font-family:var(--mono);font-size:.72rem;line-height:1.55;background:var(--term-bg);
   color:var(--term-ink);border-radius:7px;padding:.4rem .55rem;overflow:auto;max-height:220px;
   white-space:pre-wrap;overflow-wrap:anywhere}
@@ -2487,13 +2492,27 @@ function invRender(id){
   v.order.forEach(function(rn){
     var r = v.rounds[rn]; if(!r) return;
     var rpct = invPct(r.confidence);
+    /* probe is an OBJECT {agentId,agentName,question,device,rationale} — render
+       its question + agentName, never the object. report is an OBJECT
+       {agentName,stance,text} — render report.text. (Handles a plain string too,
+       so a restored/legacy shape still reads.) */
+    var probeObj = r.probe && typeof r.probe === 'object' ? r.probe : null;
+    var probeQ   = probeObj ? probeObj.question : r.probe;
+    var probeWhy = probeObj ? probeObj.rationale : '';
+    var agentNm  = r.agent || (probeObj && probeObj.agentName) || '';
+    var repObj   = r.report && typeof r.report === 'object' ? r.report : null;
+    var repTxt   = repObj ? repObj.text : r.report;
+    var repStance= repObj ? repObj.stance : '';
     h += '<div class="round' + (rn === latest ? ' latest' : '') + '">' +
          '<div class="round-head"><span class="round-n">Round ' + esc(rn) + '</span>' +
-           (r.agent ? '<span class="round-agent">' + esc(r.agent) + '</span>' : '') +
+           (agentNm ? '<span class="round-agent">' + esc(agentNm) + '</span>' : '') +
            (rpct != null ? '<span class="round-conf">' + rpct + '%</span>' : '') + '</div>';
-    if(r.probe) h += '<div class="probe"><span class="r-lbl">Probe asked</span>' + md(r.probe) + '</div>';
-    if(r.report != null && String(r.report).trim())
-      h += '<div class="report">' + esc(r.report) + '</div>';
+    if(probeQ) h += '<div class="probe"><span class="r-lbl">Probe asked</span>' + md(probeQ) +
+      (probeWhy ? '<div class="probe-why">' + md(probeWhy) + '</div>' : '') + '</div>';
+    if(repTxt != null && String(repTxt).trim())
+      h += '<div class="report">' +
+           (repStance ? '<span class="stance">' + esc(repStance) + '</span>' : '') +
+           esc(repTxt) + '</div>';
     var hy = Array.isArray(r.hypotheses) ? r.hypotheses : [];
     if(hy.length)
       h += '<ul class="hypos">' + hy.map(invHypoLi).join('') + '</ul>';
@@ -2502,21 +2521,31 @@ function invRender(id){
   if(!v.order.length && cls === 'run')
     h += '<div class="footnote">Probing the highest-value unknown first — rounds land here as each agent reports back.</div>';
 
-  /* clarifying-question prompt — answering resumes the loop */
-  if(cls === 'grill' && v.question){
+  /* clarifying-question prompt — questions[] is PLURAL (array of strings).
+     Render every question; one answer resumes the loop (POST /:id/answer). */
+  var qs = Array.isArray(v.questions) ? v.questions.filter(function(q){ return q != null && String(q).trim(); }) : [];
+  if(cls === 'grill' && qs.length){
     h += '<div class="inv-q"><span class="r-lbl">Jarvis needs you to narrow it</span>' +
-         '<div class="qtext">' + md(v.question) + '</div>' +
+         (qs.length === 1
+           ? '<div class="qtext">' + md(qs[0]) + '</div>'
+           : '<ul class="qlist">' + qs.map(function(q){ return '<li>' + md(q) + '</li>'; }).join('') + '</ul>') +
          '<textarea class="inv-ans" placeholder="Answer in plain words — e.g. the site is branch-3, it started at 2pm, only voice traffic"></textarea>' +
          '<div class="acts"><button class="inv-btn inv-ans-go" data-inv="' + esc(id) + '">Answer &amp; resume</button></div>' +
          '<div class="footnote">Nothing is probed until you answer — Jarvis will not investigate a guess.</div></div>';
   }
 
-  /* terminal: root cause + fix plan */
+  /* fixPlan is an OBJECT {summary (string), proposal?}. Render summary as text;
+     a proposal (config fix) gets the CW-2 approve button. */
+  var fp = v.fixPlan && typeof v.fixPlan === 'object' ? v.fixPlan : null;
+  var fpSummary = fp ? fp.summary : (typeof v.fixPlan === 'string' ? v.fixPlan : '');
+  var fpProposal = fp && fp.proposal && typeof fp.proposal === 'object' ? fp.proposal : null;
+
+  /* terminal: root cause + fix plan (resolved) */
   if(v.rootCause){
     h += '<div class="rootcause"><span class="r-lbl">Root cause</span>' +
          '<div class="rc-txt">' + md(v.rootCause) + '</div>';
-    if(v.fixPlan) h += '<div class="fixplan"><span class="r-lbl">Fix plan</span>' + md(v.fixPlan) + '</div>';
-    if(v.proposal && typeof v.proposal === 'object'){
+    if(fpSummary) h += '<div class="fixplan"><span class="r-lbl">Fix plan</span>' + md(fpSummary) + '</div>';
+    if(fpProposal){
       h += '<div class="footnote">The fix is a config change — it never applies itself. Review the exact ' +
            'commands and press go; it walks the CW-2 change wrap (gate, before/after, diff, undo).</div>' +
            '<button class="inv-btn inv-fix" data-inv="' + esc(id) + '" style="margin-top:.45rem">Review &amp; approve the fix →</button>';
@@ -2524,16 +2553,16 @@ function invRender(id){
     h += '</div>';
   }
 
-  /* honest stuck / cap states */
+  /* honest non-resolved terminal states — the summary/reason is the real text. */
   if(cls === 'stuck' && !v.rootCause){
     h += '<div class="needs"><span class="r-lbl">Stuck — needs input</span>' +
-         (v.needs ? md(v.needs) : 'The loop cannot narrow further with what it can reach. ' +
+         md(v.stuckReason || fpSummary || 'The loop cannot narrow further with what it can reach. ' +
            'It stopped rather than invent a conclusion.') + '</div>';
   }
   if(cls === 'cap' && !v.rootCause){
     h += '<div class="needs" style="border-color:var(--warn);background:var(--warn-bg)">' +
          '<span class="r-lbl" style="color:var(--warn)">Hit the round cap</span>' +
-         (v.needs ? md(v.needs) : 'The investigation reached its safety cap on rounds. ' +
+         md(fpSummary || v.stuckReason || 'The investigation reached its safety cap on rounds. ' +
            'The best-supported hypothesis stands above with the confidence reached — the rest is still unknown, ' +
            'stated honestly rather than as a false certainty.') + '</div>';
   }
@@ -2545,14 +2574,15 @@ function invRender(id){
 function invApply(id, d){
   var v = INV[id]; if(!v) return;
   if(d.problem != null) v.problem = d.problem;
-  if(d.understood != null || d.understoodProblem != null) v.understood = d.understood || d.understoodProblem;
+  if(d.understood != null) v.understood = d.understood;
   if(d.status != null) v.status = d.status;
   if(d.confidence != null) v.confidence = d.confidence;
-  if(d.question != null || d.clarifyingQuestion != null) v.question = d.question || d.clarifyingQuestion;
-  if(d.rootCause != null || d.root_cause != null) v.rootCause = d.rootCause || d.root_cause;
-  if(d.fixPlan != null || d.fix_plan != null) v.fixPlan = d.fixPlan || d.fix_plan;
-  if(d.proposal != null || d.changeProposal != null) v.proposal = d.proposal || d.changeProposal;
-  if(d.needs != null) v.needs = d.needs;
+  /* questions[] is PLURAL (array of clarifying-question strings). */
+  if(Array.isArray(d.questions)) v.questions = d.questions.slice();
+  if(d.rootCause != null) v.rootCause = d.rootCause;
+  /* fixPlan is an OBJECT {summary, proposal?}; keep it whole. */
+  if(d.fixPlan != null) v.fixPlan = d.fixPlan;
+  if(d.stuckReason != null) v.stuckReason = d.stuckReason;
 
   /* a single round on the event */
   if(d.round != null && (d.probe != null || d.report != null || d.agent != null || d.hypotheses != null)){
@@ -2590,7 +2620,7 @@ function invCard(id, seed){
     'Starting an investigation — I will grill the problem, probe the right agents round by round, and narrow to a root cause. Watch it below.' +
     '<div class="inv"></div>', true);
   INV[id] = { el:el, problem:'', understood:'', status:'starting', confidence:null,
-              rounds:{}, order:[], question:'', rootCause:'', fixPlan:'', proposal:null, needs:'', cap:null };
+              rounds:{}, order:[], questions:[], rootCause:'', fixPlan:null, stuckReason:'' };
   if(seed) invApply(id, seed); else invRender(id);
   return INV[id];
 }
@@ -2622,10 +2652,12 @@ function startInvestigation(problem){
           esc((res.body && res.body.error) || ('HTTP ' + res.status)) + '. Nothing was run.');
         return;
       }
-      var rec = res.body || {};
-      var id = rec.id || rec.investigationId || rec.invId;
+      /* The POST returns 202 { investigation: rec, watch } — the record is under
+         `investigation`, NOT a top-level id. Read res.investigation.id. */
+      var rec = (res.body && res.body.investigation) || {};
+      var id = rec.id;
       if(!id){ sysMsg('The server started something but returned no investigation id, so nothing can be tracked. Nothing is invented.'); return; }
-      invCard(id, rec);   // seed with whatever the POST already returned (problem/understood/question)
+      invCard(id, rec);   // seed with the snapshot the POST already returned (problem/understood/questions)
     })
     .catch(function(err){
       sysMsg('Could not reach the server: ' + esc(err.message || err) + '. Nothing was run.');
@@ -2655,11 +2687,15 @@ function onInvUpdate(type, d){
   }
 }
 
-/* GET the full record — used on terminal states and to hydrate. */
+/* GET the full record — used on terminal states and to hydrate. The route
+   returns { investigation: rec }; unwrap it. */
 function invRefetch(id){
   api('/api/copilot/investigate/' + encodeURIComponent(id))
     .then(function(r){ return r.ok ? r.json() : null; })
-    .then(function(rec){ if(rec && INV[id]) invApply(id, rec); })
+    .then(function(body){
+      var rec = body && (body.investigation || body);
+      if(rec && rec.id && INV[id]) invApply(id, rec);
+    })
     .catch(function(){ /* keep what is on screen; nothing invented */ });
 }
 
@@ -2698,7 +2734,8 @@ $('chat').addEventListener('click', function(e){
   if(fix){
     var fid = fix.getAttribute('data-inv');
     var rec = INV[fid];
-    if(rec && rec.proposal){ proposalCard(rec.proposal, 'jarvis'); evTab('ev-chg'); if(window.innerWidth <= 760) mobPane(1); }
+    var prop = rec && rec.fixPlan && rec.fixPlan.proposal;
+    if(prop){ proposalCard(prop, 'jarvis'); evTab('ev-chg'); if(window.innerWidth <= 760) mobPane(1); }
     return;
   }
 });
