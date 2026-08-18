@@ -414,6 +414,49 @@ pre.term{
 @keyframes flash{0%{box-shadow:0 0 0 0 rgba(59,130,246,.55)}100%{box-shadow:0 0 0 12px rgba(59,130,246,0)}}
 .flash{animation:flash .9s ease-out}
 
+/* ---------- CW-3: ticket queue + tickets tab ---------- */
+.tkt-tools{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;margin-bottom:.6rem}
+.tkt-tools select{background:var(--panel);border:1px solid var(--line);border-radius:8px;color:var(--ink);
+  padding:.4rem .55rem;font-size:.76rem;min-width:0;flex:1}
+.tkt-tools select:focus{outline:none;border-color:var(--accent)}
+.tkt-item{display:flex;gap:.55rem;padding:.55rem .6rem;margin-bottom:.4rem;border-radius:9px;
+  border:1px solid var(--line);cursor:pointer;transition:.14s;background:var(--panel);
+  width:100%;text-align:left;color:inherit;font:inherit}
+.tkt-item:hover{background:var(--hover);border-color:var(--accent)}
+.tkt-item.sel{border-color:var(--accent);background:var(--hover)}
+.tkt-txt{min-width:0;flex:1}
+.tkt-title{font-size:.79rem;font-weight:650;line-height:1.3;margin-bottom:.25rem;overflow-wrap:anywhere}
+.tkt-meta{display:flex;gap:.35rem;align-items:center;flex-wrap:wrap}
+.tkt-sub{font-size:.65rem;color:var(--ink3);margin-top:.2rem;overflow-wrap:anywhere}
+.sev-P4{background:var(--ink3)}
+.t-P4{background:rgba(148,163,184,.16);color:var(--ink2)}
+/* ticket status chips (5 states) */
+.tstat{font-size:.57rem;font-weight:800;letter-spacing:.04em;padding:.1rem .34rem;border-radius:4px;
+  text-transform:uppercase;white-space:nowrap}
+.tstat.open{background:var(--info-bg);color:var(--info)}
+.tstat.assigned{background:var(--purple-bg);color:var(--purple)}
+.tstat.in-progress{background:var(--warn-bg);color:var(--warn)}
+.tstat.resolved{background:var(--ok-bg);color:var(--ok)}
+.tstat.closed{background:rgba(148,163,184,.22);color:var(--ink2)}
+.tkt-link{font-size:.58rem;font-weight:700;padding:.1rem .34rem;border-radius:4px;
+  background:var(--info-bg);color:var(--accent);cursor:pointer}
+.note{border-left:2px solid var(--line);padding:.35rem 0 .35rem .6rem;margin-bottom:.4rem}
+.note .who{font-size:.63rem;font-weight:700;color:var(--ink2)}
+.note .txt{font-size:.78rem;line-height:1.5;margin-top:.15rem;overflow-wrap:anywhere}
+.tkt-back{cursor:pointer;color:var(--accent);font-size:.72rem;font-weight:700;margin-bottom:.5rem;
+  display:inline-flex;gap:.3rem;align-items:center}
+.tkt-actions{display:flex;flex-direction:column;gap:.5rem;margin-top:.7rem;
+  border-top:1px solid var(--line-soft);padding-top:.6rem}
+.tkt-actions .row{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center}
+.tkt-actions input,.tkt-actions select,.tkt-actions textarea{background:var(--card);
+  border:1px solid var(--line);border-radius:7px;color:var(--ink);padding:.4rem .55rem;
+  font-size:.76rem;flex:1;min-width:0}
+.tkt-actions textarea{resize:vertical;min-height:44px;width:100%;flex:none}
+.tkt-actions input:focus,.tkt-actions select:focus,.tkt-actions textarea:focus{outline:none;border-color:var(--accent)}
+.proposal select{width:100%;background:var(--card);border:1px solid var(--line);border-radius:7px;
+  color:var(--ink);padding:.4rem .55rem;font-size:.76rem;margin-top:.2rem}
+.proposal select:focus{outline:none;border-color:var(--accent)}
+
 /* ---------- mobile: panes stack ---------- */
 .mobtabs{display:none;gap:.35rem;padding:.5rem .75rem 0}
 .mobtabs button{
@@ -467,7 +510,7 @@ pre.term{
 <header class="top">
   <div class="brand">
     <h1>Jarvis Copilot Desk</h1>
-    <span class="dirtag">Cockpit · CW-2</span>
+    <span class="dirtag">Cockpit · CW-3</span>
   </div>
   <div class="top-right">
     <span class="chip wait" id="connChip"><span class="dot"></span>Connecting…</span>
@@ -556,6 +599,7 @@ pre.term{
       <button data-p="ev-out">Output</button>
       <button data-p="ev-chg">Change wrap</button>
       <button data-p="ev-drift">Drift</button>
+      <button data-p="ev-tickets">Tickets</button>
       <button data-p="ev-bridge">Bridge</button>
     </div>
     <div class="pane-body">
@@ -592,6 +636,24 @@ pre.term{
           <button class="btn btn-primary btn-sm" id="driftGo">Check drift</button>
         </div>
         <div id="driftWrap"></div>
+      </div>
+
+      <div class="evpage" id="ev-tickets">
+        <div class="tkt-tools">
+          <button class="btn btn-primary btn-sm" id="tktNew">🎫 New ticket</button>
+          <button class="btn btn-ghost btn-sm" id="tktRefresh" title="Re-read the ticket queue from the server">↻ Refresh</button>
+          <select id="tktFilter" title="Filter the queue by status">
+            <option value="">All statuses</option>
+            <option value="open">Open</option>
+            <option value="assigned">Assigned</option>
+            <option value="in-progress">In progress</option>
+            <option value="resolved">Resolved</option>
+            <option value="closed">Closed</option>
+          </select>
+        </div>
+        <div id="tktWrap">
+          <div class="empty"><span class="big">🎫</span>Opening the ticket queue…</div>
+        </div>
       </div>
 
       <div class="evpage" id="ev-bridge">
@@ -892,6 +954,7 @@ function sendAsk(){
      still goes to Jarvis untouched — nothing is hijacked, and no change is
      fired by typing. The card is the only trigger, and it needs a press. */
   if(looksLikeChange(t)) proposalCard({ device:'', commands:[], reason:t }, 'you');
+  else if(looksLikeTicket(t)) ticketProposalCard({ title:'', description:t, incidentId: (SEL && (SEL.incidentId || SEL.triageId)) || '' }, 'you');
   api('/api/command', { method:'POST', body: JSON.stringify({ agent:'jarvis', command:t }) })
     .then(function(r){
       if(!r.ok) return r.json().catch(function(){ return {}; }).then(function(b){
@@ -1022,7 +1085,18 @@ function paintContext(t){
     '<span class="tag t-' + (t.status === 'open' ? 'P3' : 'closed') + '">' + esc(t.status || '—') + '</span>' +
     '<span class="qsub" id="ctxSub" style="margin-left:auto">' + esc(t.incidentId || t.triageId) +
       ' · opened ' + esc(clockOf(t.openedAt)) +
-      (t.source === 'alert' ? ' · ⚡ alert-raised' : ' · 🧑‍💻 operator-opened') + '</span>';
+      (t.source === 'alert' ? ' · ⚡ alert-raised' : ' · 🧑‍💻 operator-opened') + '</span>' +
+    '<button class="btn btn-ghost btn-sm" id="ctxTicket" title="Raise a ticket linked to this incident">🎫 Raise ticket</button>';
+  var tb = $('ctxTicket');
+  if(tb) tb.addEventListener('click', function(){
+    ticketProposalCard({
+      title: t.title || '',
+      description: 'Raised from ' + (t.incidentId || t.triageId) + (t.title ? ': ' + t.title : ''),
+      incidentId: t.incidentId || t.triageId,
+      severity: /^P[1234]$/.test(String(t.severity)) ? String(t.severity) : 'P3'
+    }, 'you');
+    if(window.innerWidth <= 760) mobPane(1);
+  });
 }
 function paintConversation(t){
   var chat = $('chat');
@@ -1056,6 +1130,7 @@ function evTab(name){
   });
   if(window.innerWidth <= 1080 && window.innerWidth > 760) $('shell').classList.add('show-right');
   if(name === 'ev-chg') loadChangeHistory();
+  if(name === 'ev-tickets') loadTickets();
 }
 $('evtabs').addEventListener('click', function(e){
   var b = e.target.closest && e.target.closest('button[data-p]');
@@ -2193,6 +2268,373 @@ document.addEventListener('click', function(e){
 });
 
 /* ============================================================
+   CW-3 — TICKET QUEUE + PROPOSAL.  REAL records only.
+     GET  /api/copilot/tickets            → { tickets:[...] }
+     GET  /api/copilot/tickets/:id        → full ticket
+     POST /api/copilot/tickets            → create { severity, title, description, incidentId? }
+     POST /api/copilot/tickets/:id/assign → { assignee }
+     POST /api/copilot/tickets/:id/status → { status } (+resolution note to close/resolve)
+     POST /api/copilot/tickets/:id/note   → { text }
+   The internal queue is the single source of truth. Chat NEVER creates a ticket
+   — the proposal card's confirm is the only POST. Every action carries the
+   operator name (api()). When a route is not there yet (404) the pane says
+   exactly that — the CW-1 capability fallback, nothing invented.
+   ============================================================ */
+var TKT = { state:'idle', list:[], err:'', selId:null, sel:null, selState:'idle', selErr:'', filter:'' };
+var TKT_STATUSES = ['open','assigned','in-progress','resolved','closed'];
+function sevT(s){ return /^P[1234]$/.test(String(s)) ? String(s) : 'none'; }
+function httpWhyTkt(status){
+  return status === 404
+    ? 'The server has no ticket route yet (404) — the queue lands with the CW-3 backend.'
+    : 'The server answered HTTP ' + status + '.';
+}
+function statusChip(st){
+  st = String(st || 'open').toLowerCase();
+  var cls = TKT_STATUSES.indexOf(st) >= 0 ? st : 'open';
+  return '<span class="tstat ' + esc(cls) + '">' + esc(st.replace(/-/g,' ')) + '</span>';
+}
+
+var tktInflight = false;
+function loadTickets(force){
+  if(tktInflight) return;
+  if(TKT.state === 'ok' && !force){ renderTickets(); return; }
+  tktInflight = true;
+  if(TKT.state === 'idle') TKT.state = 'loading';
+  renderTickets();
+  var q = TKT.filter ? ('?status=' + encodeURIComponent(TKT.filter)) : '';
+  api('/api/copilot/tickets' + q)
+    .then(function(r){
+      if(!r.ok) return r.json().catch(function(){ return {}; }).then(function(b){
+        throw { status:r.status, msg:(b && b.error) || httpWhyTkt(r.status) };
+      });
+      return r.json();
+    })
+    .then(function(d){
+      var list = Array.isArray(d) ? d : (d && Array.isArray(d.tickets) ? d.tickets : null);
+      if(!list) throw { status:0, msg:'the ticket list came back in an unexpected shape' };
+      TKT.list = list; TKT.state = 'ok'; TKT.err = '';
+    })
+    .catch(function(e){ TKT.state = (e && e.status === 404) ? 'absent' : 'error'; TKT.err = (e && e.msg) || String(e); })
+    .then(function(){ tktInflight = false; renderTickets(); });
+}
+function tktRow(t){
+  t = t || {};
+  var sev = sevT(t.severity);
+  var assignee = t.assignee ? 'assigned to ' + esc(t.assignee) : 'unassigned';
+  var link = t.incidentId ? '<span class="tkt-link" title="Linked incident">🔗 ' + esc(t.incidentId) + '</span>' : '';
+  return '<button type="button" class="tkt-item' + (t.id === TKT.selId ? ' sel' : '') +
+      '" data-tkt="' + esc(t.id || '') + '">' +
+    '<div class="stripe sev-' + esc(sev) + '"></div>' +
+    '<div class="tkt-txt">' +
+      '<div class="tkt-title">' + esc(t.title || 'Untitled ticket') + '</div>' +
+      '<div class="tkt-meta">' +
+        '<span class="tag t-' + esc(sev) + '">' + esc(t.severity || 'P?') + '</span>' +
+        statusChip(t.status) + link +
+      '</div>' +
+      '<div class="tkt-sub">' + esc(t.id || '—') + ' · opened ' + esc(clockOf(t.ts)) + ' · ' + assignee + '</div>' +
+    '</div></button>';
+}
+function renderTickets(){
+  var w = $('tktWrap');
+  if(!w) return;
+  if(TKT.selId){ renderTicketDetail(); return; }
+  if(TKT.state === 'idle' || TKT.state === 'loading'){
+    w.innerHTML = '<div class="empty"><span class="big">⏳</span>Reading the real ticket queue…</div>'; return;
+  }
+  if(TKT.state === 'absent'){
+    w.innerHTML = '<div class="soon"><b>Ticket queue not available yet.</b>' + esc(TKT.err) +
+      ' Nothing is shown rather than something invented — the queue appears here the moment the backend is live.</div>';
+    return;
+  }
+  if(TKT.state === 'error'){ w.innerHTML = engineGoneBox('The ticket queue', TKT.err); return; }
+  var list = TKT.list || [];
+  if(!list.length){
+    w.innerHTML = '<div class="empty"><span class="big">🎫</span>No tickets yet.<br>' +
+      'Ask Jarvis to raise one, press <b>New ticket</b>, or use <b>Raise ticket</b> on an incident — ' +
+      'you confirm every ticket before it is created.</div>';
+    return;
+  }
+  var live = list.filter(function(t){ return t && t.status !== 'closed' && t.status !== 'resolved'; });
+  var done = list.filter(function(t){ return t && (t.status === 'closed' || t.status === 'resolved'); });
+  var html = '';
+  if(live.length){
+    html += '<div class="grouphead">Open tickets <span style="color:var(--warn)">' + esc(live.length) + '</span></div>';
+    html += live.map(tktRow).join('');
+  }
+  if(done.length){
+    html += '<div class="grouphead">Resolved / closed <span>' + esc(done.length) + '</span></div>';
+    html += done.map(tktRow).join('');
+  }
+  w.innerHTML = html;
+}
+$('tktWrap').addEventListener('click', function(e){
+  var row = e.target.closest && e.target.closest('.tkt-item[data-tkt]');
+  if(row) selectTicket(row.getAttribute('data-tkt'));
+});
+function selectTicket(id){
+  if(!id) return;
+  TKT.selId = id; TKT.selState = 'loading'; TKT.sel = null; TKT.selErr = '';
+  renderTickets();
+  api('/api/copilot/tickets/' + encodeURIComponent(id))
+    .then(function(r){ if(!r.ok) throw new Error(httpWhyTkt(r.status)); return r.json(); })
+    .then(function(d){
+      var t = d && (d.ticket || d);
+      if(!t || typeof t !== 'object') throw new Error('the ticket came back in an unexpected shape');
+      TKT.sel = t; TKT.selState = 'ok';
+    })
+    .catch(function(e){ TKT.selState = 'error'; TKT.selErr = e.message || String(e); })
+    .then(function(){ renderTicketDetail(); });
+}
+function closeTicketDetail(){ TKT.selId = null; TKT.sel = null; TKT.selState = 'idle'; renderTickets(); }
+function wireBack(){ var b = $('tktBack'); if(b) b.addEventListener('click', closeTicketDetail); }
+function ticketActionsHtml(t){
+  var cur = String(t.status || 'open').toLowerCase();
+  var opts = TKT_STATUSES.map(function(s){
+    return '<option value="' + s + '"' + (s === cur ? ' selected' : '') + '>' + s.replace(/-/g,' ') + '</option>';
+  }).join('');
+  return '<div class="tkt-actions">' +
+    '<div class="row"><input class="tkt-assign" placeholder="assignee name" value="' + esc(t.assignee || '') + '" maxlength="64">' +
+      '<button class="btn btn-ghost btn-sm" id="tktAssignGo">Assign</button></div>' +
+    '<div class="row"><select class="tkt-status">' + opts + '</select>' +
+      '<button class="btn btn-ghost btn-sm" id="tktStatusGo">Set status</button></div>' +
+    '<textarea class="tkt-note" placeholder="Add a work note (a resolution note is required to resolve or close)…"></textarea>' +
+    '<div class="row"><button class="btn btn-primary btn-sm" id="tktNoteGo">Add work note</button>' +
+      '<span class="stamp">every action stamped <b>' + esc(OP) + '</b></span></div>' +
+    '<div class="formerr" id="tktErr" hidden></div>' +
+  '</div>';
+}
+function renderTicketDetail(){
+  var w = $('tktWrap');
+  if(!w) return;
+  var back = '<span class="tkt-back" id="tktBack">← Back to the queue</span>';
+  if(TKT.selState === 'loading'){
+    w.innerHTML = back + '<div class="empty"><span class="big">⏳</span>Reading ticket ' + esc(TKT.selId) + '…</div>';
+    wireBack(); return;
+  }
+  if(TKT.selState === 'error'){ w.innerHTML = back + engineGoneBox('Ticket ' + TKT.selId, TKT.selErr); wireBack(); return; }
+  var t = TKT.sel || {};
+  var sev = sevT(t.severity);
+  var notes = Array.isArray(t.worknotes) ? t.worknotes : [];
+  var hist = Array.isArray(t.history) ? t.history : [];
+  var h = back +
+    '<div class="evcard"><header><b>' + esc(t.title || 'Untitled ticket') + '</b>' +
+      '<span>' + statusChip(t.status) + ' <span class="stamp">' + esc(t.id || '—') + '</span></span></header><div class="body">';
+  h += '<div class="tkt-meta" style="margin-bottom:.5rem">' +
+    '<span class="tag t-' + esc(sev) + '">' + esc(t.severity || 'P?') + '</span>' +
+    (t.assignee ? '<span class="tstat assigned">👤 ' + esc(t.assignee) + '</span>'
+                : '<span class="tstat open">unassigned</span>') +
+    (t.incidentId ? '<span class="tkt-link" data-inc-link="' + esc(t.incidentId) +
+        '" title="Open the linked incident">🔗 ' + esc(t.incidentId) + '</span>' : '') +
+    '</div>';
+  h += '<div style="font-size:.8rem;line-height:1.55;overflow-wrap:anywhere">' +
+    esc(t.description || 'No description recorded.') + '</div>';
+  h += '<div class="footnote">Opened ' + esc(clockOf(t.ts)) + (t.createdBy ? ' by ' + esc(t.createdBy) : '') + '.</div>';
+  h += '<div style="margin-top:.7rem"><span class="r-lbl">Work notes</span>';
+  h += notes.length
+    ? notes.map(function(n){ n = n || {};
+        return '<div class="note"><div class="who">' + esc(n.who || '—') + ' · ' + esc(clockOf(n.ts)) +
+          '</div><div class="txt">' + esc(n.text || '') + '</div></div>'; }).join('')
+    : '<div class="footnote">No work notes yet.</div>';
+  h += '</div>';
+  h += ticketActionsHtml(t);
+  if(hist.length){
+    h += '<div style="margin-top:.7rem"><span class="r-lbl">History</span>' + hist.map(function(x){ x = x || {};
+      return '<div class="metric"><span>' + esc(x.status || x.what || '—') + (x.by ? ' · ' + esc(x.by) : '') +
+        '</span><b>' + esc(clockOf(x.ts)) + '</b></div>'; }).join('') + '</div>';
+  }
+  if(t.snow){
+    h += '<div class="footnote">' + (t.snow.id
+      ? 'Mirrored to ServiceNow as ' + esc(t.snow.id) + (t.snow.syncedAt ? ' at ' + esc(clockOf(t.snow.syncedAt)) : '')
+      : 'Not mirrored to ServiceNow — that two-way sync arrives in CW-6. This internal queue is the source of truth.') +
+      '</div>';
+  }
+  h += '</div></div>';
+  w.innerHTML = h;
+  wireBack();
+  wireTicketActions(t);
+}
+function wireTicketActions(t){
+  var err = $('tktErr');
+  function showErr(m){ if(err){ err.textContent = m; err.hidden = false; } }
+  function clearErr(){ if(err){ err.hidden = true; } }
+  var aBtn = $('tktAssignGo');
+  if(aBtn) aBtn.addEventListener('click', function(){
+    clearErr();
+    var el = document.querySelector('.tkt-assign'); var name = el ? el.value.trim() : '';
+    if(!name){ showErr('Type a name to assign it to.'); return; }
+    ticketAction(t.id, 'assign', { assignee:name }, aBtn, 'Assigned to ' + name);
+  });
+  var sBtn = $('tktStatusGo');
+  if(sBtn) sBtn.addEventListener('click', function(){
+    clearErr();
+    var stEl = document.querySelector('.tkt-status'); var st = stEl ? stEl.value : '';
+    var nEl = document.querySelector('.tkt-note'); var note = nEl ? nEl.value.trim() : '';
+    if((st === 'closed' || st === 'resolved') && !note){
+      showErr('A resolution note is required to ' + st + ' a ticket — type it in the work-note box first.'); return;
+    }
+    var body = { status:st };
+    if(note) body.note = note;
+    ticketAction(t.id, 'status', body, sBtn, 'Status set to ' + st.replace(/-/g,' '));
+  });
+  var nBtn = $('tktNoteGo');
+  if(nBtn) nBtn.addEventListener('click', function(){
+    clearErr();
+    var nEl = document.querySelector('.tkt-note'); var note = nEl ? nEl.value.trim() : '';
+    if(!note){ showErr('Nothing to add — type a work note first.'); return; }
+    ticketAction(t.id, 'note', { text:note }, nBtn, 'Work note added');
+  });
+}
+function ticketAction(id, path, body, btn, okMsg){
+  if(!id) return;
+  if(!OP){ $('whoTag').click(); return; }
+  var label = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = '…'; }
+  api('/api/copilot/tickets/' + encodeURIComponent(id) + '/' + path, { method:'POST', body: JSON.stringify(body) })
+    .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(b){ return { ok:r.ok, status:r.status, body:b }; }); })
+    .then(function(res){
+      if(btn){ btn.disabled = false; btn.textContent = label; }
+      if(!res.ok){
+        var m = res.status === 428 ? 'The desk needs your name before a ticket action — set it top right.'
+              : (res.body && res.body.error) || httpWhyTkt(res.status);
+        var err = $('tktErr'); if(err){ err.textContent = m; err.hidden = false; }
+        return;
+      }
+      toast(okMsg + ' — by ' + OP);
+      selectTicket(id);
+      loadTickets(true);
+    })
+    .catch(function(e){
+      if(btn){ btn.disabled = false; btn.textContent = label; }
+      var err = $('tktErr'); if(err){ err.textContent = 'Could not reach the server: ' + (e.message || e); err.hidden = false; }
+    });
+}
+
+/* ---------- the ticket proposal card — the ONLY door a ticket walks through.
+   Chat never creates a ticket. Jarvis may DRAFT one; the operator reads it and
+   presses Create. Nothing before that. ---------- */
+var tktDraftCard = null;
+function ticketProposalCard(p, drafter){
+  p = p || {};
+  var byJarvis = drafter && drafter !== 'you';
+  var chosen = /^P[1234]$/.test(String(p.severity)) ? String(p.severity) : 'P3';
+  var sevOpts = ['P1','P2','P3','P4'].map(function(s){
+    return '<option value="' + s + '"' + (s === chosen ? ' selected' : '') + '>' + s + '</option>';
+  }).join('');
+  var html =
+    '<div class="proposal">' +
+      '<span class="r-lbl">🎫 Ticket proposal — nothing has been created</span>' +
+      '<div style="font-size:.79rem;line-height:1.55">' +
+        (byJarvis ? 'Jarvis drafted this ticket. <b>Read it</b> — you press Create, and your name goes on it.'
+                  : 'Draft the ticket. Nothing is created until you press <b>Create ticket</b>.') + '</div>' +
+      '<label>Severity</label><select class="tp-sev">' + sevOpts + '</select>' +
+      '<label>Title</label><input class="tp-title" value="' + esc(p.title || '') + '" placeholder="short summary, e.g. branch-3 link flapping" maxlength="140">' +
+      '<label>Description</label><textarea class="tp-desc" placeholder="what is happening / what needs doing">' + esc(p.description || '') + '</textarea>' +
+      '<label>Linked incident (optional)</label><input class="tp-inc" value="' + esc(p.incidentId || '') + '" placeholder="e.g. INC-20260818-001" maxlength="64">' +
+      '<div class="acts">' +
+        '<button class="btn btn-primary btn-sm tp-go">Create ticket</button>' +
+        '<button class="btn btn-ghost btn-sm tp-no">Discard</button>' +
+      '</div>' +
+      '<div class="footnote">The internal queue is the single source of truth. The ticket and every action on it are ' +
+      'stamped with your name and audited. Any ServiceNow mirror (CW-6) syncs from this, never the other way.</div>' +
+    '</div>';
+  var el = bubble('jv', (byJarvis ? 'Jarvis' : 'Desk') + ' · ' + nowClock(),
+    (byJarvis ? 'That reads like a ticket, so I did not just create one. Here is a proposal:' :
+      'Draft the ticket here.') + html, true);
+  if(byJarvis && tktDraftCard && tktDraftCard.parentNode) tktDraftCard.parentNode.removeChild(tktDraftCard);
+  tktDraftCard = el;
+
+  var q = function(c){ return el.querySelector(c); };
+  q('.tp-no').addEventListener('click', function(){
+    q('.proposal').innerHTML = '<span class="r-lbl">Discarded</span>' +
+      '<div style="font-size:.79rem">Dropped. No ticket was created.</div>';
+  });
+  q('.tp-go').addEventListener('click', function(){
+    var sev = q('.tp-sev').value;
+    var title = q('.tp-title').value.trim();
+    var desc = q('.tp-desc').value.trim();
+    var inc = q('.tp-inc').value.trim();
+    var errBox = el.querySelector('.tp-err');
+    if(!errBox){
+      errBox = document.createElement('div');
+      errBox.className = 'tp-err formerr'; errBox.style.marginTop = '.4rem';
+      el.querySelector('.acts').parentNode.insertBefore(errBox, el.querySelector('.footnote'));
+    }
+    errBox.textContent = '';
+    if(!title){ errBox.textContent = 'Give the ticket a title.'; return; }
+    if(!desc){ errBox.textContent = 'Add a description — the ticket carries it.'; return; }
+    if(!OP){ $('whoTag').click(); return; }
+    var go = window.confirm('Create a ' + sev + ' ticket?\n\n' + title + '\n\n' + desc +
+      (inc ? '\n\nLinked to ' + inc : '') + '\n\nStamped as ' + OP + '.');
+    if(!go) return;
+    var btn = q('.tp-go'); btn.disabled = true; btn.textContent = 'Creating…';
+    var body = { severity:sev, title:title, description:desc };
+    if(inc) body.incidentId = inc;
+    api('/api/copilot/tickets', { method:'POST', body: JSON.stringify(body) })
+      .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(b){ return { ok:r.ok, status:r.status, body:b }; }); })
+      .then(function(res){
+        if(!res.ok){
+          if(res.status === 428){ errBox.textContent = 'The desk needs your name before creating a ticket — set it top right.'; }
+          else if(res.status === 404){
+            q('.proposal').outerHTML = '<div class="soon"><b>The ticket queue is not available yet.</b>' +
+              'The server has no <code>/api/copilot/tickets</code> route on this build (404). No ticket was created.</div>';
+            return;
+          } else errBox.textContent = (res.body && res.body.error) || ('The server refused it — HTTP ' + res.status + '. No ticket was created.');
+          btn.disabled = false; btn.textContent = 'Create ticket';
+          return;
+        }
+        var rec = res.body && (res.body.ticket || res.body.record || res.body);
+        var id = (rec && (rec.id || rec.ticketId)) || '';
+        q('.proposal').innerHTML = '<span class="r-lbl">✅ Ticket created</span>' +
+          '<div style="font-size:.79rem;line-height:1.55">Ticket <b>' + esc(id || '(no id returned)') +
+          '</b> — ' + esc(sev) + ', stamped <b>' + esc(OP) + '</b>.' +
+          (inc ? ' Linked to <b>' + esc(inc) + '</b>.' : '') + '</div>' +
+          '<span class="jump" data-jump-tkt="' + esc(id) + '">→ Open it in the queue</span>';
+        toast('Ticket ' + (id || '') + ' created — by ' + OP);
+        loadTickets(true);
+        evTab('ev-tickets');
+        if(id) selectTicket(id);
+      })
+      .catch(function(e){
+        errBox.textContent = 'Could not reach the server: ' + (e.message || e) + '. No ticket was created.';
+        btn.disabled = false; btn.textContent = 'Create ticket';
+      });
+  });
+  return el;
+}
+/* An ask that reads like "raise/open/create a ticket" gets a proposal card
+   ALONGSIDE Jarvis's real answer — the ask still goes to Jarvis untouched, so
+   nothing is hijacked and no create is fired by typing. */
+function looksLikeTicket(t){
+  t = String(t || '');
+  if(/\?\s*$/.test(t)) return false;
+  if(READ_ONLY_START.test(t)) return false;
+  if(!/\b(ticket|case)\b/i.test(t)) return false;
+  return /\b(raise|open|create|log|file|cut|new)\b/i.test(t);
+}
+
+/* tools on the tickets tab */
+$('tktNew').addEventListener('click', function(){
+  ticketProposalCard({ severity:'P3', incidentId: (SEL && (SEL.incidentId || SEL.triageId)) || '' }, 'you');
+  if(window.innerWidth <= 760) mobPane(1);
+});
+$('tktRefresh').addEventListener('click', function(){ closeTicketDetail(); loadTickets(true); });
+$('tktFilter').addEventListener('change', function(){ TKT.filter = this.value; TKT.selId = null; TKT.sel = null; loadTickets(true); });
+
+/* jump chips + the linked-incident chip anywhere in the chat/tickets */
+document.addEventListener('click', function(e){
+  var link = e.target.closest && e.target.closest('[data-inc-link]');
+  if(link){
+    var incId = link.getAttribute('data-inc-link');
+    var match = (QUEUE.list || []).filter(function(i){ return i && (i.incidentId === incId || i.triageId === incId); })[0];
+    if(match){ selectIncident(match.triageId); if(window.innerWidth <= 760) mobPane(1); }
+    else toast('That incident is not on the board', true);
+    return;
+  }
+  var jt = e.target.closest && e.target.closest('[data-jump-tkt]');
+  if(jt){ evTab('ev-tickets'); var id = jt.getAttribute('data-jump-tkt'); if(id) selectTicket(id); }
+});
+
+/* ============================================================
    LIVE — the same WebSocket the classic console uses
    ============================================================ */
 var ws = null, wsRetry = 0;
@@ -2223,6 +2665,14 @@ function connectWS(){
     }
     /* CW-2: a change the engine drafted, waiting for a human press. */
     if(m.type === 'change_proposal' && m.data){ proposalCard(m.data, 'jarvis'); evTab('ev-chg'); return; }
+    /* CW-3: a ticket the planner composed, waiting for a human Create press. */
+    if(m.type === 'ticket_proposal' && m.data){ ticketProposalCard(m.data, 'jarvis'); return; }
+    /* CW-3: any ticket transition → re-read the REAL queue/record, never paint from the event. */
+    if(m.type.indexOf('ticket_') === 0){
+      loadTickets(true);
+      if(TKT.selId && m.data && (m.data.id === TKT.selId || m.data.ticketId === TKT.selId)) selectTicket(TKT.selId);
+      return;
+    }
     /* CW-2: any step of a wrap moved → re-read the REAL record, never paint from the event. */
     if(m.type.indexOf('change_') === 0 && m.data){
       var cid = m.data.id || m.data.changeId;
@@ -2243,6 +2693,10 @@ function onChat(d){
      the engine is not called until the operator presses go. */
   var p = d.proposal || d.changeProposal;
   if(p && typeof p === 'object') proposalCard(p, 'jarvis');
+  /* A reply may carry a ticket proposal the planner composed from real context.
+     It is still only a PROPOSAL — no ticket is created until the operator presses Create. */
+  var tp = d.ticketProposal || d.ticket_proposal;
+  if(tp && typeof tp === 'object') ticketProposalCard(tp, 'jarvis');
 }
 function onShare(d){
   landCommand(d);
