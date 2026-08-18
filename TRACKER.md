@@ -263,3 +263,11 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
   sandboxed/hallucinated session logs "NOT resumed" instead of faking success. RESIDUAL (not fixable here):
   account session-quota wall blocks ALL sessions until reset — needs account capacity/credits (Vikas's lever).
 - MERGED QA classes: 1, 3+4, 8, 9, 10. Class 5 (#54) in review. Class 6 (error handler + dropped turns) BUILDING (fix/errors-and-dropped-turns). Pending server.js wirings after #54 merges: gate route (3 lines).
+
+## 2026-08-18 — Class 5 MERGED (6/6 QA classes only Class 6 left)
+- Class 5 (gate fails closed + real deny mode) MERGED (PR #54 approvals.js + I applied the server.js route
+  wiring in the same push, per reviewer). LIVE-VERIFIED by me: deny stays deny, garbage→400, never auto.
+- Full test suite 7 files green (exit 0).
+- MERGED QA classes: 1, 3+4, 5, 8, 9, 10. ONLY Class 6 (error handler + dropped turns) left — BUILDING.
+- Note for Class 6 merge: it edits server.js; I just edited the /api/approvals/mode route (lines ~2511) —
+  resolve that region if it conflicts.
