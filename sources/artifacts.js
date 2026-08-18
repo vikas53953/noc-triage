@@ -33,18 +33,43 @@ const correlation = require('./correlation');
 // ── Dual-clock timestamps (issue: docs must not show raw UTC-only ISO) ────────
 // The whole app renders times as "13:35 local · 08:05 UTC" (the operator's zone
 // first, then UTC). Reuse the ONE shared formatter (correlation.clock) so a doc
-// reads the same as every card. A doc can span calendar days, so we prefix the
-// UTC date (the same UTC anchor the incident-id date uses) and let the shared
-// helper add the dual time. tz is the operator's IANA zone (carried on the
+// reads the same as every card. tz is the operator's IANA zone (carried on the
 // record); when the bridge was opened without one, clock() honestly shows UTC
 // only rather than guessing the server's zone.
+//
+// DATE LAW (class fix): a date is only ever printed in the SAME timezone as the
+// time it sits next to. The old code prefixed the UTC date to a line whose first
+// clock is LOCAL — so for an operator in Asia/Kolkata any moment between 18:30 and
+// 24:00 UTC printed yesterday's date beside today's local time. Now the local half
+// carries the local date and, when the two zones are on different calendar days,
+// the UTC half carries its own date too:
+//   19:00Z, Asia/Kolkata → "2026-08-19 00:30 local · 2026-08-18 19:00 UTC"
+//   same-day             → "2026-08-18 10:03 local · 04:33 UTC"  (unchanged)
+//   no tz                → "2026-08-18 04:33 UTC"                (unchanged)
+function ymdUTC(ms) {
+  const d = new Date(ms);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+function ymdInTz(ms, tz) {
+  try {
+    // en-CA formats as YYYY-MM-DD, the same shape as the UTC date above.
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date(ms));
+  } catch (e) { return null; } // unknown zone → caller falls back to UTC
+}
 function tsDoc(iso, tz) {
   if (!iso) return '(unknown)';
   const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return String(iso);
-  const d = new Date(ms);
-  const datePart = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-  return `${datePart} ${correlation.clock(ms, tz || null)}`;
+  const utcDate = ymdUTC(ms);
+  const time = correlation.clock(ms, tz || null);      // shared dual-clock formatter
+  const localDate = tz ? ymdInTz(ms, tz) : null;
+  // No usable local half (no tz, or clock() fell back to UTC-only) → UTC date + UTC time.
+  if (!localDate || !time.includes('local')) return `${utcDate} ${time}`;
+  if (localDate === utcDate) return `${localDate} ${time}`;
+  // The two zones are on different calendar days — date each half in its OWN zone.
+  return `${localDate} ${time.replace('· ', `· ${utcDate} `)}`;
 }
 
 const TRIAGES_DIRNAME = 'triages';
@@ -129,6 +154,139 @@ const FRONT_LABEL = {
   security: 'Security / CVE exposure',
 };
 function frontLabel(f) { return FRONT_LABEL[f] || f; }
+// The only strings that are real FRONT keys. The parsed symptom scope can also carry
+// SITE names ("DC1") and other nouns; those are not fronts and must never widen or
+// pollute a front set (they would silently match nothing, or worse, everything).
+const KNOWN_FRONTS = new Set(Object.keys(FRONT_LABEL));
+function onlyFronts(list) {
+  return (Array.isArray(list) ? list : []).filter((f) => KNOWN_FRONTS.has(f));
+}
+
+// ── In-window vs already-there, from the SAME numbers the engine judged on ────
+// Every doc statement about "what broke during this incident" must rest on the real
+// structured split the readers produced: `age` (fault timestamps vs the incident
+// window) or `groups` (alarm clusters, chronic vs new). Returns null when a card
+// carries no structured split at all — the caller then says what it knows and never
+// guesses. Never derived by reading words out of the detail string.
+//
+// `dated` is the second half of the law, and it is not optional. A split is only a
+// statement about THIS incident when the readers had a real incident window to
+// measure against. When the bridge has no time anchor (an alert-opened incident, or
+// a description with no "since 2pm" in it) the SD-WAN reader STILL clusters alarms —
+// but against a default rolling 24 hours (sdwan.clusterAlarms: `sinceTs ?? now-24h`),
+// which has nothing to do with this incident. Reporting that as "2 new alarms
+// appeared during this incident" on a P1 raised sixty seconds ago is exactly the
+// fabricated-timing class this file exists to kill, so an undated record makes NO
+// timing claim at all: every front falls into the honest "we cannot say when" bucket.
+function windowEvidence(e, dated) {
+  if (!e || !dated) return null;
+  const age = e.age;
+  if (age && (Number.isFinite(age.inWindow) || Number.isFinite(age.older))) {
+    return { newCount: age.inWindow || 0, oldCount: age.older || 0, unit: 'fault' };
+  }
+  const g = e.groups;
+  if (g && (Number.isFinite(g.newCount) || Number.isFinite(g.chronicCount))) {
+    const newCount = g.newCount || 0;
+    const total = Number.isFinite(g.total) ? g.total : newCount + (g.chronicCount || 0);
+    return { newCount, oldCount: Math.max(0, total - newCount), unit: 'alarm' };
+  }
+  return null;
+}
+function plural(n, word) { return `${n} ${word}${n === 1 ? '' : 's'}`; }
+
+// A front's own words for a leadership reader: the real counts, with the jargon
+// alarm-type dump ("— top 3: license-not-synced (83, chronic); …") cut off. The raw
+// string is kept VERBATIM in the engineer doc and record.json — this trim only
+// applies to the plain-words document. Used only where no structured split exists.
+function plainDetail(e) {
+  const s = String((e && e.detail) || '').replace(/\s*—\s*top \d+:.*$/i, '').trim();
+  return s || 'no further detail was recorded';
+}
+
+// ── CLASS RULE (leadership doc must not contradict itself) ────────────────────
+// "What broke" is derived from the SAME committed verdict object the headline uses,
+// and a front may only be called a live problem when its own card shows something
+// NEW inside the incident window. A front the verdict listed as active but whose
+// real numbers are all chronic/pre-window noise (licence and certificate alarms that
+// have been standing for months) is moved into the already-broken-before bucket — it
+// is never headlined as what broke here. Three honest buckets:
+//   broke   — real NEW faults/alarms inside the incident window (this is the only
+//             bucket the doc may call "a live problem that started during this").
+//   chronic — faults that all pre-date the window (already broken before).
+//   unknown — the card carries no timing split at all (no time anchor on the
+//             incident, or a reader with no per-item timestamps): faults are real
+//             and current, but we cannot say WHEN they started, and we say so.
+// Returns null for a legacy record with no window-aware verdict at all.
+//
+// The whole split is gated on `dated` — see windowEvidence(). With no real incident
+// time anchor NOTHING may be called "new during this incident"; the fronts are still
+// reported, in the unknown bucket, with their timing stated as unknown.
+function hasIncidentWindow(rec) {
+  const w = rec && rec.verdict && rec.verdict.window;
+  return !!(w && w.timeAnchor);
+}
+function brokeSplit(rec) {
+  const v = rec.verdict || null;
+  if (!v || !Array.isArray(v.activeInWindow)) return null;
+  const dated = hasIncidentWindow(rec);
+  const evByFront = {};
+  (rec.evidenceFinal || []).forEach((e) => { evByFront[e.front] = e; });
+  const broke = [];
+  const chronic = [];
+  const unknown = [];
+  v.activeInWindow.forEach((f) => {
+    const w = windowEvidence(evByFront[f], dated);
+    if (!w) unknown.push(f);
+    else if (w.newCount <= 0) chronic.push(f);
+    else broke.push(f);
+  });
+  (Array.isArray(v.preExisting) ? v.preExisting : []).forEach((f) => {
+    if (!broke.includes(f) && !chronic.includes(f) && !unknown.includes(f)) chronic.push(f);
+  });
+  return { broke, chronic, unknown, evByFront, dated };
+}
+
+// One bullet for a front that genuinely broke during the incident — plain words,
+// real counts, no alarm-type dump.
+function brokeLine(e, front, dated) {
+  const label = frontLabel(e ? e.front : front);
+  const w = windowEvidence(e, dated);
+  // No timing split available — report the finding and say plainly that we cannot
+  // tell when it started, rather than implying it started with this incident.
+  if (!w) return `- **${label}** — ${plainDetail(e)} (the system we read does not record when these started, so we cannot say whether they began with this incident).`;
+  let s = `- **${label}** — ${plural(w.newCount, `new ${w.unit}`)} appeared during this incident`;
+  if (w.oldCount) s += `; ${plural(w.oldCount, w.unit)} here were already there before it began`;
+  return `${s}.`;
+}
+
+// One bullet for a front that was already broken BEFORE the incident.
+function chronicLine(e, front, dated) {
+  const label = frontLabel(e ? e.front : front);
+  const w = windowEvidence(e, dated);
+  if (!w) return `- **${label}** — ${plainDetail(e)} (already there before this incident began).`;
+  return `- **${label}** — ${plural(w.oldCount, `long-standing ${w.unit}`)} that pre-date this incident; nothing new appeared here during it.`;
+}
+
+// One honest, plain-words line about what this bridge actually managed to check.
+// Real counts and plain area names only — no verdict jargon, no alarm strings.
+function plainStatusLine(rec) {
+  const c = classifyFronts(rec);
+  const split = brokeSplit(rec);
+  const names = (arr) => arr.map((x) => frontLabel(typeof x === 'string' ? x : x.front)).join(', ');
+  const checked = c.degraded.length + c.clean.length + c.suspect.length;
+  const parts = [`We checked ${plural(checked, 'connected area')}`];
+  if (c.clean.length) parts.push(`${c.clean.length} read healthy (${names(c.clean)})`);
+  if (split) {
+    if (split.broke.length) parts.push(`${split.broke.length} showed something new during the incident (${names(split.broke)})`);
+    if (split.unknown.length) parts.push(`${split.unknown.length} showed faults we cannot date (${names(split.unknown)})`);
+    if (split.chronic.length) parts.push(`${split.chronic.length} carried faults that were already there beforehand (${names(split.chronic)})`);
+  } else if (c.degraded.length) {
+    parts.push(`${c.degraded.length} showed faults (${names(c.degraded)})`);
+  }
+  if (c.suspect.length) parts.push(`${c.suspect.length} could not be read this time (${names(c.suspect)})`);
+  if (c.blind.length) parts.push(`${plural(c.blind.length, 'area')} have no monitoring connected at all (${names(c.blind)})`);
+  return `${parts.join('; ')}.`;
+}
 
 // ── Lifecycle roll-up + SLA lines (wave 1) — shared by every doc ──────────────
 // Renders the post-incident roll-up: the four real timestamps, the three human
@@ -185,18 +343,26 @@ function buildRecord(triage) {
   const t = triage || {};
   const fronts = t.fronts || [];
 
-  // Final evidence per front, in board order.
+  // Final evidence per front, in board order. `age` / `groups` / `count` are the
+  // REAL structured split the readers produced (faults inside the incident window vs
+  // older; alarm clusters chronic vs new). They are carried onto the record so the
+  // docs can say "2 new alarms appeared during this incident" from the same numbers
+  // the engine judged on, instead of re-reading words out of the detail string.
+  const slim = (e) => ({
+    front: e.front, state: e.state, detail: e.detail, source: e.source || null, ts: e.ts || null,
+    age: e.age || null, groups: e.groups || null, count: e.count != null ? e.count : null,
+  });
   const evidenceFinal = fronts
     .map((f) => t.evidence && t.evidence[f])
     .filter(Boolean)
-    .map((e) => ({ front: e.front, state: e.state, detail: e.detail, source: e.source || null, ts: e.ts || null }));
+    .map(slim);
 
   // Full evidence transition history (each real read, in order). Falls back to
   // the final states if history was not captured.
   const evidenceHistory = (t.evidenceHistory && t.evidenceHistory.length
     ? t.evidenceHistory
     : evidenceFinal
-  ).map((e) => ({ front: e.front, state: e.state, detail: e.detail, source: e.source || null, ts: e.ts || null }));
+  ).map(slim);
 
   // The REAL recorded wire session for this triage — the CLI/command log.
   const sess = session.query({ triageId: t.id, limit: 600 });
@@ -370,36 +536,62 @@ function snowOpenReason(rec, state) {
   return `NOT RESOLVED — ${reasons.join('; ') || 'root cause not confirmed'}. Verify before closing.`;
 }
 
-// The set of fronts the verdict actually implicated — this incident's own scope
-// (the fronts the operator's symptom was IN), plus the in-window active fronts
-// (cause candidates) and any front left unread this pass (suspect). The incident
-// SCOPE is the key signal: a WAN incident is scoped to ["wan"], so the fabric/ACI
-// tenants that a full estate sweep also happens to see are out of scope and must
-// not land on the WAN ticket. Returns null when the verdict carries no window-aware
-// signal at all (legacy record) OR when none of these yield a single front — the
-// caller then keeps the full CI list rather than invent (or empty) a scope.
+// ── CLASS RULE: the ticket's Affected CIs FOLLOW THE COMMITTED VERDICT ────────
+// The old rule unioned incident scope + activeInWindow + suspect, which on a real
+// WAN incident (scope ["wan"], every front active in a full estate sweep) removed
+// nothing — ACI tenants like True_Test still landed on a WAN ticket. The rule now:
+//
+//   PRIMARY   = fronts the verdict CONFIRMED broken inside the incident window
+//               (chronic-only fronts excluded — same split "What broke" uses) AND
+//               that sit in this incident's own scope. If the incident's scope names
+//               no confirmed front, PRIMARY falls back to the confirmed in-window
+//               fronts: they are the cause candidates and are genuinely in scope.
+//   SECONDARY = fronts left UNREAD this pass (suspect) — possible but unconfirmed.
+//               We KEEP their CIs (they must be verified, not silently dropped) and
+//               LABEL them secondary/unverified so nobody actions them as confirmed.
+//   OUT       = everything else: clean fronts, pre-existing/chronic-only fronts, and
+//               in-window fronts outside this incident's scope.
+//
+// Only real front keys count — the parsed scope can carry site names ("DC1").
+// Returns null only for a legacy record with no window-aware signal at all.
 function implicatedFronts(rec) {
   const v = rec.verdict || null;
   if (!v) return null;
   const hasSignal = Array.isArray(v.activeInWindow)
     || (v.window && Array.isArray(v.window.scope));
   if (!hasSignal) return null; // legacy record — no scope/window split to trust
-  const s = new Set();
-  if (v.window && Array.isArray(v.window.scope)) v.window.scope.forEach((f) => s.add(f));
-  (Array.isArray(v.activeInWindow) ? v.activeInWindow : []).forEach((f) => s.add(f));
-  (Array.isArray(v.suspect) ? v.suspect : []).forEach((f) => s.add(f));
-  if (!s.size) return null; // no basis to scope → don't silently drop real CIs
-  return s;
+
+  const split = brokeSplit(rec);
+  // "Confirmed" = the verdict's in-window fronts MINUS the ones whose real numbers
+  // are pure chronic noise. A front we simply cannot date stays in (it is a genuine
+  // live fault; only proven-pre-existing noise is dropped).
+  const confirmed = split ? split.broke.concat(split.unknown) : onlyFronts(v.activeInWindow);
+  const scope = onlyFronts(v.window && v.window.scope);
+  const inScope = confirmed.filter((f) => scope.includes(f));
+  const primary = new Set(inScope.length ? inScope : confirmed);
+  const secondary = new Set(onlyFronts(v.suspect).filter((f) => !primary.has(f)));
+  return { primary, secondary };
 }
 
-// Scope the raw affected-CI list (harvested from every readable front) down to the
-// CIs whose front the verdict implicated. Legacy records (no split) pass through
-// unchanged. A CI with no `front` is kept (it cannot be proven out of scope).
+// Scope the raw affected-CI list (harvested from EVERY readable front) down to the
+// CIs the verdict actually implicated, tagging each survivor primary or secondary.
+// Legacy records (no window-aware split) pass through unchanged.
+//
+// When the verdict implicated NOTHING we do NOT fall back to the full harvested list
+// — that was the widest possible scope on the weakest possible evidence. Only CIs
+// that carry no front at all survive (they cannot be proven out of scope), and the
+// ticket says plainly that nothing could be tied to this incident.
 function scopeAffectedCIs(rec) {
   const all = rec.affectedCIs || [];
-  const fronts = implicatedFronts(rec);
-  if (!fronts) return all;
-  return all.filter((x) => !x.front || fronts.has(x.front));
+  const f = implicatedFronts(rec);
+  if (!f) return all.map((x) => ({ ...x, scopeRank: 'primary', scopeWhy: null }));
+  return all
+    .filter((x) => !x.front || f.primary.has(x.front) || f.secondary.has(x.front))
+    .map((x) => {
+      if (!x.front) return { ...x, scopeRank: 'secondary', scopeWhy: 'no front recorded for this item — kept because it cannot be proven out of scope' };
+      if (f.primary.has(x.front)) return { ...x, scopeRank: 'primary', scopeWhy: null };
+      return { ...x, scopeRank: 'secondary', scopeWhy: 'front was unread this pass — unconfirmed, verify before acting' };
+    });
 }
 
 // Build the structured ServiceNow-ready object from the REAL record. Every field
@@ -414,18 +606,15 @@ function buildServiceNow(rec) {
     findings.push({ front: e.front, state: e.state, detail: e.detail || '', source: e.source || null });
   });
 
-  // B-scope — the affected CIs on the ticket must be the fronts the VERDICT
-  // actually implicated, not every tenant/device seen on any front this pass.
-  // collectAffectedCIs() harvests a CI from EVERY front it could read (campus,
-  // fabric/ACI tenants, wan, incidents), so a WAN incident whose verdict never
-  // implicated the fabric would still carry ACI tenants (True_Test/PROD) as
-  // "affected" — wrong scope. Restrict to the fronts the engine tied to this
-  // incident: the in-window active fronts (the cause candidates) plus any front
-  // left unread this pass (suspect — genuinely still in scope, must be verified).
-  // Pre-existing and clean fronts are explicitly OUT of scope for the CI list.
-  // Legacy records with no window-aware split (no activeInWindow field) keep the
-  // full list rather than dropping real data.
-  const affectedCIs = scopeAffectedCIs(rec).map((x) => ({ ci: x.ci, class: x.type, front: x.front }));
+  // B-scope — the affected CIs on the ticket follow the COMMITTED VERDICT (see the
+  // class rule on implicatedFronts above): confirmed in-window fronts inside this
+  // incident's scope are primary; unread fronts ride along clearly marked secondary;
+  // everything else is off the ticket. `scope`/`scopeNote` are additive fields — the
+  // existing ci/class/front shape the UI reads is unchanged.
+  const affectedCIs = scopeAffectedCIs(rec).map((x) => ({
+    ci: x.ci, class: x.type, front: x.front,
+    scope: x.scopeRank || 'primary', scopeNote: x.scopeWhy || null,
+  }));
 
   const nextSteps = (rec.verdict && rec.verdict.nextChecks) || [];
   const hypothesis = rec.verdict && rec.verdict.hypothesis
@@ -503,8 +692,14 @@ function renderServiceNowText(rec, sn) {
   lifecycleLines(rec).forEach((x) => L.push(x));
   L.push('');
   L.push('## Affected CIs');
-  if (sn.affectedCIs.length) sn.affectedCIs.forEach((c) => L.push(`- ${c.ci} (${c.class}, ${c.front})`));
-  else L.push('- None nameable from the connected estate this run (see findings).');
+  if (sn.affectedCIs.length) {
+    sn.affectedCIs.forEach((c) => L.push(
+      `- ${c.ci} (${c.class}, ${c.front})${c.scope === 'secondary' ? ` — SECONDARY / unconfirmed: ${c.scopeNote || 'not confirmed as part of this incident'}` : ''}`));
+  } else {
+    // Honest minimal list: the verdict tied no front to this incident, so nothing is
+    // claimed. The full estate inventory stays in the record — deliberately NOT here.
+    L.push('- None could be tied to this incident by the verdict (see findings). The wider estate inventory this sweep saw is in the incident record and is deliberately not on this ticket.');
+  }
   L.push('');
   L.push('## Findings');
   sn.findings.forEach((f) => L.push(`- **${f.front}** [${f.state}]: ${f.detail}${f.source ? ` — ${f.source}` : ''}`));
@@ -590,33 +785,52 @@ function renderSltDoc(rec) {
       L.push('Other possibilities we weighed, in order:');
       hyp.ranked.forEach((r) => L.push(`- ${r.cause} (${r.likelihood})`));
     }
-  } else if (v && v.verdict) {
-    L.push(v.verdict);
   } else {
-    L.push('The bridge closed without a formal ruling. Based on the real readings, treat any area we could not see as unconfirmed — no root cause is being claimed.');
+    // CLASS RULE (no hypothesis): say so in plain words, then give an honest one-line
+    // status of what was actually checked. This NEVER falls back to the raw verdict
+    // string — that string is an alarm scrape ("254 active alarms — top 3:
+    // license-not-synced (83, chronic)…"), exactly what this document exists to keep
+    // out of a leadership summary. The raw verdict stays verbatim in the engineer doc
+    // and record.json for the people who read it.
+    L.push('**No cause has been committed.** The investigation did not settle on a cause for this incident.');
+    L.push('');
+    L.push(`${plainStatusLine(rec)} Nothing we could read points conclusively at a single cause, so no root cause is being claimed.`);
   }
   L.push('');
 
-  // ── What broke vs. what was already broken — kept ONLY as context under the
-  // conclusion, framed to AGREE with it. Anything pre-existing/chronic is named
-  // as "already broken before this incident, not the cause" so it can never be
-  // mistaken for the headline. Driven off the verdict's real in-window split.
-  const activeFronts = v && Array.isArray(v.activeInWindow) ? v.activeInWindow : null;
-  const preExistingFronts = v && Array.isArray(v.preExisting) ? v.preExisting : null;
-  const evByFront = {};
-  (rec.evidenceFinal || []).forEach((e) => { evByFront[e.front] = e; });
-  const detailOf = (f) => (evByFront[f] ? evByFront[f].detail : '');
+  // ── What broke vs. what was already broken ────────────────────────────────────
+  // CLASS RULE: this section is derived from the SAME committed verdict the headline
+  // uses, through brokeSplit() — a front the verdict called active but whose real
+  // numbers are all chronic/pre-window noise is moved to the already-broken-before
+  // bucket, never presented as this incident's live problem. Every line is plain
+  // words + real counts; the raw alarm-type dump never appears here.
+  const split = brokeSplit(rec);
   L.push('## What broke');
-  if (activeFronts) {
-    if (activeFronts.length) {
-      L.push(`A live problem that started during this incident was found on ${activeFronts.length} area(s):`);
-      activeFronts.forEach((f) => L.push(`- **${frontLabel(f)}** — ${detailOf(f)}`));
-      if ((preExistingFronts || []).length) {
-        L.push('');
-        L.push(`For context, ${preExistingFronts.map(frontLabel).join(', ')} already had faults before this incident began — pre-existing, and not what broke here.`);
-      }
-    } else if ((preExistingFronts || []).length) {
-      L.push(`Nothing new broke during this incident. ${preExistingFronts.map(frontLabel).join(', ')} already had faults before it began (pre-existing) — they are not the cause.`);
+  const unknownBlock = () => {
+    if (!split.unknown.length) return;
+    L.push('');
+    L.push('These areas are showing faults too, but the systems we read do not record when they started, so we cannot say whether they began with this incident:');
+    split.unknown.forEach((f) => L.push(brokeLine(split.evByFront[f], f, split.dated)));
+  };
+  const chronicBlock = () => {
+    if (!split.chronic.length) return;
+    L.push('');
+    L.push('These areas also carry faults, but they were already broken before this incident began — they are not what broke here:');
+    split.chronic.forEach((f) => L.push(chronicLine(split.evByFront[f], f, split.dated)));
+  };
+  if (split) {
+    if (split.broke.length) {
+      L.push(`A live problem that started during this incident was found on ${plural(split.broke.length, 'area')}:`);
+      split.broke.forEach((f) => L.push(brokeLine(split.evByFront[f], f, split.dated)));
+      unknownBlock();
+      chronicBlock();
+    } else if (split.unknown.length) {
+      L.push(`Faults are showing on ${plural(split.unknown.length, 'area')}. The systems we read do not record when they started, so we cannot say whether they began with this incident:`);
+      split.unknown.forEach((f) => L.push(brokeLine(split.evByFront[f], f, split.dated)));
+      chronicBlock();
+    } else if (split.chronic.length) {
+      L.push('Nothing new broke during this incident on anything we can see. These areas carry faults, but they were already there before it began — they are not the cause:');
+      split.chronic.forEach((f) => L.push(chronicLine(split.evByFront[f], f, split.dated)));
     } else if (c.suspect.length && !c.clean.length) {
       L.push('We could not get a clear reading — the systems we needed to check did not respond (see "What we could not see"). We are not calling this either broken or fine.');
     } else {
@@ -624,8 +838,8 @@ function renderSltDoc(rec) {
     }
   } else if (c.degraded.length) {
     // Legacy fallback (record predates the in-window split).
-    L.push(`We found a live problem on ${c.degraded.length} area(s):`);
-    c.degraded.forEach((e) => L.push(`- **${frontLabel(e.front)}** — ${e.detail}`));
+    L.push(`We found a live problem on ${plural(c.degraded.length, 'area')}:`);
+    c.degraded.forEach((e) => L.push(brokeLine(e, e.front, false)));
   } else if (c.suspect.length && !c.clean.length) {
     L.push('We could not get a clear reading — the systems we needed to check did not respond (see "What we could not see"). We are not calling this either broken or fine.');
   } else {
@@ -633,12 +847,20 @@ function renderSltDoc(rec) {
   }
   L.push('');
 
-  // Who/what it hit
+  // Who/what it hit — composed HERE in plain words from the same committed verdict
+  // fields (never the engine's raw impact sentence, which names fronts by their
+  // internal keys — "fabric, wan, incidents" — and mixes in window jargon). The raw
+  // engine sentence is unchanged in record.json and on the verdict card.
   L.push('## Who or what it affected');
-  if (v && v.impact) {
-    L.push(v.impact);
+  const labelsOf = (arr) => arr.map((x) => frontLabel(typeof x === 'string' ? x : x.front)).join(', ');
+  if (split) {
+    if (split.broke.length) L.push(`The areas hit by a live problem during this incident: ${labelsOf(split.broke)}.`);
+    else if (!split.unknown.length) L.push('No live, in-incident problem was confirmed on any area we can see, so no impact can be attributed from our own readings.');
+    if (split.unknown.length) L.push(`Also showing faults, though we cannot tell whether they started with this incident: ${labelsOf(split.unknown)}.`);
+    if (c.clean.length) L.push(`Checked and healthy: ${labelsOf(c.clean)}.`);
+    if (c.suspect.length) L.push(`Could not be read this time, so impact there is unknown: ${labelsOf(c.suspect)}.`);
   } else if (c.degraded.length) {
-    L.push(`The affected areas were: ${c.degraded.map((e) => frontLabel(e.front)).join(', ')}. The other checked areas were healthy.`);
+    L.push(`The affected areas were: ${labelsOf(c.degraded)}. The other checked areas were healthy.`);
   } else {
     L.push('No customer- or user-facing impact was confirmed on the systems we can see.');
   }
@@ -695,13 +917,24 @@ function renderSltDoc(rec) {
     L.push('');
   }
 
-  // Current status
+  // Current status — plain words, composed here. The engine's raw verdict sentence
+  // is jargon (alarm type names, fault counts, front keys) and belongs in the
+  // engineer doc, which prints it verbatim; leadership gets the same facts in words.
   L.push('## Where it stands now');
-  if (v && v.verdict) {
-    L.push(v.verdict);
+  const closedWord = rec.status === 'closed'
+    ? 'The bridge is closed.'
+    : 'The bridge is still open.';
+  if (hyp && hyp.hypothesis) {
+    L.push(`${closedWord} We have a leading cause (above). ${confidenceLine(hyp.confidence)}`);
   } else {
-    L.push('The bridge closed without a formal ruling. Based on the real readings above, this is the current picture; treat any area we could not see as unconfirmed.');
+    L.push(`${closedWord} No cause has been committed, so this incident is unresolved as far as our own readings go.`);
   }
+  L.push(plainStatusLine(rec));
+  const openWork = [];
+  if (c.suspect.length) openWork.push(`confirm the areas we could not read (${labelsOf(c.suspect)})`);
+  if (c.blind.length) openWork.push(`check the areas with no monitoring connected (${labelsOf(c.blind)}) directly`);
+  if (nextChecks.length || (hyp && hyp.ifThen)) openWork.push('work the recommended next steps above');
+  if (openWork.length) L.push(`Outstanding: ${openWork.join('; ')}.`);
   L.push('');
   L.push('---');
   L.push("*This summary is generated automatically from the engine's committed conclusion — the same hypothesis, confidence and next steps the engineers see. Every statement traces back to a real live reading; nothing here is estimated or invented.*");
