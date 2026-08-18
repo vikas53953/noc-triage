@@ -9,7 +9,13 @@
 //
 // Every "must still refuse" case below is a regression guard: the fix may not
 // buy honesty for prose by going quiet on a real write.
-const { checkIntent, splitIntent } = require('./guardrails');
+//   3. CLASS 3+4 FOLLOW-UP — the object test must FAIL CLOSED. The old suite was
+//      blind here: every "must refuse" case used a BARE object ("clear counters",
+//      "set boot system"), which is the one shape the old one-token-lookahead
+//      could still see. Real operators stack determiners and adjectives ("clear
+//      all the counters on sw2"), and every one of those passed silently. The
+//      adjective-stacked cases below are the guard against that ever returning.
+const { checkIntent, splitIntent, looksLikeChangeAsk } = require('./guardrails');
 
 let pass = 0, fail = 0;
 function ok(name, cond, extra) {
@@ -130,6 +136,160 @@ ok('pure read is not compound', c2.compound === false && c2.destructive === fals
 
 const c3 = splitIntent('erase startup-config');
 ok('pure change has no read half', c3.destructive === true && c3.compound === false);
+
+// ── CLASS 3+4 FOLLOW-UP ─────────────────────────────────────────────────────
+
+console.log('\nFAIL-CLOSED OBJECT SCAN — a determiner or adjective must not defeat the refusal:');
+const STACKED_REFUSE = [
+  'clear all the counters on sw2',
+  'clear the interface counters',
+  'install the new image on sw1',
+  'install that latest image',
+  'set a new hostname',
+  'set the new hostname on sw3',
+  'wipe every single vlan',
+  'delete all the old vlans on sw2',
+  'remove the second access-list from sw1',
+  'copy the current running-config to startup-config',
+  'no shut all of the interfaces',
+  'disable the spanning-tree on sw4',
+  'enable the debug logging on sw2',
+  'push the golden config to every switch',
+  'apply the new acl to gi1/0/3',
+  // Fail-closed: the object is not device vocabulary, but it is not everyday
+  // English either — an unrecognised object must refuse, not pass.
+  'clear the frobnicator on sw9',
+  'set the thingamajig',
+];
+for (const t of STACKED_REFUSE) {
+  const v = checkIntent(t);
+  ok(JSON.stringify(t), v.destructive === true, 'FAILED OPEN — let a change through');
+}
+
+console.log('\nVERB SHIELDING — a carrier verb must not hide the write behind it:');
+const SHIELDED_REFUSE = [
+  'run write memory',
+  'execute erase startup-config',
+  'perform a reload of sw2',
+  'please execute a reload of sw2',
+  'issue a write mem on sw1',
+  'trying to reload sw3',
+  'go ahead and run the erase startup-config',
+  'perform the config change on sw2',
+];
+for (const t of SHIELDED_REFUSE) {
+  const v = checkIntent(t);
+  ok(JSON.stringify(t), v.destructive === true, 'a carrier verb shielded the write');
+}
+
+console.log('\nCARRIER + READ is still a read (the shielding must not eat reads):');
+const CARRIER_READ_PASS = [
+  'run show version on sw1',
+  'run show boot system on sw2',
+  'execute show running-config on sw3',
+  'please run show ip interface brief on sw2',
+];
+for (const t of CARRIER_READ_PASS) {
+  const v = checkIntent(t);
+  ok(JSON.stringify(t), v.destructive === false, `false-refused on "${v.keyword}" in "${v.clause}"`);
+}
+
+console.log('\nINNOCENT ENGLISH must still flow (the allowlist):');
+const INNOCENT_PASS = [
+  'clear it up with the team',
+  'copy the report to the ticket',
+  'set a meeting for 9',
+  'set up a bridge with the on-call',
+  'install the new build of the dashboard app',
+  'remove me from the bridge',
+  'no more escalations for now',
+  'copy the summary into the postmortem',
+];
+for (const t of INNOCENT_PASS) {
+  const v = checkIntent(t);
+  ok(JSON.stringify(t), v.destructive === false, `false-refused on "${v.keyword}" in "${v.clause}"`);
+}
+
+console.log('\nEVENT REFERENCES stay prose (a past change is not an order):');
+const EVENT_PASS = [
+  'show version on sw2 after the reload',
+  'show inventory on sw1 since the upgrade',
+  'show running-config on sw3 following the planned config change',
+  'show version on sw1 before the next maintenance window',
+];
+for (const t of EVENT_PASS) {
+  const v = checkIntent(t);
+  ok(JSON.stringify(t), v.destructive === false, `false-refused on "${v.keyword}" in "${v.clause}"`);
+}
+
+console.log('\nREFUSAL SINK — a change ask must be seen as a change, not as "no read command":');
+const SINK_CHANGE = [
+  'clear all the counters on sw2',
+  'can you please go and reload sw2 for me',
+  'i need you to erase the startup-config on sw1',
+  'set a new hostname on sw3',
+];
+for (const t of SINK_CHANGE) {
+  const v = looksLikeChangeAsk(t);
+  ok(JSON.stringify(t), v.destructive === true, 'the sink would have said "no read command"');
+}
+const SINK_NOT_CHANGE = [
+  'what happened on sw2 last night',
+  'who is on call tonight',
+  'show version on sw2 after the reload',
+  'copy the report to the ticket',
+];
+for (const t of SINK_NOT_CHANGE) {
+  const v = looksLikeChangeAsk(t);
+  ok(JSON.stringify(t), v.destructive === false, `the sink called it a change ("${v.keyword}")`);
+}
+
+// ── Reviewer additions (PR #52 review) ──────────────────────────────────────
+// Two holes found by attacking the branch with fresh strings.
+
+console.log('\nPUNCTUATION INSIDE THE VERB must not hide it ("re-set" is "reset"):');
+for (const t of [
+  're-set the host-name on sw1',
+  're-load sw2 tonight',
+  'shut-down gi1/0/3 on sw2',
+  're-boot the switch sw3',
+]) {
+  ok(JSON.stringify(t), checkIntent(t).destructive === true, 'a hyphen defeated the whole intent screen');
+}
+for (const t of [
+  'the e-mail went out to the team',
+  'set up a follow-up call',
+  'copy the write-up to the ticket',
+  'we had a re-org last week',
+]) {
+  ok(JSON.stringify(t), checkIntent(t).destructive === false, 'ordinary hyphenated English was refused');
+}
+
+console.log('\nA CHANGE ASK ALONGSIDE A READ must never be dropped silently:');
+// The change verb sits behind words that are not on the filler list, so the
+// leading-word reading saw nothing — the read ran and the change vanished.
+for (const t of [
+  'maybe we should reload sw2, and show me the version',
+  'could you maybe clear the counters on sw2 and show ip interface brief',
+  'i was wondering if you could reload sw2 and also show version on sw1',
+  'show version on sw1 and it would be great if someone reloaded sw2',
+]) {
+  const s = splitIntent(t);
+  ok(`${JSON.stringify(t)} — the change is seen`, s.destructive === true, 'the change was dropped silently');
+  ok(`${JSON.stringify(t)} — the read half is kept`, s.readClauses.length > 0, 'the read half was lost');
+  ok(`${JSON.stringify(t)} — handled as compound`, s.compound === true, 'not compound');
+}
+// A plain read must stay a plain read — no invented change half.
+for (const t of [
+  'show version on sw2',
+  'please show me the interface counters on sw2',
+  'run show boot system',
+  'show running-config',
+]) {
+  const s = splitIntent(t);
+  ok(`${JSON.stringify(t)} — still a plain read`,
+    s.destructive === false && s.readClauses.length > 0, `keyword="${s.change && s.change.keyword}"`);
+}
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

@@ -141,6 +141,25 @@ for (const base of STATE_CHANGING) {
 // A read verb must never be shadowed by a generated write form.
 for (const rv of READ_VERBS) WRITE_FORM_TO_BASE.delete(rv);
 
+// PUNCTUATION INSIDE THE VERB (reviewer fix, class-level). tokensOf keeps
+// hyphens and apostrophes, so a verb somebody typed with punctuation in it
+// ("re-set the host-name on sw1", "re-load sw2", "shut-down gi1/0/3") missed the
+// lookup entirely and the whole intent screen fell silent — the operator got
+// "I could not find a read command" for what was plainly a change. Same class as
+// the carrier and adverb shields: nothing standing inside or in front of the
+// verb may hide it. The raw form is tried FIRST (so nothing already recognised
+// changes), then the same token with its punctuation removed.
+function writeBaseOf(tok) {
+  if (!tok) return undefined;
+  const raw = String(tok);
+  const direct = WRITE_FORM_TO_BASE.get(raw);
+  if (direct) return direct;
+  const stripped = raw.replace(/[-'.]/g, '');
+  if (stripped === raw) return undefined;
+  if (READ_VERBS.includes(stripped)) return undefined;   // never shadow a read
+  return WRITE_FORM_TO_BASE.get(stripped);
+}
+
 // Verbs on the list above that are ALSO ordinary English. They mean "change the
 // device" only when what follows is device-shaped; followed by any of these
 // words they are authoring, not configuring, and must not be refused.
@@ -353,18 +372,140 @@ function isEventReference(shape, sep) {
   return false;
 }
 
-// Does the ambiguous verb leading this clause actually govern a device-shaped
-// object? Looks at the token immediately after the verb, stepping past ONE
-// leading article/determiner ("copy the running-config"). That is where a real
-// command puts its object; ordinary English puts a plain noun or a phrasal
-// particle there instead ("clear it up", "copy the report").
-function clauseGovernsDevice(clause, verbRaw) {
+// ── Innocent everyday objects (fail-closed allowlist) ───────────────────────
+// The object test below decides whether an ambiguous verb ("clear", "set",
+// "install") is giving a device an order or just speaking English. It used to
+// look ONLY at the token right after the verb, stepping past exactly ONE
+// article — so a single adjective defeated it:
+//
+//   "clear all the counters on sw2"  → looked at "all" → not device → PASSED
+//   "install the new image on sw1"   → looked at "new" → not device → PASSED
+//   "set a new hostname"             → looked at "new" → not device → PASSED
+//
+// That is failing OPEN: the operator was never told the change was refused.
+// The rule is now fail-CLOSED and reads the WHOLE object phrase:
+//
+//   1. a device-shaped token ANYWHERE after the verb  → WRITE (refuse)
+//   2. otherwise, an explicitly innocent everyday word → English (pass)
+//   3. otherwise → WRITE (refuse). Unrecognised objects fail closed.
+//
+// Only a clearly innocent object lets the clause through, so the failure mode
+// is "refused something harmless" (visible, correctable) instead of "let a
+// change through quietly" (invisible, dangerous).
+//
+// A bare verb with NO object at all is English: a real device command always
+// names what it acts on ("clear counters", "no shutdown"), while ordinary
+// speech does not ("no, that is fine", "let us clear it up" is covered by the
+// particle "it"). So an empty object phrase passes.
+const INNOCENT_OBJECTS = new Set([
+  // pronouns and phrasal particles — "clear it up", "set up a call"
+  'it', 'me', 'us', 'them', 'him', 'her', 'you', 'myself', 'ourselves',
+  'up', 'out', 'off', 'over', 'through', 'along', 'aside', 'together',
+  // ordinary quantity / degree words used as bare objects — "no more", "no rush"
+  'more', 'less', 'rush', 'hurry', 'worries', 'problem', 'stress', 'panic',
+  'doubt', 'idea', 'clue', 'air', 'noise', 'confusion', 'ambiguity',
+  // the paperwork of an incident — never a device
+  'report', 'reports', 'doc', 'docs', 'document', 'documents', 'documentation',
+  'summary', 'note', 'notes', 'minutes', 'ticket', 'tickets', 'record',
+  'records', 'log' , 'writeup', 'write-up', 'postmortem', 'rca', 'timeline',
+  'page', 'wiki', 'readme', 'markdown', 'md', 'file', 'files', 'draft',
+  // people and meetings
+  'meeting', 'call', 'calls', 'bridge', 'thread', 'channel', 'email', 'mail',
+  'message', 'messages', 'chat', 'invite', 'agenda', 'team', 'teams', 'people',
+  'folks', 'everyone', 'anyone', 'staff', 'operator', 'operators', 'engineer',
+  'engineers', 'shift', 'handover', 'standup', 'schedule', 'calendar',
+  // planning words
+  'target', 'targets', 'plan', 'plans', 'task', 'tasks', 'item', 'items',
+  'list', 'backlog', 'board', 'comment', 'comments', 'question', 'questions',
+  'answer', 'expectation', 'expectations', 'assumption', 'assumptions',
+  'picture', 'scope', 'reminder', 'deadline', 'date', 'time',
+  // software that is NOT the device's own image
+  'build', 'dashboard', 'app', 'browser', 'laptop', 'desktop',
+  // ordinary incident chatter
+  'alert', 'alerts', 'alarm-noise', 'escalation', 'update', 'updates', 'status',
+]);
+
+// Every token after the verb, to the end of the clause. That whole phrase — not
+// the one token after one article — is what the verb governs.
+function objectPhrase(clause, verbRaw, atIdx) {
   const toks = tokensOf(clause);
-  let i = toks.indexOf(verbRaw);
-  if (i < 0) return false;
-  i++;
-  if (toks[i] && DETERMINERS.has(toks[i])) i++;   // step past one article
-  return isDeviceObject(toks[i]);
+  const i = (typeof atIdx === 'number' && atIdx >= 0) ? atIdx : toks.indexOf(verbRaw);
+  if (i < 0) return null;
+  return toks.slice(i + 1);
+}
+
+// Rule 1 above: is ANY token in the object phrase device-shaped?
+function phraseNamesDevice(words) {
+  return (words || []).some((w) => isDeviceObject(w));
+}
+
+// Rule 2 above: is the object phrase recognisable as ordinary English?
+function phraseIsInnocent(words) {
+  return (words || []).some((w) => INNOCENT_OBJECTS.has(w));
+}
+
+// Does the ambiguous verb leading this clause actually govern a device? Returns
+// true (⇒ refuse) for a device-shaped object AND for an object we cannot read as
+// everyday English — fail closed, per the block above.
+function clauseGovernsDevice(clause, verbRaw, atIdx) {
+  const words = objectPhrase(clause, verbRaw, atIdx);
+  if (words === null) return false;               // verb not found — nothing to judge
+  const meaningful = words.filter((w) => !DETERMINERS.has(w) && !FILLER.has(w));
+  if (!meaningful.length) return false;           // bare verb, no object → English
+  if (phraseNamesDevice(meaningful)) return true; // 1. device-shaped anywhere
+  if (phraseIsInnocent(meaningful)) return false; // 2. clearly innocent English
+  return true;                                    // 3. unrecognised → fail closed
+}
+
+// ── Carrier verbs (verb shielding) ──────────────────────────────────────────
+// "run write memory", "execute erase startup-config", "perform a reload of sw2".
+// The leading word is a harmless carrier — it says HOW to do the thing, never
+// WHAT — so judging only the leading word read these as neither read nor write
+// and let them fall through to the read parser, which found no read command and
+// replied "I could not find a read command". The change was never refused out
+// loud. Same class as the sequencing adverbs already handled in FILLER: a word
+// standing in front of the real verb must never shield it.
+//
+// So when a clause opens with a carrier, the clause is SCANNED for the first
+// real verb behind it. If that verb is a read ("run show version"), the clause
+// is a read and the scan stops — which also keeps "run show boot system" a read
+// instead of tripping on the write-verb homonym "boot".
+const CARRIER_VERBS = new Set([
+  'run', 'runs', 'ran', 'running', 'execute', 'executes', 'executed',
+  'executing', 'perform', 'performs', 'performed', 'performing', 'issue',
+  'issues', 'issued', 'issuing', 'trigger', 'triggers', 'triggering',
+  'initiate', 'initiates', 'initiating', 'try', 'tries', 'trying', 'attempt',
+  'attempts', 'attempting', 'send', 'sends', 'sending', 'fire', 'fires',
+]);
+
+// Scan a clause from `start` for the first read verb or write verb and classify
+// from there. Returns null when the clause names neither.
+//
+// `excuseEvents` is false for a carrier scan on purpose: "perform a reload of
+// sw2" puts a determiner in front of "reload", which the event-noun test would
+// normally read as prose ("the reload happened"). Behind a carrier it is the
+// OBJECT OF AN ORDER, not a past event, so the excuse does not apply.
+function scanClauseForCommand(clause, sep, start, excuseEvents) {
+  const toks = tokensOf(clause);
+  for (let i = start; i < toks.length; i++) {
+    const w = toks[i];
+    if (READ_VERBS.includes(w)) return { kind: 'read', word: w };
+    const base = writeBaseOf(w);
+    if (!base) continue;
+    if (base === 'write' || base === 'wr') {
+      const after = toks.slice(i + 1).join(' ');
+      if (SOFT_VERBS.write.test(after)) return null;   // "write me a report"
+      return { kind: 'write', word: w, base };
+    }
+    const prev = i > 0 ? toks[i - 1] : null;
+    if (excuseEvents && isEventReference({ word: base, prev, bare: i === toks.length - 1 }, sep)) continue;
+    if (HARD_WRITE.has(base)) return { kind: 'write', word: w, base };
+    if (AMBIGUOUS_WRITE.has(base)) {
+      if (clauseGovernsDevice(clause, w, i)) return { kind: 'write', word: w, base };
+      continue;   // everyday English — keep looking behind it
+    }
+  }
+  return null;
 }
 
 // Classify ONE clause: 'read', 'write', or null (neither). This is the single
@@ -376,7 +517,16 @@ function classifyClause(clause, sep) {
   const raw = shape.word;
   if (!raw) return { kind: null };
   if (READ_VERBS.includes(raw)) return { kind: 'read', word: raw };
-  const base = WRITE_FORM_TO_BASE.get(raw);
+  // VERB SHIELDING: a carrier verb ("run", "execute", "perform") in front of the
+  // real verb must not hide it. Scan behind the carrier for the first real verb.
+  if (CARRIER_VERBS.has(raw)) {
+    const toks = tokensOf(clause);
+    const at = toks.indexOf(raw);
+    const inner = scanClauseForCommand(clause, sep, at + 1, false);
+    if (inner) return inner;
+    return { kind: null };
+  }
+  const base = writeBaseOf(raw);
   if (!base) return { kind: null };
   // 'write'/'wr' keep the document-author exception ("write me a report" is a
   // Doc-Writer job, "write mem" / "write erase" is not).
@@ -411,6 +561,30 @@ function checkIntent(text) {
   return { destructive: false };
 }
 
+// ── "Is this a change?" — the last-chance read, for the refusal SINK ────────
+// checkIntent judges the verb that LEADS each clause, which is the right test
+// for "should this be refused before anything runs". But when the read parser
+// has already failed to find a read command, the honest question changes from
+// "does this lead with a write verb" to "was the operator asking for a change at
+// all" — because the alternative reply ("I could not find a read command in
+// that") tells an operator who asked for a change the wrong thing entirely.
+//
+// So this is a WIDER scan, used ONLY at that sink: any clause whose first real
+// verb — wherever it sits — is a write. A read verb anywhere in the clause wins
+// first (it is a read that simply did not parse), and event-noun references
+// ("after the reload", "since the upgrade") are still prose.
+function looksLikeChangeAsk(text) {
+  const raw = String(text || '');
+  for (const { text: clause, sep } of clauseParts(raw)) {
+    const c = scanClauseForCommand(clause, sep, 0, true);
+    if (c && c.kind === 'read') continue;
+    if (c && c.kind === 'write') {
+      return { destructive: true, keyword: c.word, clause: clause.trim() };
+    }
+  }
+  return { destructive: false };
+}
+
 // ── Compound "read then change" (CW-2 pre-work 2) ───────────────────────────
 // "reload sw1 then show me the version" is TWO asks in one sentence. Refusing
 // the whole thing drops the read silently; running the whole thing is a write.
@@ -425,7 +599,21 @@ function splitIntent(text) {
   const readClauses = [];
   let change = null;
   for (const { text: clause, sep } of clauseParts(raw)) {
-    const c = classifyClause(clause, sep);
+    // The leading-verb reading first — it is the strict one, and it owns the
+    // event-noun and soft-verb exceptions.
+    let c = classifyClause(clause, sep);
+    // REVIEWER FIX (same class as the carrier/adverb shields): when the leading
+    // word is neither read nor write, the real verb may simply be sitting behind
+    // ordinary words that are not on the filler list — "maybe we should reload
+    // sw2", "i was wondering if you could reload sw2". Judged by the leading word
+    // alone those clauses classified as NOTHING, so a read alongside them ran and
+    // the change was dropped without a word — the silent substitution this file
+    // exists to prevent. So the clause gets the same WIDER scan the refusal sink
+    // uses: its first real verb, wherever it sits. A read still wins.
+    if (!c.kind) {
+      const wide = scanClauseForCommand(clause, sep, 0, true);
+      if (wide) c = wide;
+    }
     if (c.kind === 'read') { readClauses.push(clause.trim()); continue; }
     if (c.kind === 'write' && !change) change = { keyword: c.word, clause: clause.trim() };
   }
@@ -448,6 +636,8 @@ function assertReadOnly(command) {
 module.exports = {
   checkCommand, checkIntent, assertReadOnly, commandWord,
   splitIntent, clausesOf, clauseParts, commandShape, classifyClause,
+  looksLikeChangeAsk, clauseGovernsDevice, scanClauseForCommand,
+  INNOCENT_OBJECTS, CARRIER_VERBS,
   READ_VERBS, STATE_CHANGING, HARD_WRITE, AMBIGUOUS_WRITE,
   DEVICE_OBJECT_WORDS, WRITE_FORM_TO_BASE, isDeviceObject,
   EVENT_NOUNS, DETERMINERS, SUBJECT_PRONOUNS,
