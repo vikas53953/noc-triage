@@ -2570,22 +2570,80 @@ function invRender(id){
   v.el.querySelector('.inv').innerHTML = h;
 }
 
-/* Fold a WS round event (or a GET :id record) into the local record. */
+/* How far along a status is — used to stop a stale snapshot regressing live
+   state (LATEST-WINS, not last-caller-wins). The POST seed is always 'starting';
+   any WS update is further along, so a late seed must never pull the card back. */
+function invStatusRank(s){
+  switch(String(s || '').toLowerCase()){
+    case 'starting': return 0;
+    case 'awaiting-operator': return 1;
+    case 'investigating': return 2;
+    /* terminal states */
+    case 'resolved': case 'capped': case 'stuck':
+    case 'blocked': case 'reasoning-unavailable': return 3;
+    default: return 2;   /* unknown → treat as in-flight, never as earliest */
+  }
+}
+
+/* Fold a WS event (round OR full snapshot) or a GET :id record into the local
+   record. Two shapes arrive:
+   • a single ROUND event {id,round,probe,agent,report,hypotheses,confidence,status}
+     — additive, only ever adds/updates its own round; never regressive.
+   • a full SNAPSHOT (investigation_update / GET) — carries the record-level
+     status/questions/rootCause/fixPlan and an updatedAt stamp.
+   A stale snapshot (older updatedAt, or an earlier-stage 'starting' seed landing
+   after a live update) is IGNORED so it can never blank the questions or drag the
+   status backwards — the race the reviewer found. */
 function invApply(id, d){
   var v = INV[id]; if(!v) return;
-  if(d.problem != null) v.problem = d.problem;
-  if(d.understood != null) v.understood = d.understood;
-  if(d.status != null) v.status = d.status;
-  if(d.confidence != null) v.confidence = d.confidence;
-  /* questions[] is PLURAL (array of clarifying-question strings). */
-  if(Array.isArray(d.questions)) v.questions = d.questions.slice();
-  if(d.rootCause != null) v.rootCause = d.rootCause;
-  /* fixPlan is an OBJECT {summary, proposal?}; keep it whole. */
-  if(d.fixPlan != null) v.fixPlan = d.fixPlan;
-  if(d.stuckReason != null) v.stuckReason = d.stuckReason;
 
-  /* a single round on the event */
-  if(d.round != null && (d.probe != null || d.report != null || d.agent != null || d.hypotheses != null)){
+  /* Snapshot vs round event: snapshots carry cap/threshold/updatedAt/rounds[];
+     a round event carries a single `round` and none of those record-level keys. */
+  var isSnapshot = d.cap != null || d.threshold != null || d.updatedAt != null || Array.isArray(d.rounds);
+
+  if(isSnapshot){
+    /* LATEST-WINS guard 1 — monotonic on the engine's own updatedAt stamp. */
+    var t = d.updatedAt ? Date.parse(d.updatedAt) : NaN;
+    if(!isNaN(t)){
+      if(v._snapAt != null && t < v._snapAt) return;   // strictly older → drop it whole
+      v._snapAt = t;
+    }
+    /* LATEST-WINS guard 2 — a regressive status never overwrites a further-along
+       one (kills the 'starting' seed landing after 'awaiting-operator'). */
+    if(d.status != null && invStatusRank(d.status) >= invStatusRank(v.status)) v.status = d.status;
+    /* LATEST-WINS guard 3 — an empty questions:[] never clears populated ones;
+       a populated list always applies. */
+    if(Array.isArray(d.questions) && (d.questions.length || !(v.questions && v.questions.length)))
+      v.questions = d.questions.slice();
+
+    if(d.problem != null) v.problem = d.problem;
+    if(d.understood != null) v.understood = d.understood;
+    if(d.confidence != null) v.confidence = d.confidence;
+    if(d.rootCause != null) v.rootCause = d.rootCause;
+    if(d.fixPlan != null) v.fixPlan = d.fixPlan;          /* {summary, proposal?} */
+    if(d.stuckReason != null) v.stuckReason = d.stuckReason;
+
+    /* a full record may carry a rounds[] array — merge each (additive) */
+    if(Array.isArray(d.rounds)){
+      d.rounds.forEach(function(r){
+        if(r == null || r.round == null) return;
+        var rn = r.round;
+        if(!v.rounds[rn]){ v.rounds[rn] = {}; v.order.push(rn); }
+        Object.assign(v.rounds[rn], r);
+      });
+      v.order.sort(function(a,b){ return a-b; });
+    }
+    /* leading hypotheses (before any probe) → a "round 0" starting read */
+    if(Array.isArray(d.hypotheses) && d.hypotheses.length && !v.order.length){
+      v.rounds[0] = { probe:'Initial read of the problem', hypotheses:d.hypotheses };
+      v.order.unshift(0);
+    }
+  } else if(d.round != null){
+    /* a single ROUND event — additive. The event's top-level `status` is the
+       ROUND's status ('ok'/'blocked'/…), NOT the record status, so it is stored
+       on the round and never applied to v.status. Confidence is the live record
+       confidence at that round → it climbs, so apply it. */
+    if(d.confidence != null) v.confidence = d.confidence;
     var rn = d.round;
     if(!v.rounds[rn]){ v.rounds[rn] = {}; v.order.push(rn); v.order.sort(function(a,b){ return a-b; }); }
     var r = v.rounds[rn];
@@ -2596,26 +2654,16 @@ function invApply(id, d){
     if(d.confidence != null) r.confidence = d.confidence;
     if(d.status != null) r.status = d.status;
   }
-  /* a full record may carry a rounds[] array */
-  if(Array.isArray(d.rounds)){
-    d.rounds.forEach(function(r){
-      if(r == null || r.round == null) return;
-      var rn = r.round;
-      if(!v.rounds[rn]){ v.rounds[rn] = {}; v.order.push(rn); }
-      Object.assign(v.rounds[rn], r);
-    });
-    v.order.sort(function(a,b){ return a-b; });
-  }
-  /* leading hypotheses at record level (before any round) */
-  if(Array.isArray(d.hypotheses) && d.hypotheses.length && d.round == null && !v.order.length){
-    if(!v.rounds[0]){ v.rounds[0] = { probe:'Initial read of the problem', hypotheses:d.hypotheses }; v.order.unshift(0); }
-  }
+
   invRender(id);
 }
 
-/* Create the thread card in the chat for a new/known investigation id. */
+/* Create the thread card in the chat for a new investigation id. The seed is
+   applied ONLY on genuine creation — never re-applied to a card that already
+   exists (the WS may have already advanced it past the seed's 'starting' stage;
+   re-applying the stale seed here was the grill-card race). */
 function invCard(id, seed){
-  if(INV[id] && INV[id].el && INV[id].el.parentNode){ if(seed) invApply(id, seed); return INV[id]; }
+  if(INV[id] && INV[id].el && INV[id].el.parentNode){ return INV[id]; }
   var el = bubble('jv', 'Jarvis · ' + nowClock(),
     'Starting an investigation — I will grill the problem, probe the right agents round by round, and narrow to a root cause. Watch it below.' +
     '<div class="inv"></div>', true);
