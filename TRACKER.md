@@ -299,3 +299,11 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
   a one-time real-creds SSH dial before relying on SSH output in prod.
 - CW-3 tickets (backend #56 + UI #58) in integrated review.
 - NEXT after CW-3 merges: CW-4 Teams, then CW-6 ServiceNow.
+
+## 2026-08-18 — CW-3 MERGED; CW-4 launching
+- CW-3 tickets MERGED (PRs #56+#58, re-review APPROVED after double-escape fix). Live-verified: TKT-…001
+  raw "AT&T", 428 without name, 11 suites green.
+- CW-4 Teams launching (backend feat/cw4-teams-be + UI feat/cw4-teams-fe, contract docs/copilot-cw4-contract.md).
+  HONEST: Teams Incoming Webhook is ONE-WAY (post only); real two-way reply reading needs a Teams bot —
+  building POST for real + an honest inbound endpoint for a future bot/flow. Needs Vikas's TEAMS_WEBHOOK for live.
+- LAST wave after CW-4: CW-6 ServiceNow.
