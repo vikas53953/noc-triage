@@ -155,8 +155,11 @@ button,input,select,textarea{font-family:inherit}
 .t-P1{background:var(--bad-bg);color:var(--bad)}
 .t-P2{background:var(--warn-bg);color:var(--warn)}
 .t-P3{background:var(--info-bg);color:var(--info)}
-.t-none{background:rgba(148,163,184,.16);color:var(--ink3)}
-.t-closed{background:rgba(148,163,184,.16);color:var(--ink3)}
+/* F6 — the settled/closed status label was ~1.4:1 (light) / 1.9:1 (dark).
+   --ink2 on a denser neutral fill clears 4.5:1 in both themes, and a touch
+   more size makes the tiny label legible. */
+.t-none{background:rgba(148,163,184,.16);color:var(--ink2);font-size:.62rem}
+.t-closed{background:rgba(148,163,184,.22);color:var(--ink2);font-size:.62rem}
 .t-src{background:var(--purple-bg);color:var(--purple)}
 .qsub{font-size:.65rem;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sla{font-family:var(--mono);font-size:.62rem;font-weight:700;padding:.1rem .3rem;border-radius:4px}
@@ -696,7 +699,11 @@ function enterDesk(){
   try{ localStorage.setItem('noc-desk-operator', v); }catch(e){}
   applyName();
   $('gate').classList.add('hide');
+  var wasBooted = booted;
   boot();
+  /* If the desk was already running, boot() is a no-op — refresh the greeting
+     bubble that is already on screen and re-save under the new name. */
+  if(wasBooted){ refreshGreeting(); persistWork(); }
 }
 $('gateBtn').addEventListener('click', enterDesk);
 $('nameIn').addEventListener('keydown', function(e){ if(e.key === 'Enter') enterDesk(); });
@@ -729,7 +736,7 @@ function refreshQueue(){
       QUEUE.list = list; QUEUE.state = 'ok'; QUEUE.error = '';
     })
     .catch(function(err){ QUEUE.state = 'error'; QUEUE.error = err.message || String(err); })
-    .then(function(){ qInflight = false; renderQueue(); });
+    .then(function(){ qInflight = false; renderQueue(); if(typeof tryPendingSelect === 'function') tryPendingSelect(); });
 }
 function sevClass(s){ return /^P[123]$/.test(String(s)) ? String(s) : 'none'; }
 function slaHtml(i){
@@ -849,6 +856,7 @@ function push(el, force){
   clearChatEmpty();
   $('chat').appendChild(el);
   if(force || near) $('chat').scrollTop = $('chat').scrollHeight;
+  persistWork();
 }
 /* side: 'me' | 'jv' | 'sys' — html must already be escaped by the caller. */
 function bubble(side, label, html, force){
@@ -976,10 +984,12 @@ $('suggest').addEventListener('click', function(e){
 /* ============================================================
    SELECTING AN INCIDENT — real record from GET /api/triage/:id
    ============================================================ */
-function selectIncident(triageId, afterPaint){
+function selectIncident(triageId, afterPaint, opts){
   if(!triageId) return;
+  opts = opts || {};
   SELID = triageId;
   renderQueue();
+  persistWork();
   $('ctxTitle').textContent = 'Loading…';
   $('ctxSub').textContent = triageId;
   api('/api/triage/' + encodeURIComponent(triageId))
@@ -987,10 +997,13 @@ function selectIncident(triageId, afterPaint){
     .then(function(t){
       SEL = t;
       paintContext(t);
-      paintConversation(t);
+      /* On a reload-restore we keep the operator's saved conversation (which can
+         include their Jarvis Q&A) instead of repainting only the server messages. */
+      if(!opts.keepChat) paintConversation(t);
       paintFindings(t);
       paintBridge(t);
       syncPostBtn();
+      persistWork();
       if(typeof afterPaint === 'function') afterPaint(t);
     })
     .catch(function(err){
@@ -1028,6 +1041,7 @@ function paintConversation(t){
   if(t.verdict) jvMsg('Jarvis · verdict', t.verdict.verdict || 'Verdict posted.', t.verdict.ts,
     jumpBtn('ev-find','See the findings behind it'));
   chat.scrollTop = chat.scrollHeight;
+  persistWork();
 }
 
 /* ============================================================
@@ -1151,6 +1165,7 @@ function verdictCard(v, t){
   if(v.impact) out += '<div class="hypo-row"><span class="r-lbl">Impact</span>' + md(v.impact) + '</div>';
   if(h.why) out += '<div class="hypo-row"><span class="r-lbl">Why</span>' + md(h.why) + '</div>';
   var cfg = v.configFindings || t.configFindings || [];
+  if(Array.isArray(cfg)) cfg.forEach(function(x){ if(x && x.device) noteDev(x.device); });
   if(Array.isArray(cfg) && cfg.length){
     var changed = cfg.filter(function(x){ return x && x.changed; });
     var inWin = changed.filter(function(x){ return x.inWindow; });
@@ -1292,6 +1307,32 @@ function landCommand(d){
    ============================================================ */
 var CHG = { recs:{}, order:[], sel:null, err:'', history:'unknown', busy:false };
 var DRIFT = { state:'idle', device:'', data:null, err:'' };
+
+/* ---------- F4: learn the real device inventory so a bad-device drift never
+   fires a doomed request that the browser logs as a raw 404 in the console.
+   There is no inventory endpoint to ask, so the desk LEARNS the real device
+   names from the sources it already receives (capability examples, a real
+   drift/change record, and — decisively — the drift endpoint's own 404 body,
+   which enumerates the live inventory). Once a name is known-bad, or the full
+   inventory is known and a name is not in it, the drift check refuses it
+   client-side with an honest note and sends nothing. ---------- */
+var KNOWN_DEV = {};        // lowercased real device name → true
+var KNOWN_BAD = {};        // names the server already rejected → true
+var INVENTORY_KNOWN = false;
+function noteDev(name){
+  var k = String(name == null ? '' : name).trim().toLowerCase();
+  if(k && /^[a-z0-9][a-z0-9._-]*$/.test(k)) KNOWN_DEV[k] = true;
+}
+/* The honest 404 body reads "…is not in the live inventory (sw1, sw2, sw3, sw4)".
+   Parsing it gives the COMPLETE real inventory, so refusing anything outside it
+   is correct, not a false refusal. */
+function learnInventory(msg){
+  var m = /live inventory\s*\(([^)]+)\)/i.exec(String(msg || ''));
+  if(!m) return;
+  m[1].split(/[,\s]+/).forEach(noteDev);
+  if(Object.keys(KNOWN_DEV).length) INVENTORY_KNOWN = true;
+}
+function knownDevList(){ return Object.keys(KNOWN_DEV).sort(); }
 var TERMINAL = { applied:1, failed:1, denied:1, 'rolled-back':1, rolledback:1 };
 
 /* The capability map is the honest source for "is this built yet". */
@@ -2024,6 +2065,14 @@ function renderDrift(){
     w.innerHTML = engineGoneBox('The drift check on ' + DRIFT.device, DRIFT.err);
     return;
   }
+  if(DRIFT.state === 'unknown'){
+    var list = knownDevList();
+    w.innerHTML = '<div class="soon"><b>' + esc(DRIFT.device) + ' is not a device I can see.</b>' +
+      (list.length ? 'The live inventory is ' + esc(list.join(', ')) + '. Pick one of those.'
+                   : 'Name a real device on the connected estate.') +
+      ' I did not send a request for a device I cannot confirm — nothing was read.</div>';
+    return;
+  }
   var d = DRIFT.data || {};
   var lines = Array.isArray(d.driftLines) ? d.driftLines : [];
   var v = String(d.verdict || '').toLowerCase();
@@ -2060,12 +2109,25 @@ function renderDrift(){
 function checkDrift(dev){
   dev = String(dev || '').trim();
   if(!dev){ toast('Name a device first', true); return; }
+  /* F4 — refuse an unknown device WITHOUT a request, so no raw 404 hits the
+     console. We only refuse when we can be sure: the server already rejected
+     this exact name, or we know the full inventory and it is not in it. */
+  var k = dev.toLowerCase();
+  if(KNOWN_BAD[k] || (INVENTORY_KNOWN && !KNOWN_DEV[k])){
+    DRIFT = { state:'unknown', device:dev, data:null, err:'' };
+    renderDrift();
+    return;
+  }
   DRIFT = { state:'loading', device:dev, data:null, err:'' };
   renderDrift();
   api('/api/copilot/drift/' + encodeURIComponent(dev))
     .then(function(r){
       if(!r.ok){
         return r.json().catch(function(){ return {}; }).then(function(b){
+          /* the 404 body enumerates the real inventory — learn it so this can
+             never fire a doomed request again, and remember this bad name. */
+          learnInventory(b && b.error);
+          if(r.status === 404) KNOWN_BAD[k] = true;
           throw new Error((b && b.error) || httpWhy(r.status));
         });
       }
@@ -2074,6 +2136,7 @@ function checkDrift(dev){
     .then(function(d){
       if(!d || typeof d !== 'object') throw new Error('The drift result came back in an unexpected shape.');
       DRIFT.state = 'ok'; DRIFT.data = d;
+      noteDev(d.device || dev);
       /* fill in "(by who)" from the real change record — never invented */
       var ids = {};
       (Array.isArray(d.driftLines) ? d.driftLines : []).forEach(function(l){
@@ -2242,8 +2305,91 @@ $('mobtabs').addEventListener('click', function(e){
 });
 
 /* ============================================================
+   WORKING-CONTEXT PERSISTENCE  (F2 — survive a reload)
+   The desk used to forget the selected incident and the whole chat on reload,
+   dumping the operator back to the bare greeting. We now keep the working
+   context in localStorage — the same store theme + operator already use — and
+   re-attach on load: the incident is RE-FETCHED from the real API (fresh
+   context, findings, bridge), and the conversation thread the operator was
+   reading is restored so nothing they had on screen is lost.
+   ============================================================ */
+function workKey(){ return 'noc-desk-working:' + (OP || '_'); }
+var persistT = null;
+function persistWork(){
+  clearTimeout(persistT);
+  persistT = setTimeout(function(){
+    try{
+      var html = $('chat').innerHTML || '';
+      /* guard: never let a runaway thread bloat localStorage */
+      if(html.length > 250000) return;
+      localStorage.setItem(workKey(), JSON.stringify({ v:1, selId:SELID, chat:html, ts:Date.now() }));
+    }catch(e){}
+  }, 300);
+}
+function restoreWork(){
+  var raw = null; try{ raw = localStorage.getItem(workKey()); }catch(e){}
+  if(!raw) return false;
+  var st = null; try{ st = JSON.parse(raw); }catch(e){ st = null; }
+  if(!st || (!st.chat && !st.selId)) return false;
+  var did = false;
+  if(typeof st.chat === 'string' && st.chat.trim()){
+    /* This transcript was built entirely by this page through esc()/md(), so
+       every value in it is already escaped — re-inserting it introduces no new
+       sink. Jump chips still work (the chat container delegates their clicks). */
+    $('chat').innerHTML = st.chat;
+    $('chat').scrollTop = $('chat').scrollHeight;
+    did = true;
+  }
+  if(st.selId){
+    /* Don't blindly re-fetch — the incident may be gone (server restarted,
+       purged). Wait for the queue to load and only re-attach if it is still on
+       the board, so a stale id never fires a doomed 404 into the console. */
+    PENDING_SEL = st.selId;
+    tryPendingSelect();
+    did = true;
+  }
+  return did;
+}
+/* Re-attach the saved incident once the real queue confirms it still exists. */
+var PENDING_SEL = null;
+function tryPendingSelect(){
+  if(!PENDING_SEL || QUEUE.state !== 'ok') return;
+  var id = PENDING_SEL;
+  var found = (QUEUE.list || []).some(function(i){ return i && i.triageId === id; });
+  PENDING_SEL = null;
+  if(found){
+    selectIncident(id, null, { keepChat:true });
+  } else {
+    /* the incident this desk was on is no longer on the board — say so plainly
+       and drop it from the saved context, without ever calling the API for it. */
+    sysMsg('The incident you were on (<code>' + esc(id) + '</code>) is no longer on the board — ' +
+      'it may have been settled and cleared. Your conversation above is kept; pick another incident on the left to continue.');
+    try{
+      var st = JSON.parse(localStorage.getItem(workKey()) || '{}');
+      st.selId = null;
+      localStorage.setItem(workKey(), JSON.stringify(st));
+    }catch(e){}
+  }
+}
+
+/* ============================================================
    BOOT
    ============================================================ */
+var greetEl = null;
+function firstName(){ return OP.split(/\s+/)[0]; }
+function showGreeting(){
+  greetEl = bubble('jv', 'Jarvis · ' + nowClock(),
+    'Desk is yours, <b class="greet-name">' + esc(firstName()) + '</b>. Everything on this screen is read live ' +
+    'from the real console — the queue on the left, the evidence on the right. Ask me anything; I will run real ' +
+    'reads or say honestly that I cannot.');
+}
+/* F1 — a mid-session name change refreshes the greeting bubble live. */
+function refreshGreeting(){
+  if(greetEl && greetEl.parentNode){
+    var n = greetEl.querySelector('.greet-name');
+    if(n) n.textContent = firstName();
+  }
+}
 var booted = false;
 function boot(){
   if(booted) return;
@@ -2256,10 +2402,9 @@ function boot(){
   renderChange();
   renderDrift();
   connectWS();
-  bubble('jv', 'Jarvis · ' + nowClock(),
-    'Desk is yours, <b>' + esc(OP.split(/\s+/)[0]) + '</b>. Everything on this screen is read live from the ' +
-    'real console — the queue on the left, the evidence on the right. Ask me anything; I will run real reads ' +
-    'or say honestly that I cannot.');
+  /* Re-attach the incident + conversation from before the reload; only greet
+     fresh when there was nothing to restore. */
+  if(!restoreWork()) showGreeting();
 }
 (function(){
   var saved = null; try{ saved = localStorage.getItem('noc-desk-operator'); }catch(e){}

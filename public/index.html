@@ -140,7 +140,9 @@ button{font-family:inherit}
   font-size:.95rem;flex-shrink:0
 }
 .eng-txt{min-width:0;flex:1}
-.eng-name{font-size:.79rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* F3 — let engineer names wrap so "Monitor-Eye" shows in full instead of
+   clipping to "Moni…"; a title tooltip carries the full name too. */
+.eng-name{font-size:.79rem;font-weight:600;overflow-wrap:anywhere;line-height:1.25}
 .eng-src{font-size:.65rem;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .eng.dark-src{opacity:.45}
 .eng.dark-src .eng-src{color:var(--ink3);font-style:italic}
@@ -1170,7 +1172,8 @@ pre.cli{
 .iq-meta{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;font-size:.63rem;color:var(--ink3)}
 .iq-status{font-weight:700;text-transform:uppercase;letter-spacing:.05em}
 .iq-status.open{color:var(--ok)}
-.iq-status.closed{color:var(--ink3)}
+/* F6 — "closed" was --ink3 (~1.4:1/1.9:1); --ink2 clears 4.5:1 in both themes. */
+.iq-status.closed{color:var(--ink2)}
 .iq-owner{color:var(--ink2)}
 .iq-owner b{color:var(--ink);font-weight:700}
 .iq-sla{font-weight:700;font-family:var(--mono);color:var(--ink2)}
@@ -1227,6 +1230,18 @@ pre.cli{
   .split{grid-template-columns:1fr}
   .bridge{border-right:none;border-bottom:1px solid var(--line);max-height:420px}
   .iq-list{max-height:220px}
+}
+/* F5 — at phone width the fixed-height header toolbar overflowed sideways
+   (~755px at 390px). It now wraps to a second row and no item exceeds the
+   viewport, so there is no horizontal scroll. */
+@media (max-width:640px){
+  .top{height:auto;min-height:56px;flex-wrap:wrap;padding:.5rem .7rem;gap:.4rem .5rem}
+  .brand{flex:1 1 100%;min-width:0}
+  .brand h1{font-size:1rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .top .dirtag,.top .demotag,.top .clock{display:none}
+  .top-right{flex:1 1 100%;flex-wrap:wrap;justify-content:flex-end;gap:.35rem;min-width:0}
+  .top-right .chip{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .top-right .notif-pill,.top-right .hdr-alert{max-width:150px}
 }
 </style>
 </head>
@@ -1641,7 +1656,7 @@ var ROSTER = [
       row.innerHTML =
         '<span class="eng-light" title="idle"></span>'+
         '<div class="eng-ico">'+e.ico+'</div>'+
-        '<div class="eng-txt"><div class="eng-name">'+escapeHtml(e.name)+'</div>'+
+        '<div class="eng-txt"><div class="eng-name" title="'+escapeHtml(e.name)+'">'+escapeHtml(e.name)+'</div>'+
         '<div class="eng-src">'+escapeHtml(e.src)+'</div></div>'+
         '<span class="eng-state '+(e.live?'st-idle':'st-off')+'">'+(e.live?'idle':'no data')+'</span>'+
         (e.live?'<button class="eng-sess" data-sess="'+escapeHtml(e.id)+'" title="See this engineer\'s real CLI session">🖥 CLI</button>':'');
