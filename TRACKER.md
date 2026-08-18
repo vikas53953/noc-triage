@@ -271,3 +271,14 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
 - MERGED QA classes: 1, 3+4, 5, 8, 9, 10. ONLY Class 6 (error handler + dropped turns) left — BUILDING.
 - Note for Class 6 merge: it edits server.js; I just edited the /api/approvals/mode route (lines ~2511) —
   resolve that region if it conflicts.
+
+## 2026-08-18 — ALL 7 QA CLASSES MERGED ✅
+- Class 6 (clean error handling + no silent dropped reads) MERGED (PR #55). LIVE-VERIFIED: non-string
+  command → 400 no leak; malformed JSON → 400 no leak. Full suite 9 files green (347 checks).
+- COMPLETE QA fix set merged: 1 (keyword shell), 3+4 (intake+guardrail), 5 (gate fail-closed), 6 (errors
+  +dropped turns), 8 (UI), 9 (chat sees incidents), 10 (docs). Each: built → adversarial review + operator-
+  experience pass → merged → verified.
+- ONLY remaining: LIVE-LLM verification pass of the whole intent-first system, gated on Anthropic credit
+  top-up (console.anthropic.com → Billing). Deterministic + non-LLM behavior all verified.
+- Copilot waves: CW-1, CW-2 done. Next feature waves (when resumed): CW-3 tickets, CW-4 Teams (needs
+  webhook), CW-5 SSH wiring, CW-6 ServiceNow (needs creds).
