@@ -28,6 +28,24 @@ const path = require('path');
 const fs = require('fs');
 const { SQUAD_ROOT, safeJoin, safeWrite } = require('../workspace');
 const session = require('./session-log');
+const correlation = require('./correlation');
+
+// ── Dual-clock timestamps (issue: docs must not show raw UTC-only ISO) ────────
+// The whole app renders times as "13:35 local · 08:05 UTC" (the operator's zone
+// first, then UTC). Reuse the ONE shared formatter (correlation.clock) so a doc
+// reads the same as every card. A doc can span calendar days, so we prefix the
+// UTC date (the same UTC anchor the incident-id date uses) and let the shared
+// helper add the dual time. tz is the operator's IANA zone (carried on the
+// record); when the bridge was opened without one, clock() honestly shows UTC
+// only rather than guessing the server's zone.
+function tsDoc(iso, tz) {
+  if (!iso) return '(unknown)';
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return String(iso);
+  const d = new Date(ms);
+  const datePart = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  return `${datePart} ${correlation.clock(ms, tz || null)}`;
+}
 
 const TRIAGES_DIRNAME = 'triages';
 function triagesRoot() { return path.join(SQUAD_ROOT, TRIAGES_DIRNAME); }
@@ -126,16 +144,17 @@ function slaHuman(sla) {
 function lifecycleLines(rec) {
   const L = [];
   const lc = rec.lifecycle || null;
+  const tz = rec.operatorTz || null;
   L.push('## Incident lifecycle (acknowledge → verdict → close)');
   if (lc) {
-    L.push(`- **Opened:** ${lc.openedAt || '(unknown)'}`);
-    L.push(`- **Acknowledged (MTTA — time to acknowledge):** ${lc.mttaHuman}${lc.ackAt ? ` (at ${lc.ackAt})` : ''}`);
-    L.push(`- **Time to verdict (open→verdict):** ${lc.timeToVerdictHuman}${lc.verdictAt ? ` (at ${lc.verdictAt})` : ''}`);
-    L.push(`- **Total (open→close):** ${lc.totalHuman}${lc.closedAt ? ` (closed ${lc.closedAt})` : ''}`);
+    L.push(`- **Opened:** ${lc.openedAt ? tsDoc(lc.openedAt, tz) : '(unknown)'}`);
+    L.push(`- **Acknowledged (MTTA — time to acknowledge):** ${lc.mttaHuman}${lc.ackAt ? ` (at ${tsDoc(lc.ackAt, tz)})` : ''}`);
+    L.push(`- **Time to verdict (open→verdict):** ${lc.timeToVerdictHuman}${lc.verdictAt ? ` (at ${tsDoc(lc.verdictAt, tz)})` : ''}`);
+    L.push(`- **Total (open→close):** ${lc.totalHuman}${lc.closedAt ? ` (closed ${tsDoc(lc.closedAt, tz)})` : ''}`);
   } else {
     // Older record with no roll-up — fall back to the timestamps we do have.
-    L.push(`- **Opened:** ${rec.openedAt || '(unknown)'}`);
-    L.push(`- **Acknowledged (MTTA):** ${rec.ackAt ? `at ${rec.ackAt}` : 'not acknowledged'}`);
+    L.push(`- **Opened:** ${rec.openedAt ? tsDoc(rec.openedAt, tz) : '(unknown)'}`);
+    L.push(`- **Acknowledged (MTTA):** ${rec.ackAt ? `at ${tsDoc(rec.ackAt, tz)}` : 'not acknowledged'}`);
     L.push(`- **Time to verdict (open→verdict):** ${rec.mttr ? rec.mttr.mttrHuman : 'unknown'}`);
     L.push(`- **Total (open→close):** ${rec.durationHuman || 'unknown'}`);
   }
@@ -143,7 +162,7 @@ function lifecycleLines(rec) {
     const breach = rec.sla.breached === true ? '⚠️ BREACHED'
       : rec.sla.breached === false ? 'within SLA'
       : 'not determined';
-    L.push(`- **SLA target:** ${slaHuman(rec.sla)} — **${breach}**${rec.sla.breachAt ? ` (deadline ${rec.sla.breachAt})` : ''}`);
+    L.push(`- **SLA target:** ${slaHuman(rec.sla)} — **${breach}**${rec.sla.breachAt ? ` (deadline ${tsDoc(rec.sla.breachAt, tz)})` : ''}`);
   }
   return L;
 }
@@ -246,6 +265,7 @@ function buildRecord(triage) {
     title: t.title,
     description: t.description,
     status: t.status,
+    operatorTz: t.operatorTz || null,         // IANA tz for dual-clock doc times
     openedAt: t.openedAt,
     closedAt: t.closedAt || null,
     verdictAt: t.verdictAt || null,
@@ -350,6 +370,38 @@ function snowOpenReason(rec, state) {
   return `NOT RESOLVED — ${reasons.join('; ') || 'root cause not confirmed'}. Verify before closing.`;
 }
 
+// The set of fronts the verdict actually implicated — this incident's own scope
+// (the fronts the operator's symptom was IN), plus the in-window active fronts
+// (cause candidates) and any front left unread this pass (suspect). The incident
+// SCOPE is the key signal: a WAN incident is scoped to ["wan"], so the fabric/ACI
+// tenants that a full estate sweep also happens to see are out of scope and must
+// not land on the WAN ticket. Returns null when the verdict carries no window-aware
+// signal at all (legacy record) OR when none of these yield a single front — the
+// caller then keeps the full CI list rather than invent (or empty) a scope.
+function implicatedFronts(rec) {
+  const v = rec.verdict || null;
+  if (!v) return null;
+  const hasSignal = Array.isArray(v.activeInWindow)
+    || (v.window && Array.isArray(v.window.scope));
+  if (!hasSignal) return null; // legacy record — no scope/window split to trust
+  const s = new Set();
+  if (v.window && Array.isArray(v.window.scope)) v.window.scope.forEach((f) => s.add(f));
+  (Array.isArray(v.activeInWindow) ? v.activeInWindow : []).forEach((f) => s.add(f));
+  (Array.isArray(v.suspect) ? v.suspect : []).forEach((f) => s.add(f));
+  if (!s.size) return null; // no basis to scope → don't silently drop real CIs
+  return s;
+}
+
+// Scope the raw affected-CI list (harvested from every readable front) down to the
+// CIs whose front the verdict implicated. Legacy records (no split) pass through
+// unchanged. A CI with no `front` is kept (it cannot be proven out of scope).
+function scopeAffectedCIs(rec) {
+  const all = rec.affectedCIs || [];
+  const fronts = implicatedFronts(rec);
+  if (!fronts) return all;
+  return all.filter((x) => !x.front || fronts.has(x.front));
+}
+
 // Build the structured ServiceNow-ready object from the REAL record. Every field
 // traces to real triage data; nothing is a placeholder. Secrets never appear here
 // (the whole record is scrub()'d on write, and CIs are device/tenant names only).
@@ -362,7 +414,18 @@ function buildServiceNow(rec) {
     findings.push({ front: e.front, state: e.state, detail: e.detail || '', source: e.source || null });
   });
 
-  const affectedCIs = (rec.affectedCIs || []).map((x) => ({ ci: x.ci, class: x.type, front: x.front }));
+  // B-scope — the affected CIs on the ticket must be the fronts the VERDICT
+  // actually implicated, not every tenant/device seen on any front this pass.
+  // collectAffectedCIs() harvests a CI from EVERY front it could read (campus,
+  // fabric/ACI tenants, wan, incidents), so a WAN incident whose verdict never
+  // implicated the fabric would still carry ACI tenants (True_Test/PROD) as
+  // "affected" — wrong scope. Restrict to the fronts the engine tied to this
+  // incident: the in-window active fronts (the cause candidates) plus any front
+  // left unread this pass (suspect — genuinely still in scope, must be verified).
+  // Pre-existing and clean fronts are explicitly OUT of scope for the CI list.
+  // Legacy records with no window-aware split (no activeInWindow field) keep the
+  // full list rather than dropping real data.
+  const affectedCIs = scopeAffectedCIs(rec).map((x) => ({ ci: x.ci, class: x.type, front: x.front }));
 
   const nextSteps = (rec.verdict && rec.verdict.nextChecks) || [];
   const hypothesis = rec.verdict && rec.verdict.hypothesis
@@ -425,13 +488,13 @@ function renderServiceNowText(rec, sn) {
   L.push(`- **Category:** ${sn.category}`);
   L.push(`- **Severity:** ${sn.severity}   **Impact:** ${sn.impact}   **Urgency:** ${sn.urgency}   **Priority:** ${sn.priority}`);
   L.push(`- **State:** ${sn.state}`);
-  L.push(`- **Opened:** ${sn.openedAt || '(unknown)'}`);
-  L.push(`- **Closed:** ${sn.closedAt || '(still open)'}`);
+  L.push(`- **Opened:** ${sn.openedAt ? tsDoc(sn.openedAt, rec.operatorTz) : '(unknown)'}`);
+  L.push(`- **Closed:** ${sn.closedAt ? tsDoc(sn.closedAt, rec.operatorTz) : '(still open)'}`);
   // Human label is "Time to verdict (open→verdict)" — what we actually measure is
   // opened→verdict (time to diagnose), NOT full MTTR (which would include fix+
   // verify). Relabelled to avoid an argument on a live bridge call. The JSON
   // field name (sn.mttr / mttrHuman) is kept stable so the UI/record don't break.
-  L.push(`- **Time to verdict (open→verdict):** ${sn.mttr ? sn.mttr.mttrHuman : 'unknown'}${sn.mttr && sn.mttr.verdictAt ? ` (verdict at ${sn.mttr.verdictAt})` : ''}`);
+  L.push(`- **Time to verdict (open→verdict):** ${sn.mttr ? sn.mttr.mttrHuman : 'unknown'}${sn.mttr && sn.mttr.verdictAt ? ` (verdict at ${tsDoc(sn.mttr.verdictAt, rec.operatorTz)})` : ''}`);
   if (sn.reTriageOf) L.push(`- **Re-triage of:** ${sn.reTriageOf}`);
   L.push('');
   // Bridge roles + lifecycle roll-up (wave 1) — real timestamps + SLA breach.
@@ -484,34 +547,69 @@ function classifyFronts(rec) {
   };
 }
 
+// Confidence, in one plain executive sentence — no jargon.
+function confidenceLine(confidence) {
+  const c = String(confidence || '').toLowerCase();
+  if (c === 'high') return 'We are confident in this finding.';
+  if (c === 'medium') return 'We have moderate confidence in this finding — worth confirming, but it is our leading answer.';
+  if (c === 'low') return 'Confidence is low — this is our best current read, not a confirmed cause. Treat it as unconfirmed until the checks below are done.';
+  return 'No confidence level was recorded for this finding — treat it as unconfirmed.';
+}
+
 // ── SLT / leadership document (plain words, no jargon) ────────────────────────
+// LAW (Class 10): this doc is generated FROM the committed verdict object — the
+// SAME hypothesis / confidence / next-steps / blind-spots the engineer doc and the
+// UI verdict card use — NOT a separate alarm scrape. The leadership headline must
+// agree with the engine's own conclusion. A chronic/pre-existing alarm the engine
+// ruled OUT as the cause is never headlined as "what broke".
 function renderSltDoc(rec) {
   const c = classifyFronts(rec);
+  const v = rec.verdict || null;
+  const hyp = v && v.hypothesis ? v.hypothesis : null;   // committed hypothesis
+  const tz = rec.operatorTz || null;
   const L = [];
   L.push(`# Incident summary — ${rec.severity} — for leadership`);
   L.push('');
-  L.push(`*Plain-words summary. Auto-written from the real triage record on ${rec.generatedAt}.*`);
+  L.push(`*Plain-words summary. Auto-written from the engine's committed conclusion on ${tsDoc(rec.generatedAt, tz)}.*`);
   L.push('');
   L.push(`**What was reported:** ${rec.description || rec.title}`);
   L.push('');
 
-  // What broke — B11: count/word only fronts that actually broke INSIDE the
-  // incident window. Pre-existing degradations (which the verdict labels NOT the
-  // cause) are named separately, never counted as newly broken. Driven off the
-  // verdict's real in-window vs pre-existing split; falls back to the degraded set
-  // only for older records that lack that split.
-  L.push('## What broke');
-  const v = rec.verdict || null;
+  // ── What we found — the engine's OWN conclusion, led by the committed
+  // hypothesis so this doc can never contradict the verdict card or the engineer
+  // writeup. Falls back to the plain verdict sentence, then to an honest "no
+  // ruling" — never to an alarm headline.
+  L.push('## What we found');
+  if (hyp && hyp.hypothesis) {
+    L.push(`**Most likely cause:** ${hyp.hypothesis}`);
+    L.push('');
+    L.push(confidenceLine(hyp.confidence));
+    if (hyp.why) L.push(`Why we think so: ${hyp.why}`);
+    if (Array.isArray(hyp.ranked) && hyp.ranked.length > 1) {
+      L.push('');
+      L.push('Other possibilities we weighed, in order:');
+      hyp.ranked.forEach((r) => L.push(`- ${r.cause} (${r.likelihood})`));
+    }
+  } else if (v && v.verdict) {
+    L.push(v.verdict);
+  } else {
+    L.push('The bridge closed without a formal ruling. Based on the real readings, treat any area we could not see as unconfirmed — no root cause is being claimed.');
+  }
+  L.push('');
+
+  // ── What broke vs. what was already broken — kept ONLY as context under the
+  // conclusion, framed to AGREE with it. Anything pre-existing/chronic is named
+  // as "already broken before this incident, not the cause" so it can never be
+  // mistaken for the headline. Driven off the verdict's real in-window split.
   const activeFronts = v && Array.isArray(v.activeInWindow) ? v.activeInWindow : null;
   const preExistingFronts = v && Array.isArray(v.preExisting) ? v.preExisting : null;
   const evByFront = {};
   (rec.evidenceFinal || []).forEach((e) => { evByFront[e.front] = e; });
   const detailOf = (f) => (evByFront[f] ? evByFront[f].detail : '');
-
+  L.push('## What broke');
   if (activeFronts) {
-    // New-schema record: trust the window-aware split.
     if (activeFronts.length) {
-      L.push(`We found a live problem that started during this incident on ${activeFronts.length} area(s):`);
+      L.push(`A live problem that started during this incident was found on ${activeFronts.length} area(s):`);
       activeFronts.forEach((f) => L.push(`- **${frontLabel(f)}** — ${detailOf(f)}`));
       if ((preExistingFronts || []).length) {
         L.push('');
@@ -522,7 +620,7 @@ function renderSltDoc(rec) {
     } else if (c.suspect.length && !c.clean.length) {
       L.push('We could not get a clear reading — the systems we needed to check did not respond (see "What we could not see"). We are not calling this either broken or fine.');
     } else {
-      L.push('No live fault was found on any system we can see. Every connected area we checked came back healthy.');
+      L.push('No live fault was found on any system we can see. Every connected area we checked came back healthy — the most likely cause above sits in an area we cannot directly read.');
     }
   } else if (c.degraded.length) {
     // Legacy fallback (record predates the in-window split).
@@ -537,8 +635,8 @@ function renderSltDoc(rec) {
 
   // Who/what it hit
   L.push('## Who or what it affected');
-  if (rec.verdict && rec.verdict.impact) {
-    L.push(rec.verdict.impact);
+  if (v && v.impact) {
+    L.push(v.impact);
   } else if (c.degraded.length) {
     L.push(`The affected areas were: ${c.degraded.map((e) => frontLabel(e.front)).join(', ')}. The other checked areas were healthy.`);
   } else {
@@ -546,9 +644,23 @@ function renderSltDoc(rec) {
   }
   L.push('');
 
+  // ── Recommended next steps — straight from the committed verdict's next-checks
+  // (and the one disambiguating if/then), so leadership sees the same actions the
+  // engineers are told to take. Never invented here.
+  L.push('## Recommended next steps');
+  const nextChecks = (v && Array.isArray(v.nextChecks)) ? v.nextChecks : [];
+  if (nextChecks.length) {
+    nextChecks.forEach((s) => L.push(`- ${s}`));
+  }
+  if (hyp && hyp.ifThen) L.push(`- Fastest way to confirm: ${hyp.ifThen}`);
+  if (!nextChecks.length && !(hyp && hyp.ifThen)) {
+    L.push('- No specific next steps were recorded. Confirm the most likely cause above before closing.');
+  }
+  L.push('');
+
   // How long
   L.push('## How long it took');
-  L.push(`The bridge was open for **${rec.durationHuman}** (opened ${rec.openedAt}${rec.closedAt ? `, closed ${rec.closedAt}` : ', still open'}).`);
+  L.push(`The bridge was open for **${rec.durationHuman}** (opened ${tsDoc(rec.openedAt, tz)}${rec.closedAt ? `, closed ${tsDoc(rec.closedAt, tz)}` : ', still open'}).`);
   L.push('');
 
   // Bridge roles + lifecycle roll-up (wave 1).
@@ -569,40 +681,47 @@ function renderSltDoc(rec) {
   }
   L.push('');
 
-  // What we could not see (honesty)
-  if (c.suspect.length || c.blind.length) {
+  // What we could not see (honesty) — including the ranked blind spots the verdict
+  // flagged, so the "most likely cause" that sits in a blind spot is traceable.
+  const rankedBlind = (v && Array.isArray(v.blindSpots) && v.blindSpots) || rec.blindSpots || [];
+  if (c.suspect.length || c.blind.length || rankedBlind.length) {
     L.push('## What we could not see');
     c.suspect.forEach((e) => L.push(`- **${frontLabel(e.front)}** — we tried to check this but the read did not succeed: ${e.detail}`));
     c.blind.forEach((e) => L.push(`- **${frontLabel(e.front)}** — no system is connected for this, so it was outside what this bridge could check: ${e.detail}`));
+    rankedBlind.forEach((b) => {
+      if (c.suspect.some((e) => e.front === b.front) || c.blind.some((e) => e.front === b.front)) return;
+      L.push(`- **${frontLabel(b.front)}**${b.risk ? ` (${b.risk} risk)` : ''} — no system is connected for this: ${b.reason || b.why || 'outside what this bridge could check'}`);
+    });
     L.push('');
   }
 
   // Current status
   L.push('## Where it stands now');
-  if (rec.verdict && rec.verdict.verdict) {
-    L.push(rec.verdict.verdict);
+  if (v && v.verdict) {
+    L.push(v.verdict);
   } else {
     L.push('The bridge closed without a formal ruling. Based on the real readings above, this is the current picture; treat any area we could not see as unconfirmed.');
   }
   L.push('');
   L.push('---');
-  L.push('*This summary was generated automatically from the incident record. Every statement traces back to a real live reading — nothing here is estimated or invented.*');
+  L.push("*This summary is generated automatically from the engine's committed conclusion — the same hypothesis, confidence and next steps the engineers see. Every statement traces back to a real live reading; nothing here is estimated or invented.*");
   return L.join('\n');
 }
 
 // ── Engineer / technical document ─────────────────────────────────────────────
 function renderEngineerDoc(rec) {
   const c = classifyFronts(rec);
+  const tz = rec.operatorTz || null;
   const L = [];
   L.push(`# ${rec.severity} triage — engineer writeup — ${rec.id}`);
   L.push('');
-  L.push(`*Auto-written from the real triage record + recorded wire session on ${rec.generatedAt}. Nothing below is fabricated.*`);
+  L.push(`*Auto-written from the real triage record + recorded wire session on ${tsDoc(rec.generatedAt, tz)}. Nothing below is fabricated.*`);
   L.push('');
   if (rec.incidentId) L.push(`- **Incident ID:** ${rec.incidentId}${rec.reTriageOf ? ` (re-triage of ${rec.reTriageOf})` : ''}`);
   L.push(`- **Title:** ${rec.title}`);
   L.push(`- **Reported:** ${rec.description || '(none)'}`);
-  L.push(`- **Opened:** ${rec.openedAt}`);
-  L.push(`- **Closed:** ${rec.closedAt || '(still open)'}`);
+  L.push(`- **Opened:** ${tsDoc(rec.openedAt, tz)}`);
+  L.push(`- **Closed:** ${rec.closedAt ? tsDoc(rec.closedAt, tz) : '(still open)'}`);
   L.push(`- **Duration:** ${rec.durationHuman}`);
   // "Time to verdict" — opened→verdict is time-to-diagnose, not full MTTR. Human
   // label relabelled; the rec.mttr JSON field name stays stable for the UI/record.
@@ -634,7 +753,7 @@ function renderEngineerDoc(rec) {
   L.push('| --- | --- | --- | --- | --- |');
   (rec.evidenceHistory || []).forEach((e) => {
     const cell = (x) => String(x == null ? '' : x).replace(/\|/g, '\\|').replace(/\n/g, ' ');
-    L.push(`| ${cell(e.ts)} | ${cell(e.front)} | ${cell(e.state)} | ${cell(e.detail)} | ${cell(e.source)} |`);
+    L.push(`| ${cell(e.ts ? tsDoc(e.ts, tz) : '')} | ${cell(e.front)} | ${cell(e.state)} | ${cell(e.detail)} | ${cell(e.source)} |`);
   });
   L.push('');
 
@@ -728,8 +847,17 @@ function writeForTriage(triage) {
 
 // ── Read side (browsable history) — every path through safeJoin ───────────────
 function recordPath(id) { return safeJoin(triagesRoot(), path.join(String(id), 'record.json')); }
+// Doc-key → filename. The leadership doc is STORED as slt.md, but "leadership" is
+// the intuitive key an operator (or a link) reaches for — accept it as an alias so
+// GET …/doc/leadership resolves to the same file instead of 404-ing. 'slt' stays
+// valid for the existing UI tab. NOTE: the serving route allow-list lives in
+// server.js (owned by another agent this wave); it currently permits slt/engineer/
+// servicenow only, so a raw /doc/leadership URL is refused at the route BEFORE it
+// reaches here. This alias makes artifacts.getDoc() itself leadership-aware so that,
+// once server.js adds 'leadership' to its allow-list (or any internal caller uses
+// it), the key resolves correctly. See report for the exact mapping to add.
 function docFileFor(which) {
-  return which === 'slt' ? 'slt.md'
+  return (which === 'slt' || which === 'leadership') ? 'slt.md'
     : which === 'engineer' ? 'engineer.md'
     : which === 'servicenow' ? 'servicenow.md' : null;
 }
