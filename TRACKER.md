@@ -78,7 +78,7 @@ Last updated: 2026-08-18 · driver: fresh Fable session (autonomous resume)
 ## QA fix-classes in flight (2026-08-18)
 - #6 Class 1 — BUILT (PR #47), adversarial+operator-experience review running. Phrase-table front door removed, capability gate narrowed to safety-only, NO_STORE/ACI_WORDS gone, structured device field added.
 - #8 Class 3+4 (plain-words intake + guardrail homonyms/inflections) — BUILDING (fix/intake-and-guardrail) — disjoint files
-- #10 Class 10 (leadership doc from verdict, /doc 404, ServiceNow CI scope) — BUILDING (fix/doc-accuracy) — disjoint files
+- #10 Class 10 — MERGED (PR #48, APPROVED all 6 criteria, 33 tests green). Leadership doc now matches the verdict. server.js /doc/leadership allowlist add still pending (post-Class-1).
 - #7 Class 9 (chat sees own incidents + session isolation) — QUEUED behind #6 (shares jarvis.js/server.js)
 - #9 Class 5+6 (error/gate hardening + silent dropped turns) — QUEUED behind #6 (shares server.js)
 - Stranger-UI sweep — re-running (browser)
