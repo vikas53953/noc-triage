@@ -488,6 +488,42 @@ pre.term{
 .teams-compose .acts{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.5rem}
 .teams-empty{font-size:.74rem;color:var(--ink3);line-height:1.5;margin-top:.4rem}
 
+/* ---------- CW-6: two-way ServiceNow mirror on a ticket ---------- */
+.snow-slot{margin-top:.7rem;border:1px solid var(--line);border-radius:9px;background:var(--panel);padding:.55rem .65rem}
+.snow-head{display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;margin-bottom:.4rem}
+.snow-head .r-lbl{margin:0}
+.snow-pill{display:inline-flex;align-items:center;gap:.35rem;font-size:.6rem;font-weight:800;
+  letter-spacing:.04em;text-transform:uppercase;padding:.16rem .45rem;border-radius:999px;border:1px solid}
+.snow-pill.on{color:var(--ok);background:var(--ok-bg);border-color:var(--ok)}
+.snow-pill.off{color:var(--warn);background:var(--warn-bg);border-color:var(--warn)}
+.snow-pill.unk{color:var(--ink3);background:rgba(148,163,184,.16);border-color:var(--line)}
+.snow-pill.conflict{color:var(--bad);background:var(--bad-bg);border-color:var(--bad)}
+.snow-pill .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.snow-note{font-size:.72rem;color:var(--ink2);line-height:1.5;overflow-wrap:anywhere}
+.snow-note b{color:var(--ink)}
+.snow-inc{display:flex;align-items:baseline;gap:.4rem;flex-wrap:wrap;font-size:.8rem;margin:.15rem 0 .3rem}
+.snow-inc .num{font-weight:800;color:var(--ink);font-family:var(--mono)}
+.snow-inc a{color:var(--accent);text-decoration:none;font-size:.72rem;word-break:break-all}
+.snow-inc a:hover{text-decoration:underline}
+.snow-inc .nolink{color:var(--ink3);font-size:.68rem}
+.snow-sync{font-size:.66rem;color:var(--ink3);margin-bottom:.35rem}
+.snow-acts{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.15rem}
+.snow-mirror{border:1px solid var(--line-soft);border-radius:8px;background:var(--card);
+  padding:.45rem .55rem;margin-top:.45rem;font-size:.74rem;line-height:1.5}
+.snow-mirror .r-lbl{margin-bottom:.25rem}
+.snow-mirror .row{display:flex;justify-content:space-between;gap:.5rem;padding:.1rem 0}
+.snow-mirror .row b{overflow-wrap:anywhere}
+.snow-conflict{border:1px solid var(--bad);border-radius:8px;background:var(--bad-bg);
+  padding:.5rem .6rem;margin-top:.45rem;font-size:.74rem;line-height:1.5}
+.snow-conflict b{color:var(--bad)}
+.snow-conflict .cols{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.4rem}
+.snow-conflict .col{flex:1;min-width:130px;border:1px solid var(--line);border-radius:7px;
+  background:var(--card);padding:.4rem .5rem}
+.snow-conflict .col .h{font-size:.6rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--ink3);margin-bottom:.2rem}
+.snow-conflict .col .v{color:var(--ink);overflow-wrap:anywhere}
+.snow-err{font-size:.7rem;color:var(--bad);margin-top:.35rem;overflow-wrap:anywhere}
+
 /* ---------- mobile: panes stack ---------- */
 .mobtabs{display:none;gap:.35rem;padding:.5rem .75rem 0}
 .mobtabs button{
@@ -1169,7 +1205,7 @@ function evTab(name){
   });
   if(window.innerWidth <= 1080 && window.innerWidth > 760) $('shell').classList.add('show-right');
   if(name === 'ev-chg') loadChangeHistory();
-  if(name === 'ev-tickets') loadTickets();
+  if(name === 'ev-tickets'){ loadTickets(); loadSnowStatus(); }
   if(name === 'ev-bridge') loadTeamsStatus();
 }
 $('evtabs').addEventListener('click', function(e){
@@ -2516,6 +2552,236 @@ document.addEventListener('click', function(e){
    ============================================================ */
 var TKT = { state:'idle', list:[], err:'', selId:null, sel:null, selState:'idle', selErr:'', filter:'' };
 var TKT_STATUSES = ['open','assigned','in-progress','resolved','closed'];
+
+/* ============================================================
+   CW-6 — TWO-WAY SERVICENOW MIRROR (on a ticket)
+   The INTERNAL ticket queue is the SINGLE SOURCE OF TRUTH. ServiceNow is a
+   MIRROR that syncs only when Vikas has supplied an instance + creds. Until
+   then every branch is HONEST: no fake INC number, no fake link, no fake sync.
+     GET  /api/copilot/servicenow/status  → {connected, lastSync}
+     POST /api/copilot/tickets/:id/snow/push  → {ok, connected, number, url, ticket}
+     POST /api/copilot/tickets/:id/snow/pull  → {ok, connected, conflict,
+            mirror:{stateLabel, updatedOn, worknotes, ...}, ticket}
+   The persisted ticket.snow carries {id, number, url, syncedAt, mirror, conflict,
+   mirroredAt} — the UI renders the mirror/conflict from ticket.snow so a RELOAD
+   still shows a pending conflict. Creds are secrets — never returned, never shown.
+   ============================================================ */
+var SNOW = { state:'loading', connected:false, lastSync:null, error:'', reason:'',
+             link:{}, busy:{} };  // link (url fallback) + busy (per-ticket error) keyed by ticket id
+var snowInflight = false;
+function loadSnowStatus(){
+  if(snowInflight) return;
+  snowInflight = true;
+  api('/api/copilot/servicenow/status')
+    .then(function(r){
+      if(r.status === 404){ var e = new Error('unavailable'); e.code = 404; throw e; }
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function(d){
+      d = d || {};
+      SNOW.state = 'ok';
+      SNOW.connected = !!d.connected;
+      SNOW.lastSync = d.lastSync || null;
+      SNOW.reason = d.reason || '';
+      SNOW.error = '';
+    })
+    .catch(function(err){
+      if(err && err.code === 404){ SNOW.state = 'unavailable'; SNOW.error = ''; }
+      else { SNOW.state = 'error'; SNOW.error = (err && err.message) || String(err); }
+    })
+    .then(function(){
+      snowInflight = false;
+      /* If a ticket detail is open, repaint its ServiceNow slot with fresh status. */
+      if(TKT.selId && TKT.selState === 'ok') renderTicketDetail();
+    });
+}
+/* Only ever hyperlink a real http(s) URL the server handed us — never a fabricated
+   or javascript: link. esc() also neutralises any attribute-breakout in the href. */
+function snowSafeUrl(u){
+  u = String(u == null ? '' : u).trim();
+  return /^https?:\/\//i.test(u) ? u : '';
+}
+/* The honest connection pill. */
+function snowPill(){
+  if(SNOW.state === 'loading') return '<span class="snow-pill unk"><span class="dot"></span>Checking…</span>';
+  if(SNOW.state === 'unavailable') return '<span class="snow-pill unk">Not available yet</span>';
+  if(SNOW.state === 'error') return '<span class="snow-pill unk">Status unavailable</span>';
+  return SNOW.connected
+    ? '<span class="snow-pill on"><span class="dot"></span>Connected</span>'
+    : '<span class="snow-pill off">Not connected</span>';
+}
+/* The most-recent internal change on the ticket (its own source of truth):
+   the latest of the ticket's own timestamp, its work notes, and its history.
+   Mirrors the backend's lastTouched so the conflict "Updated" column is honest. */
+function lastInternalTouch(t){
+  var best = t && t.ts ? new Date(t.ts).getTime() : 0;
+  (Array.isArray(t.worknotes) ? t.worknotes : []).forEach(function(n){
+    if(n && n.ts){ var v = new Date(n.ts).getTime(); if(v > best) best = v; }
+  });
+  (Array.isArray(t.history) ? t.history : []).forEach(function(h){
+    if(h && h.ts){ var v = new Date(h.ts).getTime(); if(v > best) best = v; }
+  });
+  return best ? new Date(best).toISOString() : null;
+}
+/* The SNOW work-note journal. The backend hands it as a STRING (the pinned shape
+   also allows an array) — accept both, always escaped at the sink. */
+function snowWorknoteText(m){
+  if(!m) return '';
+  var w = m.worknotes;
+  if(w == null || w === '') w = m.comments;   // fall back to the comments journal
+  if(Array.isArray(w)){
+    return w.map(function(n){ return typeof n === 'string' ? n : (n && (n.text || n.value || n.note) || ''); })
+            .filter(Boolean).join('  •  ');
+  }
+  return String(w == null ? '' : w);
+}
+/* The mirror pulled back from ServiceNow, read from the ticket's PERSISTED
+   snow slot (ticket.snow.mirror / .conflict) so a reload still shows a pending
+   conflict. Shown SEPARATELY from internal truth — a pull never rewrites the
+   ticket. A conflict is called out and never silently resolved. */
+function snowMirrorHtml(t){
+  var s = (t && t.snow && typeof t.snow === 'object') ? t.snow : {};
+  var m = (s.mirror && typeof s.mirror === 'object') ? s.mirror : null;
+  if(!m && !s.conflict) return '';
+  var snowState = m ? (m.stateLabel || m.state || '—') : '—';
+  var snowUpd = (m && m.updatedOn) ? clockOf(m.updatedOn) : '—';
+  var wn = snowWorknoteText(m);
+  var wnRow = wn
+    ? '<div class="v" style="margin-top:.35rem"><b>Latest SNOW work note:</b> ' + esc(wn) + '</div>' : '';
+  if(s.conflict){
+    var intUpd = lastInternalTouch(t);
+    return '<div class="snow-conflict"><b>⚠ Conflict — both sides changed.</b> ' +
+      'The internal ticket and its ServiceNow mirror have each moved since the last sync. ' +
+      'Nothing was overwritten. Reconcile deliberately — push to make ServiceNow match the ' +
+      'internal truth, or open the INC to fold its changes in by hand.' +
+      '<div class="cols">' +
+        '<div class="col"><div class="h">Internal (truth)</div>' +
+          '<div class="v"><b>State:</b> ' + esc(t.status || '—') + '</div>' +
+          '<div class="v"><b>Updated:</b> ' + esc(intUpd ? clockOf(intUpd) : '—') + '</div></div>' +
+        '<div class="col"><div class="h">ServiceNow mirror</div>' +
+          '<div class="v"><b>State:</b> ' + esc(snowState) + '</div>' +
+          '<div class="v"><b>Updated:</b> ' + esc(snowUpd) + '</div></div>' +
+      '</div>' + wnRow +
+    '</div>';
+  }
+  var rows = '<div class="row"><span>State in ServiceNow</span><b>' + esc(snowState) + '</b></div>';
+  if(m && m.number) rows += '<div class="row"><span>Incident</span><b>' + esc(m.number) + '</b></div>';
+  rows += '<div class="row"><span>Last updated there</span><b>' + esc(snowUpd) + '</b></div>';
+  return '<div class="snow-mirror"><div class="r-lbl">Pulled from ServiceNow · ' +
+    esc(s.mirroredAt ? clockOf(s.mirroredAt) : nowClock()) + '</div>' + rows +
+    (wn ? '<div class="row"><span>Work note</span><b>' + esc(wn) + '</b></div>' : '') +
+    '<div class="stamp" style="margin-top:.3rem">This is a read-only mirror — the internal ticket above stays the source of truth.</div></div>';
+}
+/* The whole ServiceNow slot for a ticket detail. Every branch is honest. */
+function snowSlotHtml(t){
+  var pill = snowPill();
+  var head = '<div class="snow-head"><span class="r-lbl">🔁 ServiceNow</span>' + pill + '</div>';
+  var body;
+
+  if(SNOW.state === 'loading'){
+    body = '<div class="snow-note">Checking whether ServiceNow is connected…</div>';
+  } else if(SNOW.state === 'unavailable'){
+    body = '<div class="snow-note"><b>ServiceNow sync is not available yet.</b> This build has no ' +
+      '<code>/api/copilot/servicenow</code> route (404). The internal queue is the source of truth; ' +
+      'the structured ServiceNow export still works as the fallback. No INC number is invented.</div>';
+  } else if(SNOW.state === 'error'){
+    body = '<div class="snow-note">Could not read the ServiceNow status — <b>' + esc(SNOW.error) + '</b>. ' +
+      'Nothing is assumed and no sync action is offered.</div>';
+  } else if(!SNOW.connected){
+    body = '<div class="snow-note"><b>Not connected — add an instance + creds.</b> Set ' +
+      '<code>SNOW_INSTANCE</code>, <code>SNOW_USER</code> and <code>SNOW_PASS</code> in ' +
+      '<code>.env.local</code> to mirror this ticket into ServiceNow. Until then nothing is pushed and ' +
+      'no INC number is shown (a fake one would be worse than none).' +
+      (SNOW.reason ? '<br><span class="stamp">' + esc(SNOW.reason) + '</span>' : '') + '</div>';
+  } else {
+    /* Connected. Show the real mirror slot from the ticket record (never invented). */
+    var s = (t.snow && typeof t.snow === 'object') ? t.snow : {};
+    var num = s.number || s.id;
+    var url = snowSafeUrl(s.url || SNOW.link[t.id]);
+    if(num){
+      var linkHtml = url
+        ? '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">open in ServiceNow ↗</a>'
+        : '<span class="nolink">(no link returned — open it from your ServiceNow instance)</span>';
+      body = '<div class="snow-inc"><span class="num">' + esc(num) + '</span>' + linkHtml + '</div>' +
+        '<div class="snow-sync">Last synced ' + esc(s.syncedAt ? clockOf(s.syncedAt) : '—') +
+          (SNOW.lastSync && !s.syncedAt ? ' · instance last synced ' + esc(clockOf(SNOW.lastSync)) : '') + '</div>';
+    } else {
+      body = '<div class="snow-note">Connected, but this ticket is <b>not mirrored yet</b>. ' +
+        'Push it to create the INC in ServiceNow. The internal ticket stays the source of truth.</div>';
+    }
+    body += '<div class="snow-acts">' +
+      '<button class="btn btn-primary btn-sm" id="snowPush">' + (num ? '⤴ Push update to ServiceNow' : '⤴ Create INC in ServiceNow') + '</button>' +
+      (num ? '<button class="btn btn-ghost btn-sm" id="snowPull">⤵ Pull updates</button>' : '') +
+    '</div>';
+    body += snowMirrorHtml(t);
+    if(SNOW.busy[t.id + ':err']) body += '<div class="snow-err">' + esc(SNOW.busy[t.id + ':err']) + '</div>';
+  }
+  return '<div class="snow-slot">' + head + body + '</div>';
+}
+/* Operator-confirmed push/pull. A real POST fires; the result is shown as-is,
+   success or failure, never faked. Both stamp the operator's name via api(). */
+function snowSync(t, kind){
+  if(!t || !t.id) return;
+  if(!OP){ $('whoTag').click(); return; }
+  var num = t.snow && (t.snow.number || t.snow.id);
+  if(kind === 'push'){
+    var verb = num ? 'Update' : 'Create';
+    if(!window.confirm(verb + ' the ServiceNow incident for this ticket?\n\n' +
+      (t.title || t.id) + '\n\nThe internal ticket stays the source of truth. Stamped as ' + OP + '.')) return;
+  }
+  SNOW.busy[t.id + ':err'] = '';
+  var btn = $(kind === 'push' ? 'snowPush' : 'snowPull');
+  var label = btn ? btn.innerHTML : '';
+  if(btn){ btn.disabled = true; btn.textContent = kind === 'push' ? 'Syncing…' : 'Pulling…'; }
+  api('/api/copilot/tickets/' + encodeURIComponent(t.id) + '/snow/' + kind, { method:'POST', body:'{}' })
+    .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(b){ return { ok:r.ok, status:r.status, body:b }; }); })
+    .then(function(res){
+      var b = res.body || {};
+      if(res.status === 404){
+        SNOW.state = 'unavailable';
+        renderTicketDetail();
+        return;
+      }
+      if(!res.ok || b.connected === false || b.error){
+        var why = b.error || (b.connected === false ? 'ServiceNow is not connected' :
+          (res.status === 428 ? 'the desk needs your name first' : 'the server refused it (HTTP ' + res.status + ')'));
+        SNOW.busy[t.id + ':err'] = 'Not synced — ' + why + '. Nothing was changed.';
+        toast('ServiceNow sync failed — ' + why, true);
+        if(btn){ btn.disabled = false; btn.innerHTML = label; }
+        renderTicketDetail();
+        return;
+      }
+      /* The server returns the authoritative, PERSISTED ticket (b.ticket) whose
+         snow slot carries mirror/conflict — render from that so a reload shows the
+         same. If b.ticket is absent, fold the pinned mirror/conflict fields into
+         the ticket we hold. Either way we read ticket.snow, never invented fields. */
+      if(b.ticket && typeof b.ticket === 'object'){
+        TKT.sel = b.ticket; TKT.selState = 'ok';
+      } else if(kind === 'pull'){
+        var sn = (TKT.sel && TKT.sel.snow) || {};
+        if(TKT.sel) TKT.sel.snow = Object.assign({}, sn, { mirror: b.mirror || sn.mirror, conflict: !!b.conflict, mirroredAt: new Date().toISOString() });
+      }
+      if(kind === 'pull'){
+        if(b.conflict) toast('ServiceNow pull found a conflict — both sides changed. Nothing overwritten.', true);
+        else toast('Pulled the ServiceNow mirror — by ' + OP);
+        renderTicketDetail();
+        loadTickets(true);
+      } else {
+        if(b.url) SNOW.link[t.id] = b.url;
+        toast((num ? 'Updated' : 'Created') + ' the ServiceNow INC' + (b.number ? ' ' + b.number : '') + ' — by ' + OP);
+        if(b.ticket && typeof b.ticket === 'object') renderTicketDetail();
+        else selectTicket(t.id);   // fallback re-read when the server didn't echo the ticket
+        loadSnowStatus();
+        loadTickets(true);
+      }
+    })
+    .catch(function(err){
+      SNOW.busy[t.id + ':err'] = 'Could not reach the server: ' + ((err && err.message) || err) + '. Nothing was changed.';
+      if(btn){ btn.disabled = false; btn.innerHTML = label; }
+      renderTicketDetail();
+    });
+}
 function sevT(s){ return /^P[1234]$/.test(String(s)) ? String(s) : 'none'; }
 function httpWhyTkt(status){
   return status === 404
@@ -2676,16 +2942,12 @@ function renderTicketDetail(){
       return '<div class="metric"><span>' + esc(x.status || x.what || '—') + (x.by ? ' · ' + esc(x.by) : '') +
         '</span><b>' + esc(clockOf(x.ts)) + '</b></div>'; }).join('') + '</div>';
   }
-  if(t.snow){
-    h += '<div class="footnote">' + (t.snow.id
-      ? 'Mirrored to ServiceNow as ' + esc(t.snow.id) + (t.snow.syncedAt ? ' at ' + esc(clockOf(t.snow.syncedAt)) : '')
-      : 'Not mirrored to ServiceNow — that two-way sync arrives in CW-6. This internal queue is the source of truth.') +
-      '</div>';
-  }
+  h += snowSlotHtml(t);
   h += '</div></div>';
   w.innerHTML = h;
   wireBack();
   wireTicketActions(t);
+  wireSnowActions(t);
 }
 function wireTicketActions(t){
   var err = $('tktErr');
@@ -2717,6 +2979,12 @@ function wireTicketActions(t){
     if(!note){ showErr('Nothing to add — type a work note first.'); return; }
     ticketAction(t.id, 'note', { text:note }, nBtn, 'Work note added');
   });
+}
+function wireSnowActions(t){
+  var pushBtn = $('snowPush');
+  if(pushBtn) pushBtn.addEventListener('click', function(){ snowSync(t, 'push'); });
+  var pullBtn = $('snowPull');
+  if(pullBtn) pullBtn.addEventListener('click', function(){ snowSync(t, 'pull'); });
 }
 function ticketAction(id, path, body, btn, okMsg){
   if(!id) return;
@@ -2914,6 +3182,13 @@ function connectWS(){
     if(m.type === 'teams_inbound' && m.data){ mergeInbound([m.data]); renderTeams(); return; }
     /* CW-4: a Teams post landed or the connection changed → re-read the honest status. */
     if(m.type.indexOf('teams_') === 0){ loadTeamsStatus(); return; }
+    /* CW-6: a ServiceNow sync fired or the connection changed → re-read honest status,
+       and if the affected ticket is open, re-read the REAL record (never paint from the event). */
+    if(m.type.indexOf('snow_') === 0 || m.type === 'servicenow_status'){
+      loadSnowStatus();
+      if(TKT.selId && m.data && (m.data.id === TKT.selId || m.data.ticketId === TKT.selId)) selectTicket(TKT.selId);
+      return;
+    }
     if(m.type.indexOf('triage_') === 0){ onTriage(m.type, m.data); return; }
   };
 }
@@ -3090,6 +3365,8 @@ function boot(){
   renderDrift();
   loadTeamsStatus();
   setInterval(loadTeamsStatus, 20000);
+  loadSnowStatus();
+  setInterval(loadSnowStatus, 20000);
   connectWS();
   /* Re-attach the incident + conversation from before the reload; only greet
      fresh when there was nothing to restore. */
