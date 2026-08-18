@@ -28,6 +28,11 @@ ServiceNow is a MIRROR that syncs when connected. HONEST "not connected" until V
   Conflict (both changed) → surface honestly, never silently clobber.
 - Routes: GET /api/copilot/servicenow/status {connected, lastSync}; POST /api/copilot/tickets/:id/snow/push
   (operator-named) → creates/updates the SNOW INC, returns {number, url}; POST …/snow/pull → mirror state.
+- PINNED pull response shape (the UI reads EXACTLY this — do not drift):
+  `{ ok, connected, conflict, mirror:{ stateLabel, updatedOn, worknotes[] }, ticket }`.
+  The persisted `ticket.snow.{mirror, conflict, mirroredAt}` carries the same so a RELOAD still shows a
+  pending conflict. The UI must render mirror columns from `mirror.*` (and from `ticket.snow.mirror` on load),
+  never invented top-level fields.
 - Honest not-connected: every route with no creds → {connected:false}, does nothing, no fake INC.
 - INTENT-FIRST: no keyword routing; a chat "open a ServiceNow ticket for this" goes via the planner +
   confirm, calling the push tool — never a keyword trigger. Auto-sync (optional) only on explicit operator opt-in.
