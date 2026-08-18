@@ -233,3 +233,21 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
   <30 min ago ⇒ skip), not process names — also immune to idle/stale claude.exe windows blocking resume
   forever. Dry-run verified (fresh fetch ⇒ skip=True; syntax OK).
 - Next after #52 verdict: Class 9 rebuild (fix/chat-sees-incidents, shares server.js), then Class 5+6.
+
+## 2026-08-18 ~14:35 — PR #52 MERGED (guardrail fail-closed) — FIXED-THEN-MERGED
+- Independent reviewer verified all 5 scope items LIVE over a real WebSocket on :3106 (fresh attack
+  strings): fail-closed object scan, carrier verbs, intake 422-asks with zero incidents created, honest
+  "that is a change… I am read-only" wording, audit-at-sink. Zero device writes reached the wire, ever.
+- Reviewer found + fixed 3 pre-existing fail-open holes INSIDE the PR's class (branch 4816ddb):
+  (1) punctuation inside the verb ("re-load sw2") dodged the verb lookup — no refusal, no audit;
+  (2) WORST: change-ask alongside a read silently dropped ("maybe we should reload sw2, and show me the
+  version" ran the read, reload vanished) — splitIntent judged only clause-leading words; now wider scan;
+  (3) compound refusals lost when the read half throws — refusal moved to the decision point, record now
+  says "only the read half was run". Master gave 0 audits on all 8 probes; now all refuse + audit.
+- Tests 166 → 198 green (npm test). One accepted fail-closed false positive: past-tense narration
+  ("somebody rebooted it last week") — gated behind isDeviceCliRequest, never reaches an operator.
+- Builder-flagged follow-up confirmed PRE-EXISTING (screenThis line byte-identical to master).
+- NOT verified (honest): LLM planner paths (credits exhausted) + real device reads (no sandbox creds in
+  clone) — judged at guardrail/refusal layer only. Re-run planner adversarial set when credits return.
+- Now on master: 3a1f999. QA classes DONE: 1, 3+4, 8, 10 + guardrail follow-up. Remaining: 9, 5+6.
+- NEXT: Class 9 builder launching (fix/chat-sees-incidents, own clone, fresh master).
