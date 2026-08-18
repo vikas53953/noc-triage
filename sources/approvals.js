@@ -33,8 +33,18 @@ const { checkCommand } = require('./guardrails');
 const gateCtx = new AsyncLocalStorage();
 
 // ── Mode ─────────────────────────────────────────────────────────────────────
+// The three permission modes are the SINGLE SOURCE OF TRUTH for the gate. The
+// server, /api/capabilities and the UI read this set (MODES) — nobody hardcodes
+// their own copy, so the advertised set can never drift from what the gate does.
+//
 // 'auto' (default): safe reads auto-approve, still fully logged.
 // 'ask'          : every read waits for an operator decision.
+// 'deny'         : LOCKDOWN — every gated action is denied at the gate, no wire
+//                  call is made, nothing can be approved past it. The only way
+//                  through is for an operator to change the mode. This is the
+//                  fail-CLOSED state; it is also where an unknown/garbage mode
+//                  can be snapped to, so a bad value never lands on 'auto'.
+const MODES = Object.freeze(['auto', 'ask', 'deny']);
 let mode = 'auto';
 
 // Per-triage "approve all reads for this triage" — once set, reads tagged with
@@ -66,12 +76,34 @@ function setBroadcast(fn) { onEvent = typeof fn === 'function' ? fn : null; }
 function emit(type, data) { if (onEvent) { try { onEvent(type, data); } catch (e) { /* telemetry must never break a read */ } } }
 
 function getMode() { return mode; }
+function modes() { return [...MODES]; }
+
+// Set the global permission mode. FAILS CLOSED: an unknown / empty / non-string
+// value is REJECTED and the mode is left unchanged — it is NEVER silently
+// coerced to 'auto' (the least-safe state), which was the Class-5 defect. The
+// caller (the HTTP route) surfaces the rejection as a 400 with the valid set.
+//
+// Returns a result object (not a bare string):
+//   { ok:true,  mode, changed }              — accepted; `mode` is the new mode
+//   { ok:false, error, mode, valid, reason } — rejected; `mode` is the UNCHANGED
+//                                              current mode (always a safe value)
+// The value is trimmed + lower-cased first so " Deny " / "AUTO" are accepted;
+// anything not in MODES is rejected. Rejection leaves a safe mode in force.
 function setMode(m) {
-  const next = m === 'ask' ? 'ask' : 'auto';
-  if (next === mode) return mode;
+  const next = typeof m === 'string' ? m.trim().toLowerCase() : '';
+  if (!MODES.includes(next)) {
+    return {
+      ok: false,
+      error: 'bad_mode',
+      mode,               // unchanged — and never 'auto'-by-accident
+      valid: [...MODES],
+      reason: `Permission mode must be one of: ${MODES.join(', ')}. Got ${JSON.stringify(m)} — ignored; mode stays "${mode}".`,
+    };
+  }
+  if (next === mode) return { ok: true, mode, changed: false };
   mode = next;
   emit('approval_mode', { mode });
-  return mode;
+  return { ok: true, mode, changed: true };
 }
 
 // A public snapshot of one record (no internal handles).
@@ -144,6 +176,26 @@ async function gate(meta, executeFn) {
       emit('approval_new', view(rec));
       return { approved: false, denied: true, blocked: true, record: view(rec) };
     }
+  }
+
+  // ── Global DENY / lockdown ─────────────────────────────────────────────────
+  // When the gate is in 'deny' mode the console is LOCKED DOWN: EVERY gated
+  // action — a read, a change, an auto-approve, a per-triage "approve all", even
+  // a re-entrant call already covered by an outer decision — is denied right
+  // here, before the wire is ever touched. executeFn is never called, so zero
+  // wire calls are made and nothing can be approved past the lock. The only way
+  // through is for an operator to change the mode. This check sits ABOVE the
+  // re-entrancy short-circuit on purpose: if an operator flips to deny while an
+  // outer action is mid-flight, its not-yet-run nested reads still stop dead.
+  if (mode === 'deny') {
+    rec.state = 'denied';
+    rec.decidedBy = 'lockdown';
+    rec.decidedAt = new Date().toISOString();
+    rec.outcome = 'denied — permission gate is in lockdown (deny mode). No wire call was made; nothing can be approved until an operator changes the mode.';
+    rec.outcomeOk = false;
+    push(rec);
+    emit('approval_new', view(rec));
+    return { approved: false, denied: true, lockdown: true, record: view(rec) };
   }
 
   // Already inside an approved gate → covered by that decision (see the
@@ -264,4 +316,4 @@ function state() {
   return { mode, pending: pending.size, allReadsForTriage: [...allReadsForTriage] };
 }
 
-module.exports = { gate, decide, setMode, getMode, setBroadcast, list, state };
+module.exports = { gate, decide, setMode, getMode, modes, MODES, setBroadcast, list, state };

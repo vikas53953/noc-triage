@@ -2509,8 +2509,13 @@ app.get('/api/approvals/log', (req, res) => {
 
 // Switch the mode: "auto" (auto-approve safe reads) or "ask" (prompt for each).
 app.post('/api/approvals/mode', (req, res) => {
-  const mode = approvals.setMode((req.body || {}).mode);
-  res.json({ ok: true, mode });
+  // setMode fails CLOSED: unknown/garbage values are rejected and the mode is
+  // left unchanged, never coerced to auto. It returns {ok,mode,valid,reason}.
+  const r = approvals.setMode((req.body || {}).mode);
+  if (!r.ok) {
+    return res.status(400).json({ ok: false, error: r.error, mode: r.mode, valid: r.valid, message: r.reason });
+  }
+  res.json({ ok: true, mode: r.mode });
 });
 
 // Decide a pending request: approve-once / approve-all (all reads this triage) / deny.
