@@ -97,9 +97,18 @@ delegation→execution→broadcast path; every tasked read must return output, a
 - GET /doc/leadership 404s (the stored key is `slt`); dual-clock (not raw UTC) in docs; ServiceNow export
   listed ACI tenants True_Test/PROD as affected CIs on a WAN ticket (wrong scope).
 
-## CLASS 8 — UI stranger-sweep (pending 5th agent; fold in on arrival)
-Known so far: agent-roster names truncate ("Moni...", "Net...", "Inciden..."). Full button/tab/mobile/theme
-/persistence sweep completing.
+## CLASS 8 — UI (stranger-sweep complete; no blockers — app honest + wired)
+- **F2 (MAJOR, standout fix):** desk reload drops the selected incident + entire chat thread — no client
+  persistence for working context; refresh dumps you to the bare greeting. Operator name persists;
+  server-side incident data survives; the client just never re-attaches. FIX: persist + re-attach the
+  selected incident and chat thread on desk reload (localStorage key, like the theme/operator keys).
+- **F5 (MAJOR on mobile):** classic console overflows horizontally at 390px (~755px, header doesn't wrap).
+  Desk mobile is clean. FIX: make the classic console header/toolbar wrap at narrow widths.
+- **F1 (minor):** mid-session name change doesn't refresh the already-rendered greeting bubble.
+- **F3 (minor):** agent roster clips "Monitor-Eye" → "Moni…" (scrollWidth>clientWidth).
+- **F4 (minor):** bad-device drift emits a raw 404 to console (UI handles gracefully; quiet it).
+- **F6 (minor):** ~9px "closed"/settled status label low-contrast both themes (1.42:1 / 1.86:1) — raise contrast/size.
+All in public/desk.html + public/index.html.
 
 ---
 
