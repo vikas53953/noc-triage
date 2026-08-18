@@ -32,6 +32,7 @@ const teams = require('./sources/teams');            // CW-4: Teams bridge (one-
 const servicenow = require('./sources/servicenow-client'); // CW-6: two-way ServiceNow sync
 const investigation = require('./sources/investigation'); // CW-7: iterative investigation loop
 const mcp = require('./sources/mcp-connector');      // CW-8: generic MCP connector (gated, read-only, honest-if-absent)
+const pcap = require('./sources/pcap');              // A6: native pcap analyzer (honest no-capture, bounded parse)
 const guardrails = require('./sources/guardrails');
 const { checkIntent } = guardrails;
 
@@ -764,6 +765,65 @@ app.post('/api/copilot/mcp/reconnect', async (req, res) => {
   }
 });
 // ── end CW-8 block ──────────────────────────────────────────────────────────
+
+// ── A6: packet-capture (pcap) analysis ───────────────────────────────────────
+// Self-contained, contiguous block — kept tiny + separable ON PURPOSE (A5/A8 also
+// touch server.js in parallel and aren't merged; this fences cleanly for the
+// merge). ALL logic lives in sources/pcap.js (the native, zero-dep analyzer);
+// this route is a thin surface. Honesty is the module's: real parsed numbers or
+// an honest {ok:false, note} (no capture / unreadable / unsupported / oversize) —
+// never a fabricated summary. Payloads are never dumped; only metadata is surfaced.
+//
+// INPUT (either): { base64 } — a small capture inline (bounded by the global
+// 256kb JSON limit; fine for a sample/crafted pcap), OR { path } — the bare
+// filename of a capture the operator dropped in squad/shared/pcaps (safeJoin'd
+// inside that dir, so no traversal). A real large capture (up to PCAP_MAX_BYTES)
+// goes the file route; the analyzer's own size cap + bounded parse protect both.
+//
+// POST /api/copilot/pcap/analyze → the summary. The 428 name gate above covers
+// this POST (it is under /api/copilot/). Audited (filename/size only, never bytes).
+const PCAP_DROP_DIR = path.join(SQUAD_ROOT, 'shared', 'pcaps');
+app.post('/api/copilot/pcap/analyze', (req, res) => {
+  const body = req.body || {};
+  let summary;
+  let inputLabel = null;
+  try {
+    if (typeof body.base64 === 'string' && body.base64.trim()) {
+      let buf;
+      try { buf = Buffer.from(body.base64, 'base64'); }
+      catch (e) { return res.status(400).json({ error: 'Could not decode the base64 capture.' }); }
+      inputLabel = `inline base64 (${buf.length} bytes)`;
+      summary = pcap.analyze(buf);
+    } else if (typeof body.path === 'string' && body.path.trim()) {
+      // Only a bare filename inside the drop dir — no traversal, no absolute paths.
+      if (!isPlainFilename(body.path)) {
+        return res.status(400).json({ error: 'Give me just the capture filename — it is read from squad/shared/pcaps.' });
+      }
+      const full = safeJoin(PCAP_DROP_DIR, body.path);
+      if (!full) return res.status(400).json({ error: 'That path is not allowed.' });
+      inputLabel = `file ${body.path}`;
+      summary = pcap.analyze(full);
+    } else {
+      // Honest "no capture" straight from the module — never a fabricated summary.
+      summary = pcap.analyze(null);
+      inputLabel = 'no input';
+    }
+  } catch (err) {
+    return res.status(500).json({ error: 'The pcap analyzer could not run — check the server window.' });
+  }
+  try {
+    session.audit({
+      who: req.operator,
+      what: 'pcap analyze',
+      result: summary.ok
+        ? `parsed ${summary.packetCount} packet(s)`
+        : `honest no-result — ${summary.note}`,
+      detail: inputLabel,
+    });
+  } catch (e) { /* audit must never break the response */ }
+  res.json({ summary });
+});
+// ── end A6 block ──────────────────────────────────────────────────────────────
 
 // Create HTTP server
 const server = http.createServer(app);
