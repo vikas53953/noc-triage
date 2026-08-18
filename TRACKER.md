@@ -76,7 +76,7 @@ Last updated: 2026-08-17 ~22:40 IST · driver: Fable session 7d4aaef3
 - Ambiguity fix PR #46 review resumed (was near done: memory works, checking isolation + named-device-through-planner).
 
 ## QA fix-classes in flight (2026-08-18)
-- #6 Class 1 (kill keyword shell + device-from-structured-field) — BUILDING (fix/intent-first-no-shell)
+- #6 Class 1 — BUILT (PR #47), adversarial+operator-experience review running. Phrase-table front door removed, capability gate narrowed to safety-only, NO_STORE/ACI_WORDS gone, structured device field added.
 - #8 Class 3+4 (plain-words intake + guardrail homonyms/inflections) — BUILDING (fix/intake-and-guardrail) — disjoint files
 - #10 Class 10 (leadership doc from verdict, /doc 404, ServiceNow CI scope) — BUILDING (fix/doc-accuracy) — disjoint files
 - #7 Class 9 (chat sees own incidents + session isolation) — QUEUED behind #6 (shares jarvis.js/server.js)
