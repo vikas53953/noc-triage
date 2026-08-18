@@ -457,6 +457,37 @@ pre.term{
   color:var(--ink);padding:.4rem .55rem;font-size:.76rem;margin-top:.2rem}
 .proposal select:focus{outline:none;border-color:var(--accent)}
 
+/* ---------- CW-4: Bridge & Teams ---------- */
+.teams-head{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.teams-pill{display:inline-flex;align-items:center;gap:.35rem;font-size:.62rem;font-weight:800;
+  letter-spacing:.04em;text-transform:uppercase;padding:.16rem .45rem;border-radius:999px;border:1px solid}
+.teams-pill.on{color:var(--ok);background:var(--ok-bg);border-color:var(--ok)}
+.teams-pill.off{color:var(--warn);background:var(--warn-bg);border-color:var(--warn)}
+.teams-pill.unk{color:var(--ink3);background:rgba(148,163,184,.16);border-color:var(--line)}
+.teams-pill .dot{width:6px;height:6px}
+.teams-note{font-size:.72rem;color:var(--ink2);line-height:1.5}
+.teams-note b{color:var(--ink)}
+.teams-echo{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:.45rem .6rem;
+  margin-top:.5rem;font-size:.76rem;line-height:1.5}
+.teams-echo .r-lbl{margin-bottom:.2rem}
+.teams-echo .txt{overflow-wrap:anywhere}
+.teams-echo.bad{border-color:var(--bad)}
+.teams-reply{display:flex;gap:.5rem;padding:.45rem .5rem;border-radius:8px;border:1px solid var(--line);
+  background:var(--panel);margin-top:.4rem}
+.teams-reply .pav{background:linear-gradient(135deg,#5b5fc7,#6264a7)} /* Teams purple */
+.teams-reply .txt{font-size:.77rem;line-height:1.5;overflow-wrap:anywhere;min-width:0}
+.teams-reply .who{font-size:.64rem;font-weight:700;color:var(--ink2);margin-bottom:.1rem}
+.teams-compose{margin-top:.5rem;border:1px solid var(--accent);border-radius:9px;
+  background:var(--info-bg);padding:.55rem .6rem;display:none}
+.teams-compose.on{display:block}
+.teams-compose label{display:block;font-size:.61rem;font-weight:800;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink3);margin-bottom:.2rem}
+.teams-compose textarea{width:100%;background:var(--card);border:1px solid var(--line);border-radius:7px;
+  color:var(--ink);padding:.45rem .55rem;font-size:.78rem;resize:vertical;min-height:56px}
+.teams-compose textarea:focus{outline:none;border-color:var(--accent)}
+.teams-compose .acts{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.5rem}
+.teams-empty{font-size:.74rem;color:var(--ink3);line-height:1.5;margin-top:.4rem}
+
 /* ---------- mobile: panes stack ---------- */
 .mobtabs{display:none;gap:.35rem;padding:.5rem .75rem 0}
 .mobtabs button{
@@ -657,6 +688,9 @@ pre.term{
       </div>
 
       <div class="evpage" id="ev-bridge">
+        <!-- CW-4: Teams status + post + inbound. Renders even with no incident
+             selected, so the honest connection state is always visible. -->
+        <div id="teamsWrap"></div>
         <div id="bridgeWrap">
           <div class="empty"><span class="big">👥</span>
             No incident selected — no bridge to show.
@@ -1136,6 +1170,7 @@ function evTab(name){
   if(window.innerWidth <= 1080 && window.innerWidth > 760) $('shell').classList.add('show-right');
   if(name === 'ev-chg') loadChangeHistory();
   if(name === 'ev-tickets') loadTickets();
+  if(name === 'ev-bridge') loadTeamsStatus();
 }
 $('evtabs').addEventListener('click', function(e){
   var b = e.target.closest && e.target.closest('button[data-p]');
@@ -1351,6 +1386,200 @@ function paintBridge(t){
       });
     }).catch(function(err){ toast('Could not reach the server: ' + (err.message||err), true); b.disabled = false; });
   });
+}
+
+/* ============================================================
+   CW-4 — BRIDGE & TEAMS
+   Honest Teams integration. A Microsoft Teams Incoming Webhook is a SECRET the
+   server never returns — the desk only ever learns a boolean `connected`, the
+   last-post status, and any injected inbound replies. Contract routes:
+     GET  /api/copilot/teams/status  → { connected, lastPost, inbound? }
+     POST /api/copilot/teams/test    → (operator-named) posts a card; honest result
+     POST /api/copilot/teams/inbound → a future bot/flow injects a reply
+   If the route 404s (backend not deployed here yet) the panel says so plainly.
+   Nothing is ever shown as "sent ✓" that was not really posted.
+   ============================================================ */
+var TEAMS = { state:'loading', connected:false, lastPost:null, inbound:[], error:'', reason:'' };
+var teamsInflight = false;
+
+function loadTeamsStatus(){
+  if(teamsInflight) return;
+  teamsInflight = true;
+  api('/api/copilot/teams/status')
+    .then(function(r){
+      if(r.status === 404) { var e = new Error('unavailable'); e.code = 404; throw e; }
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function(d){
+      d = d || {};
+      TEAMS.state = 'ok';
+      TEAMS.connected = !!d.connected;
+      TEAMS.lastPost = (d.lastPost && typeof d.lastPost === 'object') ? d.lastPost : null;
+      /* Inbound replies may ride on the status payload; WS events add more live.
+         Merge, keeping order and de-duping on ts+text so a re-read never doubles. */
+      if(Array.isArray(d.inbound)) mergeInbound(d.inbound);
+      TEAMS.error = ''; TEAMS.reason = d.reason || '';
+    })
+    .catch(function(err){
+      if(err && err.code === 404){ TEAMS.state = 'unavailable'; TEAMS.error = ''; }
+      else { TEAMS.state = 'error'; TEAMS.error = (err && err.message) || String(err); }
+    })
+    .then(function(){ teamsInflight = false; renderTeams(); });
+}
+
+function mergeInbound(arr){
+  arr.forEach(function(r){
+    if(!r || typeof r !== 'object') return;
+    var key = String(r.ts||'') + '|' + String(r.text||'');
+    var dup = TEAMS.inbound.some(function(x){ return (String(x.ts||'')+'|'+String(x.text||'')) === key; });
+    if(!dup) TEAMS.inbound.push(r);
+  });
+  TEAMS.inbound.sort(function(a,b){ return new Date(a.ts||0) - new Date(b.ts||0); });
+}
+
+/* The connected pill — every branch is HONEST about what is real. */
+function teamsPill(){
+  if(TEAMS.state === 'loading') return '<span class="teams-pill unk"><span class="dot"></span>Checking…</span>';
+  if(TEAMS.state === 'unavailable') return '<span class="teams-pill unk">Not available yet</span>';
+  if(TEAMS.state === 'error') return '<span class="teams-pill unk">Status unavailable</span>';
+  return TEAMS.connected
+    ? '<span class="teams-pill on"><span class="dot"></span>Connected</span>'
+    : '<span class="teams-pill off">Not connected</span>';
+}
+
+/* The last real post, echoed back. Honest about failure — never a fake tick. */
+function lastPostHtml(){
+  var lp = TEAMS.lastPost;
+  if(!lp) return '';
+  var ok = lp.ok !== false && !lp.error;
+  var when = lp.ts ? clockOf(lp.ts) : '';
+  var who = lp.by || lp.operator || '';
+  var title = lp.title || 'Bridge update';
+  var body = '<div class="r-lbl">Last post to Teams' + (when ? ' · ' + esc(when) : '') + '</div>';
+  if(ok){
+    body += '<div class="txt"><b>' + esc(title) + '</b>' +
+      (lp.text ? '<br>' + esc(lp.text) : '') + '</div>' +
+      (who ? '<div class="stamp" style="margin-top:.25rem">posted by ' + esc(who) + '</div>' : '');
+    return '<div class="teams-echo">' + body + '</div>';
+  }
+  body += '<div class="txt"><b>Post did not go through.</b> ' +
+    esc(lp.error || ('the channel returned an error' + (lp.status ? ' (' + lp.status + ')' : ''))) +
+    ' — nothing was delivered.</div>';
+  return '<div class="teams-echo bad">' + body + '</div>';
+}
+
+function inboundHtml(){
+  if(!TEAMS.inbound.length) return '';
+  var rows = TEAMS.inbound.map(function(r){
+    var from = r.from || r.author || 'Teams reply';
+    var when = r.ts ? clockOf(r.ts) : '';
+    return '<div class="teams-reply">' +
+      '<div class="pav">' + esc(initials(from)) + '</div>' +
+      '<div class="txt" style="flex:1"><div class="who">' + esc(from) + (when ? ' · ' + esc(when) : '') + '</div>' +
+      esc(r.text || '') + '</div></div>';
+  }).join('');
+  return '<div style="margin-top:.55rem"><div class="r-lbl">Replies from the channel</div>' + rows + '</div>';
+}
+
+function renderTeams(){
+  var w = $('teamsWrap');
+  if(!w) return;
+  /* Preserve an in-progress compose across a background refresh (status poll /
+     WS event) so a re-render never throws away what the operator was typing. */
+  var prevOpen = false, prevText = '';
+  var oc = $('teamsCompose'), ot = $('teamsText');
+  if(oc && oc.classList.contains('on')){ prevOpen = true; prevText = ot ? ot.value : ''; }
+  var pill = teamsPill();
+  var body = '';
+
+  if(TEAMS.state === 'unavailable'){
+    body = '<div class="teams-note">Teams is not wired into this server yet. When the CW-4 backend is ' +
+      'deployed, this panel connects to the real channel.</div>';
+  } else if(TEAMS.state === 'error'){
+    body = '<div class="teams-note">Could not read the Teams status — <b>' + esc(TEAMS.error) + '</b>. ' +
+      'Nothing is assumed; no post button is shown.</div>';
+  } else if(TEAMS.state === 'ok' && !TEAMS.connected){
+    body = '<div class="teams-note">Not connected — <b>add a Teams webhook</b> to switch this on. ' +
+      'Until then Jarvis posts nothing to Teams (no fake "sent").' +
+      (TEAMS.reason ? '<br><span class="stamp">' + esc(TEAMS.reason) + '</span>' : '') + '</div>';
+  } else if(TEAMS.state === 'ok' && TEAMS.connected){
+    body = '<div class="teams-note">Live — bridge updates can be posted to the channel. The webhook ' +
+      'itself is a secret and is never shown here.</div>' +
+      '<div style="margin-top:.5rem"><button class="btn btn-primary btn-sm" id="teamsPostBtn">📣 Post update to Teams</button></div>' +
+      '<div class="teams-compose" id="teamsCompose">' +
+        '<label>Update to post to the Teams channel</label>' +
+        '<textarea id="teamsText" placeholder="e.g. Bridge update: root cause isolated to sw2 uplink, mitigation in progress."></textarea>' +
+        '<div class="acts">' +
+          '<button class="btn btn-primary btn-sm" id="teamsSend">Confirm &amp; post</button>' +
+          '<button class="btn btn-ghost btn-sm" id="teamsCancel">Cancel</button>' +
+        '</div>' +
+        '<div class="stamp" style="margin-top:.35rem">Posts as <b>' + esc(OP || '—') + '</b> · a real POST to the channel</div>' +
+      '</div>';
+  }
+
+  w.innerHTML =
+    '<div class="evcard"><header><b>Bridge &amp; Teams</b>' +
+      '<span class="teams-head">' + pill + '</span></header>' +
+      '<div class="body">' + body + lastPostHtml() + inboundHtml() + '</div></div>';
+
+  wireTeamsActions();
+  /* restore the compose the operator had open before this refresh */
+  if(prevOpen){
+    var nc = $('teamsCompose'), nt = $('teamsText');
+    if(nc){ nc.classList.add('on'); if(nt){ nt.value = prevText; } }
+  }
+}
+
+function wireTeamsActions(){
+  var postBtn = $('teamsPostBtn'), compose = $('teamsCompose');
+  if(postBtn && compose){
+    postBtn.addEventListener('click', function(){
+      compose.classList.add('on');
+      var ta = $('teamsText');
+      /* Prefill with the selected incident context, operator-editable. */
+      if(ta && !ta.value && SEL){
+        ta.value = (SEL.incidentId || SEL.triageId) + ' — ' + (SEL.title || 'bridge update') + ': ';
+      }
+      if(ta){ ta.focus(); }
+    });
+  }
+  var cancel = $('teamsCancel');
+  if(cancel) cancel.addEventListener('click', function(){ if(compose) compose.classList.remove('on'); });
+  var send = $('teamsSend');
+  if(send) send.addEventListener('click', postToTeams);
+}
+
+/* Operator-confirmed post → the ONLY POST path available (test route). Honest:
+   a real POST fires; the result is shown as-is, success or failure, never faked. */
+function postToTeams(){
+  if(!OP){ $('whoTag').click(); return; }
+  var ta = $('teamsText');
+  var text = (ta && ta.value || '').trim();
+  if(!text){ if(ta) ta.focus(); toast('Type the update first — nothing is posted blank.', true); return; }
+  var btn = $('teamsSend'); if(btn){ btn.disabled = true; btn.textContent = 'Posting…'; }
+  var title = SEL ? ((SEL.incidentId || SEL.triageId) + ' — bridge update') : 'Bridge update';
+  api('/api/copilot/teams/test', {
+    method:'POST',
+    body: JSON.stringify({ title: title, text: text, incidentId: SEL ? (SEL.incidentId || SEL.triageId) : undefined })
+  })
+    .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(b){ return { ok:r.ok, status:r.status, body:b }; }); })
+    .then(function(res){
+      var b = res.body || {};
+      /* Honest: only call it posted if the server AND the channel both say so. */
+      if(res.ok && b.ok !== false && b.connected !== false && !b.error){
+        toast('Posted to Teams — by ' + OP);
+        var c = $('teamsCompose'); if(c) c.classList.remove('on');
+        if(ta) ta.value = '';
+        loadTeamsStatus();   // re-read so the lastPost echo comes from the server, not this click
+      } else {
+        var why = b.error || (b.connected === false ? 'Teams is not connected' : ('the server refused it (HTTP ' + res.status + ')'));
+        toast('Not posted — ' + why, true);
+        loadTeamsStatus();
+      }
+    })
+    .catch(function(err){ toast('Could not reach the server — ' + ((err && err.message) || err) + ' (nothing posted)', true); })
+    .then(function(){ if(btn){ btn.disabled = false; btn.innerHTML = 'Confirm &amp; post'; } });
 }
 
 /* ---------- command output tab (real command_share events) ---------- */
@@ -2681,6 +2910,10 @@ function connectWS(){
     }
     if(m.type.indexOf('drift_') === 0 && m.data && DRIFT.state === 'ok' &&
        m.data.device && m.data.device === DRIFT.device){ checkDrift(DRIFT.device); return; }
+    /* CW-4: a Teams reply injected by a future bot/flow → show it live in the bridge. */
+    if(m.type === 'teams_inbound' && m.data){ mergeInbound([m.data]); renderTeams(); return; }
+    /* CW-4: a Teams post landed or the connection changed → re-read the honest status. */
+    if(m.type.indexOf('teams_') === 0){ loadTeamsStatus(); return; }
     if(m.type.indexOf('triage_') === 0){ onTriage(m.type, m.data); return; }
   };
 }
@@ -2855,6 +3088,8 @@ function boot(){
   loadCaps();
   renderChange();
   renderDrift();
+  loadTeamsStatus();
+  setInterval(loadTeamsStatus, 20000);
   connectWS();
   /* Re-attach the incident + conversation from before the reload; only greet
      fresh when there was nothing to restore. */
