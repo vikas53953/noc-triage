@@ -307,3 +307,12 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
   HONEST: Teams Incoming Webhook is ONE-WAY (post only); real two-way reply reading needs a Teams bot —
   building POST for real + an honest inbound endpoint for a future bot/flow. Needs Vikas's TEAMS_WEBHOOK for live.
 - LAST wave after CW-4: CW-6 ServiceNow.
+
+## 2026-08-18 — CW-4 MERGED; CW-6 (LAST wave) launching
+- CW-4 Teams MERGED (PRs #59+#60, APPROVED — honest not-connected, real POST when webhook set, secret never
+  leaks, one-way limit stated). Needs Vikas's TEAMS_WEBHOOK for live.
+- CW-6 ServiceNow (LAST) launching (backend feat/cw6-servicenow-be + UI feat/cw6-servicenow-fe, contract
+  docs/copilot-cw6-contract.md). Internal queue = truth; SNOW mirrors; honest not-connected until Vikas adds
+  SNOW_INSTANCE/USER/PASS.
+- After CW-6: ALL copilot waves CW-1..CW-6 done. Then the ONE big end-to-end live test when Vikas is back
+  with credits + (optionally) the webhook/SNOW/sandbox creds for the live integrations.
