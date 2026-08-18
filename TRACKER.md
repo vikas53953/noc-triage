@@ -135,3 +135,13 @@ Wire-level gate HELD on all 100+ attack strings (zero device writes ever). But:
 Pre-existing (not regressions, logged): unicode/zero-width obfuscation passes checkIntent (blocked at
 checkCommand, messaging only); Class 5 gate fail-open on bad mode value (already queued as task #9).
 → FIX IN FLIGHT: fix/guardrail-fail-closed builder (guardrails.js + triage.js + tests, disjoint from #47).
+
+## 2026-08-18 later — QA fixes landing + a Vikas action item
+- MERGED so far: Class 10 (docs), Class 3+4 (intake+guardrail). Both approved + verified in review.
+- Class 1 (PR #47): APPROVED, but sent back for 2 in-scope items before merge: (a) surviving static binding
+  live-agents.js:1063 "show...interface..."→ip-int-brief collapse; (b) synthesis appends false "reasoning
+  model declined" AFTER a successful read. Fixing now.
+- Class 8 UI (PR #50): built (desk reload persistence re-fetch, mobile wrap, polish), review running.
+- Queued behind Class 1: Class 9 (chat→own incidents + session isolation), Class 5+6 (error/gate + dropped turns).
+- ⚠️ VIKAS ACTION: Anthropic API credits appear EXHAUSTED again (reviewer hit it). Live LLM verification of
+  Class 1 is blocked until topped up (console.anthropic.com → Billing). Deterministic work + non-LLM merges continue.
