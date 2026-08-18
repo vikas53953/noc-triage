@@ -18,11 +18,17 @@
 //     counter persisted to disk so a restart continues the sequence.
 //   • SCRUBBED ON THE WAY IN. Every persisted string walks through the same
 //     secret scrubber the session log uses (session.scrub), so a credential that
-//     arrives on ANY field — even one added later — can never reach disk.
-//   • XSS-ESCAPED ON THE WAY IN. Free operator text (title, description, work
-//     notes) is HTML-escaped before it is stored, so a payload like
-//     "<img onerror=…>" is inert everywhere it is later shown, not just where a
-//     given sink remembers to escape. Belt to the UI's braces.
+//     arrives on ANY field — even one added later — can never reach disk. This is
+//     an honesty/security law and it is NON-NEGOTIABLE.
+//   • STORED RAW, ESCAPED ONCE AT THE SINK. The store keeps the operator's own
+//     text VERBATIM (secrets scrubbed) — "AT&T circuit at R&D <test>" is stored
+//     exactly so, ampersand and angle brackets intact. HTML-escaping is the DISPLAY
+//     sink's job and happens exactly once, in the UI (desk.html esc()). It must
+//     NOT happen here: every write (create AND every later assign/status/note)
+//     round-trips the whole record, so escaping at storage COMPOUNDS — "AT&T"
+//     becomes "AT&amp;T", then "AT&amp;amp;T" — quietly corrupting the operator's
+//     own words. Escape once, at render; store the truth. (Any OTHER consumer that
+//     renders ticket text into HTML must escape at its own sink — see tickets.js.)
 //   • NEVER FATAL. An unreadable or read-only store behaves like "start fresh"
 //     and falls back to an in-memory reservation for the id — a ticket is still
 //     issued, unique within the running process, rather than crashing.
@@ -50,19 +56,6 @@ function storeFile() {
 }
 function seqFile() {
   return safeJoin(dataDir(), SEQ_FILENAME);
-}
-
-// ── XSS escape (stored, not just displayed) ─────────────────────────────────
-// Turn the five HTML-significant characters into entities so stored operator
-// text can never open a tag or an attribute wherever it is later rendered.
-function escapeHtml(value) {
-  if (value == null) return value;
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 // ── Secret scrub, walked over the whole record ──────────────────────────────
@@ -144,19 +137,13 @@ function nextId(ts) {
 // ── CRUD ─────────────────────────────────────────────────────────────────────
 /**
  * Persist a fully-built ticket record. The logic layer (sources/tickets.js) owns
- * the shape, validation and audit; this only escapes + scrubs + writes it and
- * hands back the stored copy. Escaping runs BEFORE scrubbing so a secret hidden
- * behind an entity is still caught.
+ * the shape, validation and audit; this only SECRET-SCRUBS + writes it and hands
+ * back the stored copy. Text is stored RAW (verbatim operator words) — HTML
+ * escaping is the display sink's job (see the header law) and must not run here,
+ * or every subsequent write would compound it.
  */
 function insert(rec) {
-  // Escape the free-text operator fields, then scrub secrets across everything.
-  const escaped = {
-    ...rec,
-    title: escapeHtml(rec.title),
-    description: escapeHtml(rec.description),
-    worknotes: (rec.worknotes || []).map((w) => ({ ...w, text: escapeHtml(w.text) })),
-  };
-  const stored = scrubDeep(escaped);
+  const stored = scrubDeep(rec);
   const all = readAll();
   all.push(stored);
   writeAll(all);
@@ -185,21 +172,18 @@ function list({ status, assignee, limit } = {}) {
 
 /**
  * Replace a whole record in place (the logic layer builds the next version:
- * updated status/assignee + appended history/worknotes). Escaped + scrubbed on
- * the way in, same boundary as insert, so a work note added here is as safe as
- * one added at create. Returns the stored copy or null if the id is unknown.
+ * updated status/assignee + appended history/worknotes). Secret-scrubbed on the
+ * way in, same boundary as insert, and stored RAW (no HTML escaping — see the
+ * header law). Returns the stored copy or null if the id is unknown.
  */
 function replace(id, rec) {
   const all = readAll();
   const i = all.findIndex((t) => t.id === id);
   if (i < 0) return null;
-  const escaped = {
-    ...rec,
-    title: escapeHtml(rec.title),
-    description: escapeHtml(rec.description),
-    worknotes: (rec.worknotes || []).map((w) => ({ ...w, text: escapeHtml(w.text) })),
-  };
-  all[i] = scrubDeep(escaped);
+  // Secret-scrub only — NO HTML escaping. This runs on every assign/status/note,
+  // so escaping here would re-escape the whole already-stored record each time
+  // and compound the entities. Text stays raw; the UI escapes once at render.
+  all[i] = scrubDeep(rec);
   writeAll(all);
   return all[i];
 }
@@ -207,6 +191,6 @@ function replace(id, rec) {
 module.exports = {
   insert, get, list, replace, nextId, dateKeyFrom,
   setBroadcast, emit,
-  escapeHtml, scrubDeep,
+  scrubDeep,
   STATUSES, SEVERITIES, storeFile, seqFile,
 };

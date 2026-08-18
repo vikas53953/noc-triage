@@ -81,18 +81,32 @@ ok('note appends', noted.ok === true && noted.ticket.worknotes.length === 1);
 ok('note stamped with operator', noted.ticket.worknotes[0].who === 'Sam');
 ok('empty note refused', tickets.addNote(second.ticket.id, { text: '   ', who: 'Sam' }).status === 400);
 
-// ── XSS escaped on the way in ────────────────────────────────────────────────
-const xss = tickets.create({
+// ── stored RAW, escaped ONCE at the display sink (CW-3 review fix) ────────────
+// The store keeps the operator's own words verbatim (secrets scrubbed); HTML
+// escaping is the UI's job and happens once, at render. Storing raw must NOT be
+// mistaken for a hole: the ONLY HTML consumer is the desk, which esc()s.
+const RAWTEXT = 'AT&T circuit down at R&D <test> "x" \'y\'';
+const raw = tickets.create({
   severity: 'P1',
-  title: '<img src=x onerror=alert(1)>',
+  title: RAWTEXT,
   description: 'link <script>steal()</script> down',
   who: 'Vikas',
 });
-ok('title XSS escaped in store', !/<img/.test(xss.ticket.title) && /&lt;img/.test(xss.ticket.title));
-ok('description XSS escaped in store', !/<script>/.test(xss.ticket.description) && /&lt;script&gt;/.test(xss.ticket.description));
-// prove it is persisted escaped, not just returned escaped
-const reread = tickets.get(xss.ticket.id);
-ok('escaped form persisted to disk', !/<script>/.test(JSON.stringify(reread)));
+ok('title stored RAW (verbatim, no entity-encoding)', raw.ticket.title === RAWTEXT);
+ok('ampersand NOT encoded at storage', !/&amp;/.test(raw.ticket.title) && raw.ticket.title.includes('AT&T'));
+ok('description stored RAW', raw.ticket.description === 'link <script>steal()</script> down');
+
+// NO DOUBLE-ESCAPE: after two work notes + an assign + a status change (each of
+// which round-trips the whole record through replace()), the operator's text is
+// still byte-for-byte identical — the compounding bug the review caught.
+tickets.addNote(raw.ticket.id, { text: 'first note & check', who: 'Vikas' });
+tickets.addNote(raw.ticket.id, { text: 'second note', who: 'Vikas' });
+tickets.assign(raw.ticket.id, { assignee: 'Priya', who: 'Vikas' });
+tickets.setStatus(raw.ticket.id, { status: 'in-progress', who: 'Vikas' });
+const after = tickets.get(raw.ticket.id);
+ok('no double-escape: title unchanged after 4 writes', after.title === RAWTEXT);
+ok('no &amp; compounding anywhere in the record', !/&amp;/.test(JSON.stringify(after)));
+ok('work note text stored RAW too', after.worknotes.some((w) => w.text === 'first note & check'));
 
 // ── secrets scrubbed on the way in ───────────────────────────────────────────
 const secret = tickets.create({

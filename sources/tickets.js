@@ -20,7 +20,15 @@
 // operator NAME is required on every write (enforced by the CW-1 428 gate in
 // server.js and re-checked here), status transitions are validated (you cannot
 // close without a resolution note), and every transition is audited
-// {who, what, ticket, result}. Secrets + XSS are scrubbed/escaped in the store.
+// {who, what, ticket, result}. Secrets are scrubbed in the store.
+//
+// TEXT IS STORED RAW (secrets scrubbed); HTML-escaping happens ONCE at the
+// display sink. The audit lines below carry the ticket's raw title — that is
+// fine: the audit sinks are a plain-text log file (COPILOT_AUDIT.log) and a
+// JSON API. If a FUTURE consumer ever renders ticket text (title/description/
+// worknotes) or an audit line into HTML, it MUST escape at its own sink — do not
+// re-introduce escaping here, or every write compounds it (the CW-3 review's
+// HIGH defect). The desk ticket pane (public/desk.html) already esc()s on render.
 
 const store = require('./ticket-store');
 const session = require('./session-log');
