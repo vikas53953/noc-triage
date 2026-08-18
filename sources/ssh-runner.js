@@ -88,6 +88,10 @@ const REGISTRY = {
     label: 'DevNet always-on IOS-XE (public sandbox)',
     transport: 'ssh',
     platform: 'iosxe',
+    // Friendly names an operator might type for this box ("show version on
+    // iosxe"). The registry key's own first segment ("iosxe") is matched
+    // automatically by resolveDevice; these are the extra everyday synonyms.
+    aliases: ['ios-xe', 'xe', 'csr', 'csr1000v', 'cat8k', 'catalyst8000v', 'sandbox-iosxe'],
     host: () => process.env.SSH_IOSXE_HOST,
     port: () => Number(process.env.SSH_IOSXE_PORT || 22),
     username: () => process.env.SSH_IOSXE_USER,
@@ -99,6 +103,7 @@ const REGISTRY = {
     label: 'DevNet always-on NX-OS (public sandbox)',
     transport: 'ssh',
     platform: 'nxos',
+    aliases: ['nx-os', 'nexus', 'n9k', 'n9kv', 'sandbox-nxos'],
     host: () => process.env.SSH_NXOS_HOST,
     port: () => Number(process.env.SSH_NXOS_PORT || 22),
     username: () => process.env.SSH_NXOS_USER,
@@ -110,6 +115,7 @@ const REGISTRY = {
     label: 'DevNet always-on IOS-XR (public sandbox)',
     transport: 'ssh',
     platform: 'iosxr',
+    aliases: ['ios-xr', 'xr', 'xrv', 'xrv9k', 'sandbox-iosxr'],
     host: () => process.env.SSH_IOSXR_HOST,
     port: () => Number(process.env.SSH_IOSXR_PORT || 22),
     username: () => process.env.SSH_IOSXR_USER,
@@ -126,6 +132,33 @@ const REGISTRY = {
 
 function getDevice(key) {
   return REGISTRY[key] || null;
+}
+
+// ── Transport routing: does the operator's target name an SSH device? ────────
+// Given a device name the operator typed or picked, return the SSH-transport
+// registry entry it identifies, or null. This is how the choke point decides,
+// PER DEVICE, whether a command runs over direct SSH or over Command Runner:
+// the transport is a property of the RESOLVED device, read from this registry —
+// never inferred from the command text. Only SSH-transport devices are returned;
+// a Command-Runner device (sw1–sw4) or an unknown name returns null, so those
+// keep flowing to the existing Catalyst Center path unchanged.
+//
+// Matches, in order: the exact registry key ("iosxe-always-on"), the key's first
+// segment ("iosxe"), any declared alias ("nexus", "xr"), or the device's own
+// configured hostname (so "on <sandbox-host>" routes too). All case-insensitive.
+function resolveDevice(token) {
+  if (token == null) return null;
+  const t = String(token).trim().toLowerCase();
+  if (!t) return null;
+  for (const [key, d] of Object.entries(REGISTRY)) {
+    if (d.transport !== 'ssh') continue;
+    if (key.toLowerCase() === t) return { key, device: d };
+    if (key.split('-')[0].toLowerCase() === t) return { key, device: d };
+    if ((d.aliases || []).some((a) => String(a).toLowerCase() === t)) return { key, device: d };
+    const host = typeof d.host === 'function' ? String(d.host() || '') : '';
+    if (host && host.toLowerCase() === t) return { key, device: d };
+  }
+  return null;
 }
 
 // Which devices can this SSH path actually serve right now (transport ssh AND
@@ -382,6 +415,7 @@ module.exports = {
   label: 'Direct SSH runner',
   REGISTRY,
   getDevice,
+  resolveDevice,
   listSshDevices,
   runShow,
   // Exported for the smoke test / reuse — not part of the calling surface.

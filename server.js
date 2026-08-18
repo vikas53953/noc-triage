@@ -25,6 +25,7 @@ const notifier = require('./sources/notifier');
 const capabilities = require('./sources/capabilities');
 const changeRunner = require('./sources/change-runner');
 const changeStore = require('./sources/change-store');
+const sshRunner = require('./sources/ssh-runner');   // CW-5: SSH transport status
 const guardrails = require('./sources/guardrails');
 const { checkIntent } = guardrails;
 
@@ -333,6 +334,15 @@ app.use((req, res, next) => {
 // (sources/capabilities.js). Anything not available carries a plain-words reason.
 app.get('/api/capabilities', (req, res) => {
   res.json({ abilities: capabilities.list() });
+});
+
+// CW-5 — honest SSH transport status. Which directly-reachable devices route
+// over SSH, and which are actually wired (creds present in .env.local). No
+// secret ever leaves here: listSshDevices reports host + a boolean, never a
+// credential. A device with configured:false returns an honest "auth needed"
+// when asked, never a fabricated read.
+app.get('/api/ssh/devices', (req, res) => {
+  res.json({ devices: sshRunner.listSshDevices() });
 });
 
 // The copilot audit trail: who did what, on which device, with what result.
