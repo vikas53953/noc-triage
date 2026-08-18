@@ -12,6 +12,11 @@
 const catalyst = require('./catalyst-center');
 const aci = require('./aci');
 const sdwan = require('./sdwan');
+// CW-5 — the reviewed direct-SSH engine. Wired in at the ONE choke point
+// (executeDeviceCli) so SSH-transport devices route here while the DNAC switches
+// stay on Command Runner. The registry inside decides transport PER DEVICE; the
+// command text never does. runShow never throws and never fabricates.
+const sshRunner = require('./ssh-runner');
 const session = require('./session-log');
 const approvals = require('./approvals');
 const guardrails = require('./guardrails');
@@ -469,11 +474,24 @@ async function executeDeviceCli({ agentId, request, purpose, announce, device, a
   // conversation id the surface sends.
   const remembered = (!device && !named && !wantAll && !hint) ? rememberedDevice() : null;
 
+  // 3b. TRANSPORT ROUTING (CW-5). The device the operator pointed at either is an
+  //     SSH-reachable box (the DevNet always-on sandboxes) or it is not. That is a
+  //     property of the RESOLVED device — looked up in the ssh-runner registry —
+  //     not a guess from the command text. When exactly one identity token points
+  //     at an SSH device, this command runs over direct SSH; otherwise it falls
+  //     through to the Catalyst Center Command Runner path exactly as before, so
+  //     the DNAC switches sw1–sw4 (transport: command-runner) are untouched.
+  //     "all" stays on Command Runner: it means "every reachable Catalyst switch",
+  //     not the separate directly-reachable sandboxes.
+  const sshIdentity = wantAll ? null : (device || named || hint || remembered || null);
+  const sshMatch = sshIdentity ? sshRunner.resolveDevice(sshIdentity) : null;
+
   if (announce) {
     // Deliberately NOT "submitting…" — nothing has been submitted yet, and the
     // named device may not even exist. The submit line comes after resolution.
     const pointing =
-      device ? `Target you picked: ${device}. Checking it against the live inventory…`
+      sshMatch ? `Target: ${sshMatch.device.label} — that box is directly reachable, so this runs over SSH, not Command Runner.`
+      : device ? `Target you picked: ${device}. Checking it against the live inventory…`
       : named ? `Target named in your request: ${named}. Checking it against the live inventory…`
       : wantAll ? `You asked for every device. Reading the live inventory…`
       : hint ? `You pointed at "${hint}" — checking which devices that actually matches…`
@@ -489,7 +507,8 @@ async function executeDeviceCli({ agentId, request, purpose, announce, device, a
   const g = await approvals.gate({
     agentId, agentName,
     command: verdict.command,
-    target: device ? `${device} (the device you picked) via Catalyst Center Command Runner`
+    target: sshMatch ? `${sshMatch.device.label} (${sshMatch.device.host() || 'host not set'}) over direct SSH`
+      : device ? `${device} (the device you picked) via Catalyst Center Command Runner`
       : named ? `${named} (named in the request) via Catalyst Center Command Runner`
       : wantAll ? 'every reachable Catalyst Center switch (you said "all") via Command Runner'
       : hint ? `whatever "${hint}" resolves to in the live inventory — if it matches more than one I will ask, not guess`
@@ -498,6 +517,11 @@ async function executeDeviceCli({ agentId, request, purpose, announce, device, a
     reason: purpose || `operator asked: "${raw.slice(0, 80)}"`,
     cli: verdict.command,
   }, async () => {
+    // TRANSPORT SPLIT (CW-5). Inside the SAME gate — so deny = zero wire on both
+    // paths, and the outer guardrail + scrub already applied cover both. An SSH
+    // device runs through the reviewed ssh-runner; everything else keeps the
+    // Catalyst Center Command Runner path verbatim.
+    if (sshMatch) return runSshTarget({ agentId, sshMatch, command: verdict.command, announce });
     const devices = await catalyst.getDevices();
     const pick = resolveTargetDevice(devices, device || named, { hint, remembered, wantAll });
     if (pick.error) return { unknownDevice: pick.error, detail: pick.error };
@@ -529,6 +553,14 @@ async function executeDeviceCli({ agentId, request, purpose, announce, device, a
 
   if (g.denied) return { denied: true, command: verdict.command, refusedChange };
   const r = g.result || {};
+  // An SSH dial that could not run for real — no creds, auth rejected, host
+  // unreachable, host-key refused. It never fabricates: the gate approved, the
+  // wire was attempted (or, for missing creds, honestly not attempted), and the
+  // honest failure kind is carried straight back for the renderer to show.
+  if (r.sshFailure) {
+    return { ok: false, sshError: true, via: 'ssh', command: verdict.command,
+      target: r.target, kind: r.sshFailure.kind, error: r.sshFailure.error, refusedChange };
+  }
   if (r.unknownDevice) return { refused: true, kind: 'unknown-device', reason: r.unknownDevice, command: verdict.command, refusedChange };
   if (r.ambiguous) {
     // Ran NOTHING. Park the request so the operator's next word ("sw2", "2",
@@ -546,12 +578,79 @@ async function executeDeviceCli({ agentId, request, purpose, announce, device, a
     };
   }
   const runs = r.runs || [];
-  if (r.multi) return { ok: true, multi: true, command: verdict.command, runs, note: r.note, refusedChange };
+  if (r.multi) return { ok: true, multi: true, command: verdict.command, runs, note: r.note, via: r.via || 'command-runner', refusedChange };
   const one = runs[0];
   // This conversation is now working on THIS box: a follow-up that names no
-  // device lands here instead of starting the guessing game over.
+  // device lands here instead of starting the guessing game over. For an SSH
+  // device we remember its registry key, which resolveDevice maps straight back
+  // to the same box, so "now show the interfaces" stays on SSH.
   if (one) rememberDevice(one.target.hostname);
-  return { ok: true, command: verdict.command, target: one.target, note: r.note, body: one.body, deviceOk: one.ok, refusedChange };
+  return { ok: true, command: verdict.command, target: one.target, note: r.note, body: one.body, deviceOk: one.ok, via: r.via || 'command-runner', refusedChange };
+}
+
+// ── The SSH branch of the choke point (CW-5) ─────────────────────────────────
+// Runs INSIDE the permission gate, so a denied read never reaches here. The
+// guardrail already ran twice in executeDeviceCli before the gate; ssh-runner
+// re-checks it a third time and the Python sidecar a fourth — belt and braces,
+// never a substitute for the choke-point gate. Returns the SAME shape the
+// Catalyst branch returns, so the post-gate interpreter and every renderer treat
+// both transports identically:
+//   success  → { runs:[{target,body,ok}], multi:false, note, via:'ssh' }
+//   failure  → { sshFailure:{kind,error}, target, via:'ssh' }
+// runShow never throws and never fabricates: with no creds it returns a clear
+// "not connected" WITHOUT touching the wire; with creds it runs a real show.
+async function runSshTarget({ agentId, sshMatch, command, announce }) {
+  const dev = sshMatch.device;
+  const target = { hostname: sshMatch.key, ip: dev.host() || null, platform: dev.platform };
+  if (announce) {
+    say(agentId, `🎯 Target: ${dev.label} (${dev.host() || 'host not set'}, ${dev.platform}).\n` +
+      `Running "${command}" over direct SSH (read-only). DevNet retired the static public passwords, ` +
+      `so without SSH creds in .env.local this returns an honest "auth needed", never a made-up result.`);
+  }
+  const res = await sshRunner.runShow(sshMatch.key, command);
+  if (res.ok) {
+    // runShow already scrubbed its output (structural + value + config redactor).
+    // session.scrub again for parity with the Command Runner branch — double
+    // scrubbing is harmless and keeps one guarantee, not two that can drift.
+    const body = session.scrub(String(res.text || '')).slice(0, 2000);
+    return {
+      runs: [{ target, body, ok: true }], multi: false, via: 'ssh',
+      note: `read live over direct SSH (${res.engine || 'ssh'}${res.elapsed != null ? `, ${res.elapsed}s` : ''})` +
+        (res.truncated ? ' — output truncated at the cap' : ''),
+      detail: `${command} on ${sshMatch.key} over SSH`,
+    };
+  }
+  return { sshFailure: { kind: res.kind || 'error', error: res.error || 'SSH read failed' }, target, via: 'ssh',
+    detail: `${command} on ${sshMatch.key} over SSH — ${res.kind || 'error'}` };
+}
+
+// Plain-words rendering of an SSH failure, shared by the direct chat path and
+// cliResultText so the same honest message reads the same everywhere. Never a
+// fabricated result — every branch says nothing was invented.
+function sshFailureText(res) {
+  const dev = res.target || {};
+  const where = dev.hostname ? `${dev.hostname}${dev.ip ? ` (${dev.ip})` : ''}` : 'the SSH device';
+  const head = (() => {
+    switch (res.kind) {
+      case 'not-connected':
+        return `🔑 Auth needed — I ran nothing.\nThis box is SSH-reachable, but its credentials are not in ` +
+          `.env.local, so I cannot log in. DevNet retired the static public passwords: reserve the always-on ` +
+          `sandbox and add SSH_…_USER / SSH_…_PASS, then I will run "${res.command}" for real.`;
+      case 'auth':
+        return `🔑 SSH authentication was rejected by ${where}, so I ran nothing on it.`;
+      case 'hostkey':
+        return `🛑 The SSH host key for ${where} was not trusted, so I refused the connection rather than ` +
+          `risk handing the password to an impostor. Nothing was sent.`;
+      case 'dns':
+      case 'unreachable':
+        return `🔌 ${where} was unreachable over SSH, so I ran nothing.`;
+      case 'blocked':
+        return `🚫 The SSH engine refused that command as not read-only. Nothing was sent to any device.`;
+      default:
+        return `⚠️ The SSH read did not complete against ${where}, so I ran nothing.`;
+    }
+  })();
+  return `${head}\n${RULE}\nReason: ${res.error}\nNothing was sent to the device, and I did not invent a result.`;
 }
 
 // ── Conversation memory + the parked question ───────────────────────────────
@@ -635,9 +734,18 @@ function changeRefusalText(refusedChange) {
     `not as it would be after the change I refused.\n${RULE}\n`;
 }
 
+// Which transport actually served (or would have served) this read, in plain
+// words. Command Runner unless the choke point routed the box over direct SSH.
+function viaLabel(res) {
+  return res && res.via === 'ssh' ? 'direct SSH' : `${catalyst.label} Command Runner`;
+}
+
 function cliResultText(res, raw) {
   if (!res) return 'Nothing ran.';
   if (res.refusedChange) return changeRefusalText(res.refusedChange) + cliResultText({ ...res, refusedChange: null }, raw);
+  // An SSH dial that could not run — no creds / auth / unreachable / host-key.
+  // Honest, never fabricated, and it carries its own explanation.
+  if (res.sshError) return sshFailureText(res);
   if (res.denied) {
     return `Read denied by the operator — ran nothing. The command "${res.command}" was not approved, ` +
       `so nothing was sent to any device and I will not invent a result.`;
@@ -660,14 +768,14 @@ function cliResultText(res, raw) {
   }
   if (res.multi) {
     return `You asked for every device, so I ran "${res.command}" on each reachable one via ` +
-      `${catalyst.label} Command Runner — real output per box, labelled:\n` +
+      `${viaLabel(res)} — real output per box, labelled:\n` +
       res.runs.map((r) =>
         `── ${r.target.hostname} (${r.target.ip}) ──\n${r.body}` +
         (r.ok === false ? `\n(The device rejected the command — real output above, nothing invented.)` : '')
       ).join('\n\n');
   }
   return `Ran "${res.command}" live on ${res.target.hostname} (${res.target.ip}, ${res.target.platform}) ` +
-    `via ${catalyst.label} Command Runner` + (res.note ? ` — ${res.note}` : '') + `:\n${res.body}\n` +
+    `via ${viaLabel(res)}` + (res.note ? ` — ${res.note}` : '') + `:\n${res.body}\n` +
     (res.deviceOk === false
       ? `(The device rejected the command — real output above, nothing invented, no configuration sent.)`
       : `(Real output, read-only; no configuration was sent.)`);
@@ -1010,6 +1118,14 @@ async function configKeeper(agentId, command, opts) {
       say(agentId, `🛑 I did not run that.\n${RULE}\n${res.reason}`);
       ctx.updateAgentStatus(agentId, 'idle',
         res.kind === 'multi-device' ? 'More than one device named — ran nothing' : 'Named device not resolvable — ran nothing');
+    } else if (res.sshError) {
+      // An SSH device that could not run — no creds / auth / unreachable / host
+      // key. Honest, never fabricated. Same rendering as the shared helper.
+      say(agentId, sshFailureText(res));
+      ctx.appendToActivityLog(
+        `[${new Date().toISOString()}] [${agentName}] SSH read did not run (${res.kind}) — nothing sent: "${raw.slice(0, 60)}"\n`);
+      ctx.updateAgentStatus(agentId, 'idle',
+        res.kind === 'not-connected' ? 'SSH creds needed — ran nothing' : `SSH ${res.kind} — ran nothing`);
     } else if (res.denied) {
       say(agentId,
         `🛑 Read denied by the operator — ran nothing.\n${RULE}\n` +
@@ -1031,7 +1147,7 @@ async function configKeeper(agentId, command, opts) {
           purpose: `read "${res.command}" on ${r.target.hostname}`,
           command: res.command, raw: r.body,
           reasoning: `Operator asked for every device: "${raw.slice(0, 100)}". Parsed to the read-only CLI ` +
-            `"${res.command}" (guardrail passed) and ran it on ${r.target.hostname} via Catalyst Center Command Runner.`,
+            `"${res.command}" (guardrail passed) and ran it on ${r.target.hostname} via ${viaLabel(res)}.`,
           conclusion: r.ok === false
             ? `${r.target.hostname} rejected "${res.command}" — real output above, nothing invented, no configuration sent.`
             : `Real "${res.command}" output read live from ${r.target.hostname} (${r.target.ip}). Read-only; no configuration sent.`,
@@ -1059,7 +1175,7 @@ async function configKeeper(agentId, command, opts) {
         command: res.command,
         raw: res.body,
         reasoning: `Operator asked: "${raw.slice(0, 100)}". Parsed to the read-only CLI "${res.command}" ` +
-          `(guardrail passed) and ran it on ${res.target.hostname} via Catalyst Center Command Runner.`,
+          `(guardrail passed) and ran it on ${res.target.hostname} via ${viaLabel(res)}.`,
         conclusion: res.deviceOk === false
           ? `The device rejected "${res.command}" — real output above, nothing invented, no configuration sent.`
           : `Real "${res.command}" output read live from ${res.target.hostname} (${res.target.ip}). Read-only; no configuration sent.`,
