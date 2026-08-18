@@ -118,11 +118,18 @@ const CHANGE_OBJECT = /\b(sw\d+|router|switch|device|node|firewall|interface|loo
 
 // Verbs that ASK US TO ACT, per ability. Nothing here is judged on its own — a
 // verb only counts when it is the request's own verb (see isImperativeRequest).
+// NOTE (Class 1 — no over-refusing): a few verbs are DELIBERATELY not here.
+// "copy" is dropped from change — "copy the running config off sw1" is a read
+// (show running-config), and the write form ("copy flash:a flash:b") is caught
+// by the write-refusal guardrail (sources/guardrails.js), not by this gate.
+// "update" is dropped from tickets/teams — "update me on the ticket status" is a
+// QUESTION, not "update the ticket"; the ambiguous verb was refusing reads. Only
+// unambiguous imperatives to PERFORM an unbuilt ability belong here.
 const ACT_VERBS = {
-  change: /(?:re)?configure|provision|deploy|push|apply|commit|rollback|roll[\s-]?back|upgrade|downgrade|patch|reload|reboot|restart|bounce|erase|wipe|shut(?:down)?|no[\s-]?shut|add|set|remove|delete|change|update|modify|unconfigure|enable|disable|install|write[\s-]?mem|copy/,
+  change: /(?:re)?configure|provision|deploy|push|apply|commit|rollback|roll[\s-]?back|upgrade|downgrade|patch|reload|reboot|restart|bounce|erase|wipe|shut(?:down)?|no[\s-]?shut|add|set|remove|delete|change|modify|unconfigure|enable|disable|install|write[\s-]?mem/,
   drift: /check|compare|audit|validate|verify|diff|re[\s-]?baseline|baseline/,
-  tickets: /raise|open|create|log|file|close|assign|escalate[\s-]?to|update/,
-  teams: /post|send|share|notify|message|ping|update|escalate/,
+  tickets: /raise|open|create|log|file|close|assign|escalate[\s-]?to/,
+  teams: /post|send|share|notify|message|ping|escalate/,
 };
 
 // The object each unbuilt ability must be aimed AT before it can claim an ask.
@@ -309,8 +316,11 @@ function checkAsk(text) {
 
   if (question) return { allowed: true, ability: matchAsk(t) };
 
-  // 4. Nothing about this NOC at all → honest out-of-scope refusal.
-  if (!NOC_VOCAB.test(t)) return { allowed: false, ability: null, text: refusalFor(null) };
+  // 4. Nothing about this NOC at all → honest out-of-scope refusal. But only when
+  //    NOTHING covers it: an ask that names no raw NOC vocab yet clearly maps to a
+  //    real ability ("give me a handover summary" → the bridge) must pass through,
+  //    not be bounced as off-topic. When in doubt, real reasoning answers it.
+  if (!NOC_VOCAB.test(t) && !matchAsk(t)) return { allowed: false, ability: null, text: refusalFor(null) };
 
   // 5. In doubt → pass through to real reasoning.
   return { allowed: true, ability: matchAsk(t) };

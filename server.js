@@ -632,7 +632,10 @@ jarvis.init({
   log: (line) => appendToActivityLog(`[${new Date().toISOString()}] ${line}\n`),
   nameOf: (id) => (agents[id]?.name || id),
   // Delegation gather goes through the real gate + guardrail + session log.
-  gather: (agentId, question) => live.gatherForJarvis(agentId, question),
+  // `device` (CLASS 2) is the planner's STRUCTURED target for a device-CLI
+  // sub-question — threaded to the executor so the box comes from the plan, not
+  // a regex over the reworded question.
+  gather: (agentId, question, device) => live.gatherForJarvis(agentId, question, device),
   // The roster the planner reasons over: who exists + what each can actually see.
   roster: () => (agents.jarvis.manages || []).map((id) => ({
     id,
@@ -971,64 +974,40 @@ function generateMentionResponse(responderId, fromId, message) {
 }
 
 // ============ AGENT NLU — per-agent intent detection ============
+// Class 1 (2026-08-18): this used to compute ~13 intents (bgp_status,
+// security_scan, firewall_check, lb_check, alert_check, config_check,
+// incident_check, precheck, domain_status, general …) but the dispatcher below
+// only ever branches on THREE of them — configure_device, ping and help;
+// everything else fell straight through to `default → live.handle`, which does
+// its OWN routing from the capability map. So those extra branches were a dead
+// keyword table that answered/classified nothing. They are gone. Only the three
+// live branches remain — each an unambiguous app action, not network reasoning:
+//   • configure_device — a write, refused for SAFETY (a second net; the raw
+//     write screen in runAgentAction already ran first).
+//   • ping             — an agent-responsiveness check ("are you there?").
+//   • help             — the capability card.
+// Device-CLI routing ("run show version on sw1") is deliberately NOT here — it
+// lives in ONE place, live.handle()/executeDeviceCli, next to the code that
+// executes it, so two routers can never disagree about what "a command" is.
 function detectAgentIntent(agentId, command) {
   const t = command.toLowerCase();
 
-  // BGP / routing queries
-  if (/\b(bgp|ospf|isis|mpls|routing table|route|prefix|peer|neighbor|convergence|as path|as number|autonomous system)\b/.test(t)) {
-    return 'bgp_status';
-  }
-  // Security / CVE queries
-  if (/\b(cve|vuln|threat|security|advisory|patch|exploit|risk|scan|attack|malware|compromise|posture)\b/.test(t)) {
-    return 'security_scan';
-  }
-  // Firewall queries
-  if (/\b(firewall|policy|policies|rule|acl|nat|vpn|fortigate|fortios|permit|deny|block|filter|access[\s-]list)\b/.test(t)) {
-    return 'firewall_check';
-  }
-  // Load balancer queries
-  if (/\b(f5|load[\s-]?bal|vip|pool|member|health[\s-]?monitor|ssl offload|virtual[\s-]?server|ltm|gtm|irule|persistence)\b/.test(t)) {
-    return 'lb_check';
-  }
-  // Monitoring / alerts
-  if (/\b(alert|monitor|splunk|snmp|trap|threshold|metric|dashboard|syslog|log|event|alarm)\b/.test(t)) {
-    return 'alert_check';
-  }
-  // Device configuration / change actions — BEFORE config_check (which is read-only audit)
+  // Device configuration / change actions → refused for safety downstream.
   if (/\b(configure|create|provision|deploy|apply[\s-]?config|push[\s-]?config|commit[\s-]?change|rollback)\b/.test(t) ||
       (/\b(add|set|enable|disable|shut|no[\s-]?shut|bring[\s-]?(up|down)|remove|delete|unconfigure)\b/.test(t) &&
        /\b(interface|loopback|lo\d+|gigabit|gig\b|vlan|trunk|route|ntp|snmp|bgp[\s-]?neighbor|ospf|eigrp|description|ip[\s-]?add)\b/.test(t))) {
     return 'configure_device';
   }
-  // NOTE: device-CLI routing ("run show version on sw1") is deliberately NOT an
-  // intent here. It lives in ONE place — live.handle(), the module choke point
-  // next to the code that executes it (sources/live-agents.js). A copy of the
-  // rule in this file could drift out of step with that one, and two routers
-  // disagreeing about what "a command" is would be worse than one.
-  // Config / compliance
-  if (/\b(config|backup|compliance|drift|change|diff|snapshot|baseline|audit|inventory)\b/.test(t)) {
-    return 'config_check';
-  }
-  // Incident / RCA
-  if (/\b(incident|rca|root[\s-]?cause|troubleshoot|diagnose|timeline|impact|outage report)\b/.test(t)) {
-    return 'incident_check';
-  }
-  // Connectivity / pre-check
-  if (/\b(precheck|pre[\s-]check|ssh|connect|reachab|connectivity|device health)\b/.test(t)) {
-    return 'precheck';
-  }
-  // Ping
+  // Ping — agent responsiveness, not a device read.
   if (/^(ping|test|alive|you there)[?!.\s]*$/.test(t)) {
     return 'ping';
   }
-  // Help
+  // Help — the capability card.
   if (/\b(help|what can you|commands|capabilities)\b/.test(t)) {
     return 'help';
   }
-  // Generic status / show / tell me → route to agent's domain check
-  if (/\b(status|health|show|display|get|tell me|what'?s|how is|check|review|look at|give me|report on)\b/.test(t)) {
-    return 'domain_status';
-  }
+  // Everything else → the agent's real live read (live.handle routes it from the
+  // capability map). No keyword classification stands in front of that.
   return 'general';
 }
 
@@ -1171,123 +1150,6 @@ function showAgentHelp(agentId) {
   }, 500);
 }
 
-// ============ JARVIS NLU — NATURAL LANGUAGE UNDERSTANDING ============
-
-// Score-based intent classifier: returns the best matching intent
-function detectJarvisIntent(input) {
-  const t = input.toLowerCase().trim();
-
-  const intents = [
-    {
-      type: 'standup',
-      patterns: [
-        /\b(standup|stand[\s-]up)\b/,
-        /\b(morning brief|daily brief|daily check|start of day|kick[\s-]?off)\b/,
-        /\b(check[\s-]?in with|how is everyone|how'?s everyone|what'?s everyone (doing|working on))\b/,
-        /\b(team (check|update|brief|status)|brief me|get a status|everyone doing)\b/,
-        /\b(good morning|start the day|begin the day|open the day)\b/
-      ]
-    },
-    {
-      type: 'squad_status',
-      patterns: [
-        /\b(roll[\s-]?call|squad status|agent (roster|list|status))\b/,
-        /\bwho'?s? (online|active|available|working|up|running)\b/,
-        /\b(show|list|see|get) (me )?(all |the )?agents\b/,
-        /\bhow many agents\b/,
-        /\b(everyone online|all agents|who do we have|team roster|see the team|check on everyone)\b/,
-        /\b(who is (available|online|active)|any agents (available|active|online))\b/
-      ]
-    },
-    {
-      type: 'weekly_report',
-      patterns: [
-        /\b(weekly report|week(ly)? summary|summary report|progress report)\b/,
-        /\b(what'?s? been done|what (have|did) we (complete|accomplish|finish|do))\b/,
-        /\b(overview of the week|week recap|how did we do|activity (summary|report))\b/,
-        /\b(our progress|completed this week|this week'?s? work|wrap[\s-]?up)\b/
-      ]
-    },
-    {
-      type: 'escalate',
-      patterns: [
-        /\b(escalate|urgent|critical|emergency|p0|p1)\b/,
-        /\b(major (incident|outage|issue|problem)|production (down|issue|problem|outage))\b/,
-        /\b(is down|went down|has gone down|not (working|responding|reachable))\b/,
-        /\b(outage|disaster|crisis|major failure|complete failure|total (loss|outage))\b/,
-        /\b(needs? immediate|right now|asap|right away|immediately)\b/,
-        /\b(broken|failed|failure|dead|unreachable|timed? out|packet[\s-]?loss)\b/,
-        /\b(bgp (down|drop|flap|fail)|ospf (down|fail)|link (down|fail)|interface (down|fail))\b/,
-        /\b(cpu (maxed|spiked|100%)|memory (full|exhausted|oom)|disk (full|100%))\b/
-      ]
-    },
-    {
-      type: 'triage',
-      patterns: [
-        /\b(triage|assign|delegate|route|dispatch)\b/,
-        /\b(can (someone|an agent|you)|need (someone|an agent) to|who should (handle|look|check|fix))\b/,
-        /\b(please (assign|handle|look into|check|fix|investigate))\b/,
-        /\b(take care of|work on (this|it)|look into|check (on|out)|investigate)\b/,
-        /\b(I have a task|new task|there'?s? a (task|ticket|issue|job|problem|request))\b/,
-        /\b(add (this|a) task|create (a )?task|log (this|a) task|put (this|it) in)\b/,
-        /\b(deal with|handle this|sort (this|it) out|take a look)\b/
-      ]
-    },
-    {
-      type: 'ping',
-      patterns: [
-        /^(hi|hey|hello|howdy|yo|sup|hiya)[!?.\s]*$/,
-        /^(ping|test|testing|you there|are you there|you awake|online)[?!.\s]*$/,
-        /^(hey jarvis|hi jarvis|hello jarvis)[!?.\s]*$/
-      ]
-    },
-    {
-      // Help is a BARE/EXPLICIT request for the capability card only — never any
-      // sentence that merely contains "help". "help me figure out why x is slow"
-      // is a reasoning request and must fall through to real Jarvis, so "help"
-      // only counts when it stands alone (or as "need/show help"), not when it
-      // leads into a task ("help me…", "can you help…").
-      type: 'help',
-      patterns: [
-        /^\s*(help|halp|\?+)\s*$/,
-        /^\s*(i\s+)?(need|want|show|show me|get)\s+help\s*[!?.]*$/,
-        /\bwhat can you (do|help with)\b/,
-        /\bwhat are your (commands|capabilities|options|features)\b/,
-        /\b(list|show me) your (commands|capabilities|options|features)\b/,
-        /\bhow do i use (you|jarvis)\b/
-      ]
-    }
-  ];
-
-  // Score each intent
-  for (const intent of intents) {
-    for (const pattern of intent.patterns) {
-      if (pattern.test(t)) {
-        return { type: intent.type };
-      }
-    }
-  }
-
-  // Contextual inference — network/infra issue descriptions
-  const isNetworkTerm = /\b(bgp|ospf|isis|mpls|vlan|stp|spanning.tree|routing|interface|switch|router|firewall|fortigate|f5|load.?bal|vpn|tunnel|ipsec|ssl|certificate|cpu|memory|disk|latency|bandwidth|utilization|syslog|snmp|trap|acl|policy|nat|vip|pool|bgp|peer|prefix|route|nexthop|convergence)\b/.test(t);
-  const isProblem = /\b(down|fail|error|high|spike|maxed|full|loss|issue|problem|broken|unreachable|timeout|flap|drop|slow|congested|blocked|denied|rejected|expired|mismatch|loop|storm)\b/.test(t);
-
-  if (isNetworkTerm && isProblem) {
-    return { type: 'escalate', inferred: true };
-  }
-  if (isNetworkTerm) {
-    return { type: 'triage', inferred: true };
-  }
-
-  // Agent-name mentions — likely a routing request
-  const agentNames = ['netops', 'sentinel', 'firewall', 'loadbal', 'router', 'monitor', 'config', 'incident', 'doc-writer', 'doc writer'];
-  if (agentNames.some(n => t.includes(n))) {
-    return { type: 'triage', inferred: true };
-  }
-
-  return { type: 'general' };
-}
-
 // Main Jarvis entry point.
 //
 // Phase E: Jarvis is a REAL agentic Principal Engineer. Open-ended, plain-words
@@ -1296,30 +1158,29 @@ function detectJarvisIntent(input) {
 // With no API key it declines honestly; it NEVER falls back to a keyword router
 // pretending to reason.
 //
-// Deterministic, PRESERVED squad operations (standup, roll call, weekly report,
-// help, ping) are unambiguous app actions the operator typed — not Jarvis
-// reasoning about the network — so they stay rule-handled and work with or
-// without a key. EVERYTHING else the operator says in plain words — including
-// "who should look at this?", incident descriptions, and any network question —
-// is REAL agentic reasoning. It is never keyword-routed to a canned triage /
-// escalate / overview and passed off as thinking: with a key Jarvis plans and
-// delegates for real; with no key it shows the honest "needs your API key" state.
+// Class 1 (2026-08-18): the deterministic phrase-table that used to intercept
+// greetings/"brief me"/"how did we do" and answer with a standup / weekly report
+// / canned Pong BEFORE the planner ran is GONE. EVERYTHING the operator says in
+// plain words is now REAL agentic reasoning — it is never keyword-routed to a
+// canned answer and passed off as thinking. Squad operations (standup, roll
+// call, weekly report, help) remain as functions a future planner tool or an
+// explicit UI action can invoke; they are no longer front-door interceptors.
 //
 // (The manual "Open Triage" flow from Phase A is a separate surface and is
 // untouched — it still works regardless of the key.)
 function simulateJarvisAction(agentId, command) {
-  const intent = detectJarvisIntent(command);
-
-  // Only unambiguous, explicitly-typed squad operations stay deterministic.
-  if (!intent.inferred) {
-    switch (intent.type) {
-      case 'standup':        return simulateStandup(agentId);
-      case 'squad_status':   return simulateSquadStatus(agentId);
-      case 'weekly_report':  return simulateWeeklyReport(agentId);
-      case 'ping':           return simulatePing(agentId);
-      case 'help':           return showJarvisHelp(agentId);
-    }
-  }
+  // NO STATIC BINDINGS — INTENT FIRST (Vikas, 2026-08-17; Class 1 fix).
+  // The old code ran a phrase-table classifier (detectJarvisIntent) HERE and
+  // answered a greeting with a daily standup, "brief me…" with a standup, "how
+  // did we do…" with a weekly report and "hey jarvis" with a canned Pong —
+  // deterministic ANSWERING in front of the planner, the exact thing the law
+  // forbids. That front door is gone: every plain-words message now reaches the
+  // real reasoning engine (jarvis.ask), which understands intent and delegates.
+  // Standup / roll-call / weekly-report survive as FUNCTIONS the planner (or an
+  // explicit UI action) can invoke — never as greeting-triggered interceptors.
+  // The ONLY thing that still sits in front of the planner is the capability
+  // gate below, and it may only REFUSE-FOR-SAFETY (an unambiguous imperative to
+  // perform an unbuilt ability, or an off-topic ask); it never answers or routes.
 
   // CW-1 honest refusal. Before an open-ended ask reaches the reasoning engine,
   // it is checked against the capability map (sources/capabilities.js — the

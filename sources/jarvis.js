@@ -97,6 +97,16 @@ sub-question ("run show version on sw1"), NOT to an inventory-only engineer. Onl
 show / ping / traceroute / dir / more can ever be run; anything that changes a device is
 refused downstream, so never ask for one.
 
+DEVICE FIELD — structured, never buried in prose. For a device-CLI delegation, put the
+target device the operator named in the delegation's "device" field as its bare name or
+management IP (e.g. "sw2", "10.10.20.176"). The executor targets the box from THIS field,
+not from the wording of "question", so you may reword the sub-question freely without
+losing the target. Fill "device" ONLY when the operator unambiguously named exactly one
+device. If they gave a prefix/partial ("sw", "the switches"), named several, or named
+none, set "device" to null — do NOT invent or infer one; the executor resolves it against
+the live inventory and asks the operator when more than one could serve the ask. For any
+non-CLI delegation, set "device" to null.
+
 AMBIGUOUS TARGET RULE — never instruct a guess. If the operator does not name exactly one
 device ("show version on sw", "run show version" with no device at all, "on the switches"),
 you STILL delegate the command to config-keeper, worded exactly as the operator asked it.
@@ -179,10 +189,17 @@ async function ask(question) {
             items: {
               type: 'object',
               additionalProperties: false,
-              required: ['agentId', 'question'],
+              required: ['agentId', 'question', 'device'],
               properties: {
                 agentId: { type: 'string', enum: ids },
                 question: { type: 'string' },
+                // CLASS 2 durable fix: the device a CLI command targets travels
+                // as a STRUCTURED field, not buried in reworded prose. The
+                // executor reads THIS, not a regex over `question`, so a plan
+                // that says "on the switch named sw2" still targets sw2. null
+                // for a partial/several/none target — the executor then resolves
+                // against the live inventory and asks (the ambiguity net).
+                device: { type: ['string', 'null'] },
               },
             },
           },
@@ -259,7 +276,9 @@ async function ask(question) {
       interpretation: `Routed this piece to ${ctx.nameOf(d.agentId)} because it is the owner that can actually see what the sub-question needs.`,
     });
     ctx.say('jarvis', `📨 @${ctx.nameOf(d.agentId)} — ${d.question}`);
-    const f = await ctx.gather(d.agentId, d.question);
+    // Pass the STRUCTURED device (CLASS 2) alongside the sub-question so the
+    // executor targets the box the planner resolved, not a regex over its prose.
+    const f = await ctx.gather(d.agentId, d.question, d.device || null);
     findings.push(f);
     // Surface each agent's real result under that agent, so the delegation is visible.
     const tag = f.stance === 'evidence' ? '📡'
