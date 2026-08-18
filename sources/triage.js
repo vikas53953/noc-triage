@@ -474,9 +474,30 @@ async function readIncidents(sym) {
     } catch (e) {
       faultNote = ` (ACI faults unread: ${e.message})`;
     }
-    const detail = `${issues.length} Catalyst issues, ${faults.length} ACI faults${faultNote}`;
-    const state = (issues.length || faults.length) ? 'degraded' : 'clean';
-    return { state, detail, source, issues, faults, age, count: issues.length + faults.length };
+    // ── A4 ingestion hook: native syslog/SNMP-trap live events as evidence ────
+    // The live feeds deposit real device events into the live-events store; the
+    // bridge reads them back by the SAME symptom window it uses for faults. When
+    // no feed is configured, or nothing arrived in-window, this is an honest
+    // no-op (adds nothing, invents nothing). Events are already secret-scrubbed.
+    let liveEventsInWindow = [];
+    let liveNote = '';
+    try {
+      const liveEvents = require('./live-events');
+      if (sym && sym.timeAnchorMs) {
+        liveEventsInWindow = liveEvents.getInWindow(sym.timeAnchorMs, null);
+        if (liveEventsInWindow.length) {
+          const sys = liveEventsInWindow.filter((e) => e.source === 'syslog').length;
+          const trp = liveEventsInWindow.length - sys;
+          liveNote = `, ${liveEventsInWindow.length} live feed event(s) inside ${windowLabel(sym)}` +
+            ` (${sys} syslog, ${trp} trap)`;
+        }
+      }
+    } catch (e) { /* store unavailable → no live evidence, never a fabricated one */ }
+    // ── end A4 hook ──────────────────────────────────────────────────────────
+    const detail = `${issues.length} Catalyst issues, ${faults.length} ACI faults${faultNote}${liveNote}`;
+    const state = (issues.length || faults.length || liveEventsInWindow.length) ? 'degraded' : 'clean';
+    return { state, detail, source, issues, faults, age, liveEvents: liveEventsInWindow,
+      count: issues.length + faults.length + liveEventsInWindow.length };
   } catch (err) {
     return { state: 'suspect', detail: shortErr('Catalyst Center', err), source };
   }

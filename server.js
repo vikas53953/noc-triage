@@ -3175,6 +3175,36 @@ try {
   process.exit(1);
 }
 
+// ─── A4: native syslog + SNMP-trap live feeds ───────────────────────────────
+// Self-contained additive block (kept tiny + contiguous so A1's parallel
+// server.js edits merge cleanly). Two NATIVE UDP receivers deposit parsed,
+// secret-scrubbed events into the live-events store; each new event is streamed
+// to the desk as `live_event`. Both feeds are OFF unless explicitly enabled
+// (SYSLOG_ENABLED / SNMPTRAP_ENABLED, or a *_PORT set) — off = honest "not
+// receiving", store empty, nothing fabricated. The bridge/triage read the same
+// store by time window via liveEvents.getInWindow(startMs, endMs).
+const liveEvents = require('./sources/live-events');
+const syslogFeed = require('./sources/syslog-feed');
+const snmptrapFeed = require('./sources/snmptrap-feed');
+
+// GET /api/copilot/feeds/status → booleans + counts only, never a secret, never
+// a raw packet. Honest "not receiving" when a feed is off/unbound.
+app.get('/api/copilot/feeds/status', (req, res) => {
+  res.json({ syslog: syslogFeed.status(), snmptrap: snmptrapFeed.status() });
+});
+
+// GET /api/copilot/feeds/events?limit=&source= → recent scrubbed events (the
+// raw evidence the bridge reasons over). Empty when nothing has been received.
+app.get('/api/copilot/feeds/events', (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 100, 500);
+  const source = req.query.source === 'syslog' || req.query.source === 'trap' ? req.query.source : null;
+  res.json({ events: liveEvents.recent(limit, source), count: liveEvents.count(source) });
+});
+
+syslogFeed.start({ log: (m) => console.log(m), onEvent: (ev) => broadcast('live_event', ev) });
+snmptrapFeed.start({ log: (m) => console.log(m), onEvent: (ev) => broadcast('live_event', ev) });
+// ─── end A4 block ───────────────────────────────────────────────────────────
+
 server.listen(PORT, HOST, () => {
   console.log('');
   console.log('╔═══════════════════════════════════════════════════════════╗');
