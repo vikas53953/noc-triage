@@ -111,7 +111,11 @@ const ABILITIES = [
 // ── The vocabulary this NOC works in ────────────────────────────────────────
 // Anything that names kit, a front, a symptom or the console itself. Used only
 // to spot an ask that has nothing to do with this NOC at all.
-const NOC_VOCAB = /\b(bgp|ospf|isis|eigrp|mpls|vlan|stp|spanning[\s-]?tree|route|routing|prefix|peer|neighbou?r|interface|port|uplink|switch|router|firewall|fortigate|f5|load[\s-]?bal|vip|pool|vpn|tunnel|ipsec|wan|lan|sd-?wan|aci|fabric|apic|vmanage|catalyst|dnac|sw\d+|leaf|spine|edge|core|access[\s-]?point|wireless|wifi|subnet|ip\b|dns|dhcp|ntp|snmp|syslog|latency|jitter|throughput|bandwidth|packet|cpu|memory|disk|uptime|reload|version|config|inventory|topology|fault|alarm|alert|health|estate|network|device|node|link|circuit|site|branch|campus|datacent(?:re|er)|server|host|outage|incident|triage|bridge|ticket|queue|console|dashboard|desk|agent|jarvis|netops|sentinel|monitor|baseline|drift|compliance|change|maintenance|window|log|error|down|slow|flap)\b/i;
+// CLASS 9: the incident-id SHAPES this console mints (INC-YYYYMMDD-NNN, trg-…) and
+// the shift-handover vocabulary are part of this NOC's language — an ask that
+// quotes one ("summarise INC-20260817-013", "give me a shift handover") must never
+// be bounced as off-topic, since reading this console's own incidents is now built.
+const NOC_VOCAB = /\b(inc-\d+|trg-[a-z0-9]+|handover|hand[\s-]?off|verdict|hypothesis|bgp|ospf|isis|eigrp|mpls|vlan|stp|spanning[\s-]?tree|route|routing|prefix|peer|neighbou?r|interface|port|uplink|switch|router|firewall|fortigate|f5|load[\s-]?bal|vip|pool|vpn|tunnel|ipsec|wan|lan|sd-?wan|aci|fabric|apic|vmanage|catalyst|dnac|sw\d+|leaf|spine|edge|core|access[\s-]?point|wireless|wifi|subnet|ip\b|dns|dhcp|ntp|snmp|syslog|latency|jitter|throughput|bandwidth|packet|cpu|memory|disk|uptime|reload|version|config|inventory|topology|fault|alarm|alert|health|estate|network|device|node|link|circuit|site|branch|campus|datacent(?:re|er)|server|host|outage|incident|triage|bridge|ticket|queue|console|dashboard|desk|agent|jarvis|netops|sentinel|monitor|baseline|drift|compliance|change|maintenance|window|log|error|down|slow|flap)\b/i;
 
 // A device or a config object — what a change would actually be made TO.
 const CHANGE_OBJECT = /\b(sw\d+|router|switch|device|node|firewall|interface|loopback|lo\d+|gigabit|gig\d|port|vlan|trunk|route|ntp|snmp|acl|bgp|ospf|eigrp|description|ip[\s-]?add(?:ress)?|config(?:uration)?|ios|image|firmware|software|version|line[\s-]?card|module|password|user|banner|hostname)\b/i;
@@ -153,8 +157,38 @@ const READ_ONLY_COMMAND = [
 // "what's going on?", "is sw2 healthy?" all land here.
 const QUESTION_LEAD = /^\s*(?:hey\s+jarvis[,\s]+|jarvis[,\s]+|@\w+[,\s]+)?(?:so\s+|and\s+|but\s+)?(?:why|what|whats|what's|when|who|whom|whose|which|where|how|did|do|does|is|are|was|were|has|have|had|can you tell|could you tell|any|anything|anyone|tell me|show me|explain|walk me)\b/i;
 
-// Lead-ins that sit in front of a real imperative ("please …", "can you …").
-const IMPERATIVE_LEAD = /^\s*(?:hey\s+jarvis[,\s]+|jarvis[,\s]+|@\w+[,\s]+)?(?:(?:please|pls|kindly)\s+)?(?:(?:can|could|would|will)\s+(?:you|we)\s+(?:please\s+)?|(?:i|we)\s+(?:need|want|would like)\s+(?:you\s+)?to\s+|go\s+ahead\s+and\s+|now\s+|then\s+|let'?s\s+)?/i;
+// ── Lead-ins that sit in front of a real imperative ─────────────────────────
+// FIXED AT CLASS LEVEL (QA, logged): the old pattern allowed at most ONE fixed
+// softener, so "just quickly upgrade sw1" was not recognised as the imperative
+// it plainly is — the adverb pair in front of the verb hid it — while "please
+// upgrade sw1" was. Operators got a different answer for the same request
+// depending on how politely they phrased it. Adding "just quickly" as a phrase
+// would only move the seam; the real rule is that ANY RUN of softeners, address
+// terms and request wrappers can precede the verb, in any order and any number.
+// So the lead-in is now a repeating group, and a new politeness phrase is one
+// word added to a list rather than a new branch.
+//
+// Note what is NOT here: no verb, and no subject noun. Only words that modify
+// HOW or WHEN something is asked for, never WHAT is asked for — so stripping
+// them can never change which ability a request names.
+const LEAD_WORD =
+  '(?:please|pls|plz|kindly|just|simply|quickly|quick|real\\s+quick|fast|swiftly|briefly|' +
+  'now|right\\s+now|then|next|first|firstly|also|again|soon|urgently|asap|immediately|' +
+  'straightaway|promptly|maybe|perhaps|possibly|actually|really|honestly|basically|' +
+  'hey|hi|hello|yo|ok|okay|so|and|but|well|sorry|for\\s+me|for\\s+us|if\\s+you\\s+can|' +
+  'when\\s+you\\s+can|when\\s+you\\s+get\\s+a\\s+chance)';
+
+// The wrapper forms that turn a bare verb into a polite request.
+const LEAD_WRAPPER =
+  '(?:(?:can|could|would|will|shall|should)\\s+(?:you|we|u)\\s+|' +
+  '(?:i|we)\\s+(?:need|want|would\\s+like|\'?d\\s+like)\\s+(?:you\\s+)?to\\s+|' +
+  '(?:need|want)\\s+(?:you\\s+)?to\\s+|go\\s+ahead\\s+and\\s+|' +
+  'let\'?s\\s+|let\\s+us\\s+|do\\s+me\\s+a\\s+favou?r\\s+and\\s+)';
+
+const ADDRESS = '(?:hey\\s+jarvis|hi\\s+jarvis|jarvis|@\\w+)[,\\s]+';
+
+const IMPERATIVE_LEAD = new RegExp(
+  `^\\s*(?:${ADDRESS})?(?:(?:${LEAD_WORD}|${LEAD_WRAPPER})[,\\s]*)*`, 'i');
 
 function normalize(text) {
   return String(text || '').trim().replace(/\s+/g, ' ');
@@ -170,8 +204,13 @@ function isImperativeRequest(text, verbs) {
   const rest = lead ? t.slice(lead[0].length) : t;
   const anchored = new RegExp(`^(?:${verbs.source})\\b`, 'i');
   if (anchored.test(rest)) return true;
-  // "…, please reload it" / "can you upgrade sw1" mid-sentence.
-  const polite = new RegExp(`\\b(?:please|kindly|can you|could you|would you|i need you to|i want you to|go ahead and)\\s+(?:please\\s+)?(?:${verbs.source})\\b`, 'i');
+  // "…, please reload it" / "can you upgrade sw1" mid-sentence. Same class fix:
+  // any run of softeners may sit between the polite marker and the real verb
+  // ("…, could you just quickly reload it"), not one fixed "please".
+  const polite = new RegExp(
+    `\\b(?:please|kindly|can\\s+you|could\\s+you|would\\s+you|will\\s+you|` +
+    `i\\s+need\\s+you\\s+to|i\\s+want\\s+you\\s+to|go\\s+ahead\\s+and)\\s+` +
+    `(?:${LEAD_WORD}[,\\s]+)*(?:${verbs.source})\\b`, 'i');
   return polite.test(t);
 }
 
