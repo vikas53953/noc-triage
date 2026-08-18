@@ -83,3 +83,7 @@ Last updated: 2026-08-17 ~22:40 IST · driver: Fable session 7d4aaef3
 - #9 Class 5+6 (error/gate hardening + silent dropped turns) — QUEUED behind #6 (shares server.js)
 - Stranger-UI sweep — re-running (browser)
 - Merge order to avoid conflicts: land #6 first, then #8/#10, then #7/#9.
+
+## Follow-up hooks logged (apply after Class 1 merges — it owns server.js)
+- Class 10: add 'leadership' to server.js:2483 doc allow-list + names map (leadership: 'Leadership summary')
+  so the /doc/leadership URL alias works (slt already works). artifacts.js already leadership-aware.
