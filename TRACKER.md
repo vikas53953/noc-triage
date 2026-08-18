@@ -282,3 +282,12 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
   top-up (console.anthropic.com → Billing). Deterministic + non-LLM behavior all verified.
 - Copilot waves: CW-1, CW-2 done. Next feature waves (when resumed): CW-3 tickets, CW-4 Teams (needs
   webhook), CW-5 SSH wiring, CW-6 ServiceNow (needs creds).
+
+## 2026-08-18 — AUTONOMOUS FEATURE-WAVE BUILD (Vikas away, "build all, test at end")
+- Building now: CW-3 tickets (backend feat/cw3-tickets-be + UI feat/cw3-tickets-fe, contract docs/copilot-cw3-contract.md)
+  and CW-5 SSH-live (feat/cw5-ssh-live, per-device transport at the choke point) — parallel (disjoint files).
+- Sequenced AFTER (share server.js/capabilities/desk.html): CW-4 Teams, then CW-6 ServiceNow.
+- Credits still out → agents do deterministic verification; the big LIVE-LLM test is the END batch when Vikas
+  is back with credits (his instruction: "test all at once at the end").
+- Needs Vikas for LIVE (built honest-if-absent): CW-4 Teams webhook, CW-5 DevNet sandbox creds, CW-6 ServiceNow creds.
+- Merge discipline: land CW-3 + CW-5, then CW-4, then CW-6; resolve shared-file conflicts at merge.
