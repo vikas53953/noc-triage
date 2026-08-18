@@ -32,6 +32,7 @@
 
 const store = require('./ticket-store');
 const session = require('./session-log');
+const snow = require('./servicenow-client'); // CW-6: real ServiceNow Table API
 
 const { STATUSES, SEVERITIES } = store;
 
@@ -205,12 +206,168 @@ function addNote(id, { text, who } = {}) {
   return { ok: true, ticket: stored };
 }
 
+// ── CW-6: ServiceNow two-way sync (internal queue is TRUTH, SNOW is a mirror) ──
+// The transport + field mapping live in sources/servicenow-client.js; the
+// decisions about WHAT to sync and how to fold the answer back into the ticket's
+// `snow` slot live HERE, next to the truth. Two operator-driven, confirmed
+// actions, never keyword-triggered:
+//   • pushToSnow — CREATE the INC if snow.id is null, else UPDATE it; record the
+//     real snow:{id, number, url, syncedAt, snapshotUpdatedOn}. NEVER a fake INC.
+//   • pullFromSnow — READ the SNOW incident and surface its state/worknotes as a
+//     MIRROR. It NEVER overwrites internal truth. If BOTH sides changed since the
+//     last sync it returns conflict:true and touches nothing — surfaced honestly,
+//     never silently clobbered.
+// Honest not-connected: with no creds every op returns {ok:false, connected:false}
+// and does NOTHING (no INC, no slot write). Creds never touch this layer — the
+// client holds them; here we only ever see the non-secret sys_id/number.
+
+// The most recent moment an internal ticket was touched (any history entry or
+// work note). Used to tell "did the internal side change since the last sync?".
+function lastTouchedTs(ticket) {
+  const stamps = [ticket.ts];
+  for (const h of ticket.history || []) if (h && h.ts) stamps.push(h.ts);
+  for (const w of ticket.worknotes || []) if (w && w.ts) stamps.push(w.ts);
+  return stamps.filter(Boolean).sort().pop() || ticket.ts || null;
+}
+
+// A concise, secret-free work note describing this sync, plus the latest internal
+// work note so the SNOW journal mirrors the ticket thread. Nothing invented.
+function syncNote(ticket, operator, verb) {
+  const latest = (ticket.worknotes || [])[ticket.worknotes.length - 1];
+  const head = `[noc-triage] ${verb} from internal ticket ${ticket.id} by ${operator} — status ${ticket.status}, severity ${ticket.severity}.`;
+  return latest && latest.text ? `${head}\nLatest work note: ${latest.text}` : head;
+}
+
+// PUSH: mirror the internal ticket into ServiceNow. Create-or-update by snow.id.
+// Returns { ok, connected, number?, url?, ticket? } or an honest failure.
+async function pushToSnow(id, { who } = {}) {
+  const operator = operatorOf(who);
+  if (!operator) return { ok: false, status: 428, error: 'Tell me your name first.' };
+  const ticket = store.get(id);
+  if (!ticket) return { ok: false, status: 404, error: `No ticket with id "${id}".` };
+
+  if (!snow.connected()) {
+    // Honest no-op — never fabricate an INC when ServiceNow is not connected.
+    session.audit({ who: operator, what: `ticket ${id} ServiceNow push`, result: 'not connected — nothing synced' });
+    return { ok: false, connected: false, status: 200 };
+  }
+
+  const existing = ticket.snow && ticket.snow.id ? ticket.snow.id : null;
+  const verb = existing ? 'updated' : 'created';
+  const res = existing
+    ? await snow.updateIncident(existing, ticket, { note: syncNote(ticket, operator, verb) })
+    : await snow.createIncident(ticket, { note: syncNote(ticket, operator, verb) });
+
+  if (!res.ok) {
+    const err = res.connected === false ? 'not connected' : (res.error || `status ${res.status || '?'}`);
+    session.audit({ who: operator, what: `ticket ${id} ServiceNow push (${verb})`, result: `failed — ${err}` });
+    return { ok: false, connected: res.connected !== false, status: res.status || 502, error: err };
+  }
+
+  const inc = res.incident;
+  const ts = now();
+  const url = snow.incidentUrl(inc.sysId);
+  const next = {
+    ...ticket,
+    snow: {
+      id: inc.sysId || (ticket.snow && ticket.snow.id) || null,
+      number: inc.number || (ticket.snow && ticket.snow.number) || null,
+      url: url || (ticket.snow && ticket.snow.url) || null,
+      syncedAt: ts,                       // last time WE pushed the internal truth
+      state: inc.state || null,           // the SNOW state we just set
+      snapshotUpdatedOn: inc.updatedOn || null, // SNOW's sys_updated_on baseline
+      lastOp: verb,
+      conflict: false,                    // a fresh push clears any prior conflict
+    },
+  };
+  const stored = store.replace(id, next);
+  store.emit('ticket_update', stored);
+  snow.recordSync({ op: `push (${verb})`, ticket: id, number: inc.number, result: 'ok' });
+  session.audit({
+    who: operator,
+    what: `ticket ${id} ServiceNow push (${verb})`,
+    result: `${verb} ${inc.number || inc.sysId}`,
+  });
+  return { ok: true, connected: true, number: inc.number || null, url, ticket: stored };
+}
+
+// PULL: read the SNOW incident and surface its state/worknotes as a MIRROR.
+// NEVER overwrites internal truth. Returns { ok, connected, conflict, mirror, ticket }.
+async function pullFromSnow(id, { who } = {}) {
+  const operator = operatorOf(who);
+  if (!operator) return { ok: false, status: 428, error: 'Tell me your name first.' };
+  const ticket = store.get(id);
+  if (!ticket) return { ok: false, status: 404, error: `No ticket with id "${id}".` };
+
+  if (!snow.connected()) {
+    session.audit({ who: operator, what: `ticket ${id} ServiceNow pull`, result: 'not connected — nothing mirrored' });
+    return { ok: false, connected: false, status: 200 };
+  }
+  const sysId = ticket.snow && ticket.snow.id;
+  if (!sysId) {
+    return { ok: false, connected: true, status: 409, error: 'This ticket has not been pushed to ServiceNow yet — push it first.' };
+  }
+
+  const res = await snow.readIncident(sysId);
+  if (!res.ok) {
+    const err = res.connected === false ? 'not connected' : (res.error || `status ${res.status || '?'}`);
+    session.audit({ who: operator, what: `ticket ${id} ServiceNow pull`, result: `failed — ${err}` });
+    return { ok: false, connected: res.connected !== false, status: res.status || 502, error: err };
+  }
+
+  const inc = res.incident;
+  const prev = ticket.snow || {};
+  // Did the SNOW side change since our last sync/pull baseline?
+  const snowChanged = !!(prev.snapshotUpdatedOn && inc.updatedOn && inc.updatedOn !== prev.snapshotUpdatedOn);
+  // Did the internal side change since our last push?
+  const internalChanged = !!(prev.syncedAt && lastTouchedTs(ticket) && lastTouchedTs(ticket) > prev.syncedAt);
+  const conflict = snowChanged && internalChanged;
+
+  const mirror = {
+    number: inc.number || prev.number || null,
+    sysId: inc.sysId || sysId,
+    state: inc.state || null,
+    stateLabel: inc.stateLabel || (inc.state ? snow.snowStateLabel(inc.state) : null),
+    worknotes: inc.worknotes || '',
+    comments: inc.comments || '',
+    updatedOn: inc.updatedOn || null,
+  };
+
+  // Record the mirror in the snow slot WITHOUT touching internal truth (title,
+  // status, worknotes, assignee are all left exactly as they were). On a conflict
+  // we deliberately DO NOT advance the baseline — advancing it would let the next
+  // pull hide the conflict. The internal ticket stays the source of truth; a merge
+  // is a separate, explicit, operator-confirmed action (a push resolves it).
+  const nextSnow = {
+    ...prev,
+    number: mirror.number,
+    url: prev.url || snow.incidentUrl(mirror.sysId),
+    mirror,
+    mirroredAt: now(),
+    conflict,
+  };
+  if (!conflict) nextSnow.snapshotUpdatedOn = inc.updatedOn || prev.snapshotUpdatedOn || null;
+
+  const stored = store.replace(id, { ...ticket, snow: nextSnow });
+  store.emit('ticket_update', stored);
+  snow.recordSync({ op: 'pull', ticket: id, number: mirror.number, result: conflict ? 'conflict' : 'mirrored' });
+  session.audit({
+    who: operator,
+    what: `ticket ${id} ServiceNow pull`,
+    result: conflict
+      ? `CONFLICT — both changed; internal truth kept, SNOW ${mirror.number} at ${mirror.stateLabel}`
+      : `mirrored ${mirror.number} at ${mirror.stateLabel}`,
+  });
+  return { ok: true, connected: true, conflict, mirror, ticket: stored };
+}
+
 // ── Reads (pass-through to the store) ───────────────────────────────────────
 function list(opts) { return store.list(opts); }
 function get(id) { return store.get(id); }
 
 module.exports = {
   create, assign, setStatus, addNote, list, get,
+  pushToSnow, pullFromSnow,
   isValidTransition, TRANSITIONS, REQUIRES_RESOLUTION,
   STATUSES, SEVERITIES,
 };
