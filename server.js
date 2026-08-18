@@ -32,6 +32,7 @@ const teams = require('./sources/teams');            // CW-4: Teams bridge (one-
 const servicenow = require('./sources/servicenow-client'); // CW-6: two-way ServiceNow sync
 const investigation = require('./sources/investigation'); // CW-7: iterative investigation loop
 const mcp = require('./sources/mcp-connector');      // CW-8: generic MCP connector (gated, read-only, honest-if-absent)
+const nautobot = require('./sources/nautobot');      // A8: Nautobot source-of-truth reconciliation (honest not-connected)
 const guardrails = require('./sources/guardrails');
 const { checkIntent } = guardrails;
 
@@ -764,6 +765,37 @@ app.post('/api/copilot/mcp/reconnect', async (req, res) => {
   }
 });
 // ── end CW-8 block ──────────────────────────────────────────────────────────
+
+// ── A8: Nautobot source-of-truth reconciliation ─────────────────────────────
+// Self-contained, contiguous block (A5 edits server.js in parallel — keep this
+// separable + tiny). All logic lives in sources/nautobot.js; these routes are
+// thin surfaces that leak NO secrets. Nautobot is the INTENDED source of truth;
+// our live device read is the ACTUAL; reconcile surfaces the DIFFERENCES with an
+// honest verdict (in-sync / drift / unknown). Not connected (no NAUTOBOT_URL/
+// TOKEN) → does nothing, verdict 'unknown', never a fabricated in-sync/drift.
+//
+// GET /api/copilot/nautobot/status → { connected, lastReconcile }. Read-only, no
+// name gate. NEVER the Nautobot host or token — only the boolean + last summary.
+app.get('/api/copilot/nautobot/status', (req, res) => {
+  res.json(nautobot.status());
+});
+
+// POST /api/copilot/nautobot/reconcile { device } → the honest verdict. Not
+// connected → 200 { connected:false, verdict:'unknown' } (nothing done, no fake
+// verdict). Connected → { verdict, differences[] }. The 428 name gate above
+// covers this POST (it is under /api/copilot/).
+app.post('/api/copilot/nautobot/reconcile', async (req, res) => {
+  const device = String((req.body && req.body.device) || '').trim();
+  if (!device) return res.status(400).json({ error: 'Give me a device to reconcile against Nautobot.' });
+  try {
+    const out = await nautobot.reconcile({ device });
+    res.json(out);
+  } catch (err) {
+    reportSystemError('the Nautobot reconcile could not run', err);
+    res.status(500).json({ error: 'Nautobot reconcile failed — check the server window for detail.' });
+  }
+});
+// ── end A8 block ────────────────────────────────────────────────────────────
 
 // Create HTTP server
 const server = http.createServer(app);
