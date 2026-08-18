@@ -316,3 +316,11 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
   SNOW_INSTANCE/USER/PASS.
 - After CW-6: ALL copilot waves CW-1..CW-6 done. Then the ONE big end-to-end live test when Vikas is back
   with credits + (optionally) the webhook/SNOW/sandbox creds for the live integrations.
+
+## 2026-08-18 — ALL CW-1..CW-6 DONE; CW-7 investigation loop (NEW, Vikas)
+- ALL copilot waves CW-1..CW-6 MERGED + verified (474 tests green). Only end-to-end live-LLM test pending credits.
+- NEW feature request (Vikas): CW-7 iterative investigation loop — Jarvis grills the problem, probes agents
+  round by round ("check this, report back"), narrows hypotheses, stops on confidence OR ~6-round cap OR
+  honest-stuck, then plans the fix (change proposal via CW-2). Decision: confidence + safety-cap model.
+  Contract docs/copilot-cw7-contract.md. Backend+UI pair. LLM-heavy → deterministic verify (stubbed planner)
+  now, real multi-round test on credits.
