@@ -70,6 +70,17 @@ const ABILITIES = [
       + 'and the SSH path stays read-only until CW-5. I will run the whole wrap and freeze honestly at the apply step rather than pretend a change landed.',
   },
   {
+    key: 'nautobot-sot',
+    label: 'Check a device against the source of truth (Nautobot)',
+    plain: 'Compare a device\'s live state against what Nautobot says it SHOULD be, and report every difference (intended vs actual) — never overwriting either side, never inventing drift.',
+    example: 'does sw2 match the source of truth?',
+    dynamic: 'nautobot',
+    available: false,
+    engineBuilt: true,
+    reason: 'Nautobot not connected — set NAUTOBOT_URL + NAUTOBOT_TOKEN (a read-only API token). '
+      + 'The client and the reconcile engine are built; until connected no state is compared and no in-sync/drift verdict is invented.',
+  },
+  {
     key: 'packet-analysis',
     label: 'Analyze a packet capture',
     plain: 'Hand me a packet capture (.pcap) and I read the real packets — top talkers, protocol mix, TCP resets/retransmit hints and obvious errors. Metadata only; I never dump payloads.',
@@ -344,6 +355,9 @@ function resolveAvailable(a) {
   }
   if (a.dynamic === 'batfish') {
     try { return require('./batfish').connected(); } catch (e) { return false; }
+  }
+  if (a.dynamic === 'nautobot') {
+    try { return require('./nautobot').connected(); } catch (e) { return false; }
   }
   return !!a.available;
 }
