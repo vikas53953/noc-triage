@@ -31,6 +31,7 @@ const ticketStore = require('./sources/ticket-store');
 const teams = require('./sources/teams');            // CW-4: Teams bridge (one-way post)
 const servicenow = require('./sources/servicenow-client'); // CW-6: two-way ServiceNow sync
 const investigation = require('./sources/investigation'); // CW-7: iterative investigation loop
+const mcp = require('./sources/mcp-connector');      // CW-8: generic MCP connector (gated, read-only, honest-if-absent)
 const guardrails = require('./sources/guardrails');
 const { checkIntent } = guardrails;
 
@@ -734,6 +735,36 @@ app.get('/api/copilot/investigate/:id', (req, res) => {
 });
 // ── end CW-7 block ──────────────────────────────────────────────────────────
 
+// ── CW-8: the generic MCP connector ──────────────────────────────────────────
+// Self-contained, contiguous block (A4 edits server.js in parallel — keep this
+// separable). All logic lives in sources/mcp-connector.js + sources/mcp-client.js;
+// these routes are thin status/reconnect surfaces that leak NO secrets. The
+// connector connects declared MCP servers at startup (below, near jarvis.init),
+// exposes each connected tool to the planner as a namespaced delegation target
+// (mcp:<server>:<tool>), and gates + audits every tool call through the SAME
+// permission gate a device read uses. No servers configured → honest empty state.
+//
+// GET /api/copilot/mcp/status → { configured, servers:[{name, connected, toolCount,
+// reason?}] }. No secrets — server creds live in config/env only, never here.
+app.get('/api/copilot/mcp/status', (req, res) => {
+  res.json(mcp.status());
+});
+
+// POST /api/copilot/mcp/reconnect → re-connect + re-list tools for every declared
+// server (operator-named action). Honest result: the same status shape after the
+// attempt, so a server that still won't connect shows its reason, never a fake tool.
+// The 428 name gate above covers this POST (it is under /api/copilot/).
+app.post('/api/copilot/mcp/reconnect', async (req, res) => {
+  try {
+    await mcp.connectAll();
+    res.json(mcp.status());
+  } catch (err) {
+    reportSystemError('the MCP reconnect could not run', err);
+    res.status(500).json({ error: 'MCP reconnect failed — check the server window for detail.' });
+  }
+});
+// ── end CW-8 block ──────────────────────────────────────────────────────────
+
 // Create HTTP server
 const server = http.createServer(app);
 
@@ -907,6 +938,22 @@ function jarvisSay(agentId, text) {
     timestamp: new Date().toISOString(),
   });
 }
+// The roster BOTH the planner (jarvis) and the investigation loop reason over:
+// the live squad agents PLUS (CW-8) every connected external MCP tool as its own
+// namespaced delegation target. Built in one place so the two callers can never
+// drift. When no MCP server is connected, mcp.rosterEntries() is empty and the
+// roster is exactly what it was before CW-8 — nothing added, nothing fabricated.
+function buildJarvisRoster() {
+  const squad = (agents.jarvis.manages || []).map((id) => ({
+    id,
+    name: agents[id]?.name || id,
+    connected: !live.NO_BACKEND[id],
+    sees: (live.CAPABILITIES[id] && live.CAPABILITIES[id].can) || [],
+    note: live.NO_BACKEND[id] ? `not connected — ${live.NO_BACKEND[id]}` : '',
+  }));
+  return squad.concat(mcp.rosterEntries());
+}
+
 jarvis.init({
   say: jarvisSay,
   status: updateAgentStatus,
@@ -918,16 +965,16 @@ jarvis.init({
   // a regex over the reworded question.
   // `incidentId` (CLASS 9) is the planner's STRUCTURED reference to one of THIS
   // console's own incidents — threaded the same way `device` is.
+  // CW-8: an MCP tool (id "mcp:<server>:<tool>") is a delegation target too — it
+  // routes to the connector, which gates + audits the call exactly like a read.
+  // Everything else goes to the live agents unchanged.
   gather: (agentId, question, device, incidentId) =>
-    live.gatherForJarvis(agentId, question, device, incidentId),
-  // The roster the planner reasons over: who exists + what each can actually see.
-  roster: () => (agents.jarvis.manages || []).map((id) => ({
-    id,
-    name: agents[id]?.name || id,
-    connected: !live.NO_BACKEND[id],
-    sees: (live.CAPABILITIES[id] && live.CAPABILITIES[id].can) || [],
-    note: live.NO_BACKEND[id] ? `not connected — ${live.NO_BACKEND[id]}` : '',
-  })),
+    mcp.isMcpId(agentId)
+      ? mcp.gather(agentId, question, { who: 'jarvis', approved: false })
+      : live.gatherForJarvis(agentId, question, device, incidentId),
+  // The roster the planner reasons over: who exists + what each can actually see,
+  // plus (CW-8) every connected external MCP tool as its own delegation target.
+  roster: () => buildJarvisRoster(),
 });
 
 // CW-7 — hand the investigation LOOP engine its plumbing. The engine orchestrates
@@ -939,15 +986,11 @@ jarvis.init({
 // (live.gatherForJarvis), so deny = zero wire holds unchanged.
 investigation.init({
   probe: ({ agentId, question, device, incidentId }) =>
-    live.gatherForJarvis(agentId, question, device || null, incidentId || null),
+    mcp.isMcpId(agentId)
+      ? mcp.gather(agentId, question, { who: 'jarvis', approved: false })
+      : live.gatherForJarvis(agentId, question, device || null, incidentId || null),
   broadcast,
-  roster: () => (agents.jarvis.manages || []).map((id) => ({
-    id,
-    name: agents[id]?.name || id,
-    connected: !live.NO_BACKEND[id],
-    sees: (live.CAPABILITIES[id] && live.CAPABILITIES[id].can) || [],
-    note: live.NO_BACKEND[id] ? `not connected — ${live.NO_BACKEND[id]}` : '',
-  })),
+  roster: () => buildJarvisRoster(),
   audit: (entry) => session.audit(entry),
 });
 investigation.setPlanner(jarvis.investigationPlanner);
@@ -3194,4 +3237,20 @@ server.listen(PORT, HOST, () => {
   initActivityTracker();
   setupFileWatcher();
   startStatusRefresh();
+
+  // CW-8: connect any declared MCP servers + list their tools, in the background.
+  // Honest-if-absent: none declared → nothing happens and the capability stays OFF.
+  // A server that fails to connect is recorded with its reason (no fake tool); it
+  // never blocks or crashes startup.
+  mcp.connectAll()
+    .then((results) => {
+      const up = results.filter((r) => r.connected);
+      if (results.length) {
+        console.log(`[MCP] ${up.length}/${results.length} server(s) connected` +
+          (up.length ? ` — ${up.map((r) => `${r.name} (${r.toolCount} tool${r.toolCount === 1 ? '' : 's'})`).join(', ')}` : ''));
+        results.filter((r) => !r.connected).forEach((r) =>
+          console.log(`[MCP] ${r.name} NOT connected — ${r.reason || 'unavailable'}`));
+      }
+    })
+    .catch((err) => reportSystemError('the MCP connector could not start', err));
 });
