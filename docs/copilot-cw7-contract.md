@@ -48,9 +48,20 @@ loop with the right agents until the root cause is isolated, then plans the fix.
   canned investigation.
 
 ## Routes
-- POST /api/copilot/investigate { problem, operatorTz? } (operator-named) → starts an investigation, returns
-  its id; streams rounds over WS (investigation_round events: {round, probe, agent, report, hypotheses[],
-  confidence, status}).
+- POST /api/copilot/investigate { problem, operatorTz? } (operator-named) → 202 `{ investigation, watch }`
+  (the record is under `investigation`, NOT top-level `id`; read `investigation.id`).
+- PINNED SHAPES (the UI reads EXACTLY these — do not drift; this closes the CW-7 field-drift class):
+  - WS `investigation_update` = full record: `{id, problem, understood, status, questions[] (PLURAL —
+    array of clarifying-question strings), answers[], hypotheses[{id,text,status}], confidence, rounds[],
+    rootCause, fixPlan{summary, proposal?}, stuckReason, cap, threshold}`. status ∈ starting/awaiting-operator/
+    investigating/resolved/capped/stuck/blocked/reasoning-unavailable.
+  - WS `investigation_round` = `{id, round, probe:{agentId,agentName,question,device,rationale} (OBJECT —
+    render probe.question + probe.agentName, not the object), agent, report:{agentName,stance,text} (OBJECT —
+    render report.text), hypotheses[], confidence, status}`.
+  - `fixPlan` = `{summary (string), proposal?:{device,commands[],reason,route:"POST /api/copilot/change"}}` —
+    render summary as text; if proposal present, show a CW-2 approve button POSTing to proposal.route.
+  The UI must render probe/report/fixPlan from their OBJECT fields (never stringify the object), read the
+  clarifying questions from `questions[]` (plural), and read the new id from `res.investigation.id`.
 - POST /api/copilot/investigate/:id/answer { text } → the operator's answer to a grill/clarifying question,
   resumes the loop.
 - GET /api/copilot/investigate/:id → full record (problem, rounds, root cause, fix plan/proposal, status).
