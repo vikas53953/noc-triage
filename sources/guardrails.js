@@ -47,19 +47,99 @@ const PRINTABLE_ASCII = new RegExp(
   `^[\\u${PRINTABLE_ASCII_MIN.toString(16).padStart(4, '0')}-\\u${PRINTABLE_ASCII_MAX.toString(16).padStart(4, '0')}]+$`
 );
 
-// Verbs that change device state. These block only when they are the COMMAND
-// INTENT — the first real word of the request or of a chained clause — never
-// when they appear as a noun inside a legitimate read ("running config",
-// "backup status", "clear-text", "debug logs").
-const STATE_CHANGING = [
-  'config', 'configure', 'conf', 'write', 'wr', 'erase', 'reload', 'reboot',
-  'restart', 'copy', 'delete', 'remove', 'clear', 'set', 'unset', 'no',
-  'shut', 'shutdown', 'reset', 'debug', 'undebug', 'install', 'request',
-  'boot', 'format', 'rename', 'rollback', 'commit', 'enable', 'disable',
-  'upgrade', 'downgrade', 'provision', 'deploy', 'push', 'apply', 'archive',
-  // Plain-English ways people ask for the same destruction.
-  'wipe', 'nuke', 'destroy', 'overwrite', 'flush', 'factory', 'purge', 'kill',
-];
+// ── Write verbs, split by how much they overlap with ordinary English ────────
+// (CLASS 4 fix — judge the COMMAND, not the English word.)
+//
+// The old design put EVERY state-changing verb on one flat list and refused a
+// clause whenever that word led it. That refused ordinary prose: "no rush",
+// "clear it up", "copy the report to the incident record", the planner's own
+// "if no target was named" — none of them a device command, all refused as one.
+// The class fix is to ask whether the verb is actually giving a device an order.
+//
+// HARD_WRITE — device-specific verbs with essentially no innocent English life
+// as a verb ("reload", "wipe", "erase"). Used as a verb (i.e. NOT an event-noun
+// reference like "the reload" / "after restart"), they ALWAYS refuse.
+const HARD_WRITE = new Set([
+  'reload', 'reboot', 'restart', 'reset', 'erase', 'wipe', 'nuke', 'destroy',
+  'overwrite', 'flush', 'factory', 'purge', 'format', 'shutdown', 'shut',
+  'downgrade', 'upgrade', 'rollback', 'debug', 'undebug', 'reimage',
+  'config', 'configure', 'conf',
+]);
+
+// AMBIGUOUS_WRITE — verbs that are ALSO everyday English ("no", "clear", "copy",
+// "set", "remove", "delete", "kill", "enable", "disable"). On a device they are
+// real writes; in prose they are ordinary words. They refuse ONLY when what they
+// govern is device-shaped (a config/exec object, or a named device / IP) — never
+// on a plain English object ("clear it up", "copy the report", "no rush"). Real
+// writes always name their object ("clear counters", "no shutdown", "copy
+// running-config"), which is exactly what the device-object test catches.
+const AMBIGUOUS_WRITE = new Set([
+  'no', 'clear', 'copy', 'set', 'unset', 'remove', 'delete', 'kill', 'apply',
+  'push', 'deploy', 'install', 'provision', 'request', 'boot', 'archive',
+  'commit', 'enable', 'disable', 'rename', 'write', 'wr',
+]);
+
+// The flat union stays exported for back-compat (SSH sidecar parity, callers).
+const STATE_CHANGING = [...HARD_WRITE, ...AMBIGUOUS_WRITE];
+
+// Device-shaped objects. When an AMBIGUOUS_WRITE verb is immediately followed
+// (past one leading article) by one of these — a config/exec noun, a named
+// device, or an IP — it is a real command, not English. Deliberately device/
+// config vocabulary only, so ordinary objects ("the report", "it up", "rush",
+// "the noise", "target") never qualify.
+const DEVICE_OBJECT_WORDS = new Set([
+  'config', 'configuration', 'running-config', 'startup-config', 'running',
+  'startup', 'run', 'start', 'boot', 'mem', 'memory', 'terminal', 'term', 'flash',
+  'bootflash', 'nvram', 'disk0', 'slot0', 'counters', 'counter', 'interface',
+  'interfaces', 'int', 'vlan', 'vlans', 'route', 'routes', 'arp', 'mac', 'cam',
+  'line', 'vty', 'logging', 'ip', 'ipv6', 'bootvar', 'system', 'image',
+  'license', 'licenses', 'crypto', 'access-list', 'acl', 'port', 'ports',
+  'trunk', 'vtp', 'stp', 'spanning-tree', 'service', 'process', 'processes',
+  'session', 'sessions', 'tunnel', 'bgp', 'ospf', 'eigrp', 'isis', 'ntp',
+  'snmp', 'ssh', 'telnet', 'clock', 'hostname', 'banner', 'username', 'secret',
+  'password', 'aaa', 'tacacs', 'radius', 'dhcp', 'dns', 'nat', 'qos', 'vrf',
+  'mpls', 'feature', 'module', 'redundancy', 'stack', 'switchport',
+  'channel-group', 'port-channel', 'standby', 'hsrp', 'vrrp', 'mtu', 'cdp',
+  'lldp', 'dot1x', 'shut', 'shutdown', 'errdisable', 'startup-configuration',
+  'device', 'devices', 'switch', 'switches', 'router', 'routers', 'node',
+  'nodes', 'chassis', 'controller',
+]);
+
+// A named device ("sw1", "leaf2", "n9k1", "gi1/0/3") or an IPv4 address is also
+// a device-shaped object.
+const DEVICE_NAME = /^(?:sw|swi|switch|rtr|router|r|leaf|spine|nexus|n9k|core|dist|acc|edge|agg|fw|asa|ftd|lb|f5|node|dev|device|box|cat|c9|gi|te|fa|eth|po)\d|^\d{1,3}(?:\.\d{1,3}){3}$/i;
+
+function isDeviceObject(tok) {
+  if (!tok) return false;
+  const t = String(tok).toLowerCase();
+  return DEVICE_OBJECT_WORDS.has(t) || DEVICE_NAME.test(t);
+}
+
+// ── Inflection (CLASS 4 fix — catch every tense) ────────────────────────────
+// The old list matched only the bare lemma, so "reboots sw2", "he reloads it"
+// and "wiping the config" slipped the intent screen (they still failed safe at
+// the command parser, but the naming was inconsistent — a logged CW-2 debt).
+// Rather than hand-list every tense, the common English inflections of each
+// write verb are generated once into a lookup, so any tense maps to its lemma.
+function inflect(base) {
+  const f = new Set([base]);
+  f.add(base + 's'); f.add(base + 'es'); f.add(base + 'ing'); f.add(base + 'ed');
+  if (base.endsWith('e')) { f.add(base.slice(0, -1) + 'ing'); f.add(base + 'd'); } // wipe→wiping/wiped
+  if (base.endsWith('y')) { f.add(base.slice(0, -1) + 'ies'); f.add(base.slice(0, -1) + 'ied'); } // copy→copies
+  if (/[^aeiou][aeiou][^aeiouwxy]$/.test(base)) {              // shut→shutting, set→setting
+    const d = base[base.length - 1];
+    f.add(base + d + 'ing'); f.add(base + d + 'ed');
+  }
+  return f;
+}
+const WRITE_FORM_TO_BASE = new Map();
+for (const base of STATE_CHANGING) {
+  for (const form of inflect(base)) {
+    if (!WRITE_FORM_TO_BASE.has(form)) WRITE_FORM_TO_BASE.set(form, base);
+  }
+}
+// A read verb must never be shadowed by a generated write form.
+for (const rv of READ_VERBS) WRITE_FORM_TO_BASE.delete(rv);
 
 // Verbs on the list above that are ALSO ordinary English. They mean "change the
 // device" only when what follows is device-shaped; followed by any of these
@@ -273,32 +353,59 @@ function isEventReference(shape, sep) {
   return false;
 }
 
+// Does the ambiguous verb leading this clause actually govern a device-shaped
+// object? Looks at the token immediately after the verb, stepping past ONE
+// leading article/determiner ("copy the running-config"). That is where a real
+// command puts its object; ordinary English puts a plain noun or a phrasal
+// particle there instead ("clear it up", "copy the report").
+function clauseGovernsDevice(clause, verbRaw) {
+  const toks = tokensOf(clause);
+  let i = toks.indexOf(verbRaw);
+  if (i < 0) return false;
+  i++;
+  if (toks[i] && DETERMINERS.has(toks[i])) i++;   // step past one article
+  return isDeviceObject(toks[i]);
+}
+
+// Classify ONE clause: 'read', 'write', or null (neither). This is the single
+// place command-vs-English is decided, so checkIntent and splitIntent can never
+// disagree. For a write it returns the ORIGINAL word (its real tense) so the
+// refusal quotes the operator back verbatim, plus the lemma for internal logic.
+function classifyClause(clause, sep) {
+  const shape = commandShape(clause);
+  const raw = shape.word;
+  if (!raw) return { kind: null };
+  if (READ_VERBS.includes(raw)) return { kind: 'read', word: raw };
+  const base = WRITE_FORM_TO_BASE.get(raw);
+  if (!base) return { kind: null };
+  // 'write'/'wr' keep the document-author exception ("write me a report" is a
+  // Doc-Writer job, "write mem" / "write erase" is not).
+  if (base === 'write' || base === 'wr') {
+    const toks = tokensOf(clause);
+    const after = toks.slice(toks.indexOf(raw) + 1).join(' ');
+    if (SOFT_VERBS.write.test(after)) return { kind: null };
+    return { kind: 'write', word: raw, base };
+  }
+  // An event-noun reference ("the upgrade", "after restart", "its reboot") is
+  // prose, not an order — judged on the lemma so any tense is covered.
+  if (isEventReference({ word: base, prev: shape.prev, bare: shape.bare }, sep)) return { kind: null };
+  if (HARD_WRITE.has(base)) return { kind: 'write', word: raw, base };
+  if (AMBIGUOUS_WRITE.has(base)) {
+    if (clauseGovernsDevice(clause, raw)) return { kind: 'write', word: raw, base };
+    return { kind: null };   // everyday English, not a device command
+  }
+  return { kind: null };
+}
+
 // Does this plain-English request ASK for a state change?
 // Returns { destructive, keyword, clause } — keyword/clause are what the
 // refusal message quotes back, so the user is told exactly what was refused.
 function checkIntent(text) {
   const raw = String(text || '');
   for (const { text: clause, sep } of clauseParts(raw)) {
-    const shape = commandShape(clause);
-    const word = shape.word;
-    if (!word) continue;
-    if (READ_VERBS.includes(word)) continue; // a read clause is a read clause
-    // A clause that is nothing but the word "no" is the English "no", not the
-    // Cisco "no <command>" — "no, show me the version" must not be refused.
-    // "no shut" still has a second word, so it is still judged a change.
-    if (word === 'no' && /^no\W*$/i.test(clause.trim())) continue;
-    // Ordinary-English use of a verb that is only destructive on a device.
-    if (SOFT_VERBS[word]) {
-      const rest = tokensOf(clause);
-      const after = rest.slice(rest.indexOf(word) + 1).join(' ');
-      if (SOFT_VERBS[word].test(after)) continue;
-    }
-    // The word is on the list, but is it being USED as a command? A rationale
-    // that refers to an event ("after the upgrade", "…after restart") is prose,
-    // not an instruction, and refusing it refuses a legitimate read.
-    if (isEventReference(shape, sep)) continue;
-    if (STATE_CHANGING.includes(word)) {
-      return { destructive: true, keyword: word, clause: clause.trim() };
+    const c = classifyClause(clause, sep);
+    if (c.kind === 'write') {
+      return { destructive: true, keyword: c.word, clause: clause.trim() };
     }
   }
   return { destructive: false };
@@ -318,20 +425,9 @@ function splitIntent(text) {
   const readClauses = [];
   let change = null;
   for (const { text: clause, sep } of clauseParts(raw)) {
-    const shape = commandShape(clause);
-    const word = shape.word;
-    if (!word) continue;
-    if (READ_VERBS.includes(word)) { readClauses.push(clause.trim()); continue; }
-    if (word === 'no' && /^no\W*$/i.test(clause.trim())) continue;
-    if (SOFT_VERBS[word]) {
-      const rest = tokensOf(clause);
-      const after = rest.slice(rest.indexOf(word) + 1).join(' ');
-      if (SOFT_VERBS[word].test(after)) continue;
-    }
-    if (isEventReference(shape, sep)) continue;
-    if (STATE_CHANGING.includes(word) && !change) {
-      change = { keyword: word, clause: clause.trim() };
-    }
+    const c = classifyClause(clause, sep);
+    if (c.kind === 'read') { readClauses.push(clause.trim()); continue; }
+    if (c.kind === 'write' && !change) change = { keyword: c.word, clause: clause.trim() };
   }
   return {
     destructive: Boolean(change),
@@ -351,8 +447,10 @@ function assertReadOnly(command) {
 
 module.exports = {
   checkCommand, checkIntent, assertReadOnly, commandWord,
-  splitIntent, clausesOf, clauseParts, commandShape,
-  READ_VERBS, STATE_CHANGING, EVENT_NOUNS, DETERMINERS, SUBJECT_PRONOUNS,
+  splitIntent, clausesOf, clauseParts, commandShape, classifyClause,
+  READ_VERBS, STATE_CHANGING, HARD_WRITE, AMBIGUOUS_WRITE,
+  DEVICE_OBJECT_WORDS, WRITE_FORM_TO_BASE, isDeviceObject,
+  EVENT_NOUNS, DETERMINERS, SUBJECT_PRONOUNS,
   // Exported so the SSH sidecar's mirrored rules can be parity-checked against
   // these (sources/ssh-runner.smoke.js). Drift between the two layers must fail
   // a test, not sit silently until someone tightens one side only.

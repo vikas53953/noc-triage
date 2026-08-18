@@ -66,6 +66,59 @@ for (const t of MUST_REFUSE) {
   ok(JSON.stringify(t), v.destructive === true, 'let a change through');
 }
 
+console.log('\nCLASS 4 — English homonyms must NOT false-refuse:');
+const HOMONYMS_PASS = [
+  'no rush',
+  'no more',
+  'no, that is fine',
+  'no target was named, so I asked which switch',
+  'if no target was named the planner asks',
+  'clear it up',
+  'let us clear it up',
+  'clear the air on this',
+  'copy the report',
+  'copy the report to the incident record',
+  'set up a call with the on-call',
+  'remove me from the bridge',
+  'kill the noise on this thread',
+  'enable the team to see it',
+  'disable the alert for now',
+  'please can you brief me on the outage',
+];
+for (const t of HOMONYMS_PASS) {
+  const v = checkIntent(t);
+  ok(JSON.stringify(t), v.destructive === false, `false-refused on "${v.keyword}" in "${v.clause}"`);
+}
+
+console.log('\nCLASS 4 — real writes in ANY inflection must refuse AND be named:');
+const WRITES_REFUSE = [
+  'reload sw1',
+  'reboots sw2',
+  'he reloads it',
+  'she reloads the router',
+  'reloading sw3 now',
+  'wipe the config',
+  'wipes the startup-config',
+  'wiping the config on sw2',
+  'erases the flash',
+  'write mem',
+  'write memory',
+  'clear counters',
+  'no shutdown',
+  'copy running-config startup-config',
+  'delete flash',
+  'set boot system',
+];
+for (const t of WRITES_REFUSE) {
+  const v = checkIntent(t);
+  ok(JSON.stringify(t), v.destructive === true && !!v.keyword, 'let a real write through');
+}
+
+console.log('\nCLASS 4 — compound read-then-write stays safe:');
+const cs = splitIntent('show version on sw1 then reload it');
+ok('read half runs', /show version/i.test(cs.readText) && !/reload/i.test(cs.readText), cs.readText);
+ok('reload refused and named', cs.destructive === true && cs.change && cs.change.keyword === 'reload', JSON.stringify(cs.change));
+
 console.log('\nCOMPOUND read-then-change split:');
 const c1 = splitIntent('reload sw1 then show me the version');
 ok('compound detected', c1.compound === true);
