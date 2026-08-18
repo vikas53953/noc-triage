@@ -324,3 +324,7 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
   honest-stuck, then plans the fix (change proposal via CW-2). Decision: confidence + safety-cap model.
   Contract docs/copilot-cw7-contract.md. Backend+UI pair. LLM-heavy → deterministic verify (stubbed planner)
   now, real multi-round test on credits.
+
+## 2026-08-18 — master branch protected
+- GitHub branch protection on master: force-push BLOCKED, deletion BLOCKED, direct pushes STILL ALLOWED
+  (no required-PR/status-checks — keeps the autonomous merge-then-push flow). Safety net against history rewrite/wipe.
