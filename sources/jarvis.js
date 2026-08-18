@@ -163,6 +163,61 @@ Every one of those findings is the REAL result of a live read (or an honest "not
   present a candidate list as if the command had been run.
 Speak plainly, like a Principal Engineer briefing a colleague. Be concise. No preamble.`;
 
+// NO SILENT DROPPED TURNS (QA CLASS 6). A delegated read is meant to end in one
+// of three honest outcomes: real output, an honest error, or an honest denial.
+// The failure this closes is the FOURTH outcome — silence: a read that hangs on a
+// slow/stuck sandbox (or, defensively, one that rejects or returns null/empty)
+// used to leave the loop awaiting forever, so the operator saw the plan and the
+// "@Config-Keeper — …" line and then NOTHING. This guard guarantees every
+// delegation resolves to a rendered finding within a bounded time, and turns a
+// hang / rejection / empty result into an explicit "no response" the operator can
+// read. It NEVER fabricates a reading — the honest outcome is "the source did not
+// answer", not a made-up device fact.
+const GATHER_TIMEOUT_MS = Math.max(1000, Number(process.env.JARVIS_GATHER_TIMEOUT_MS) || 90000);
+
+// Build an honest "nothing came back" finding, shaped exactly like a real one so
+// the loop renders and synthesises it without special-casing.
+function noResponseFinding(agentId, name, text) {
+  return { agentId, name: name || ctx.nameOf(agentId) || agentId, connected: true, stance: 'unreachable', text };
+}
+
+async function gatherGuarded(d) {
+  const agentId = d.agentId;
+  const name = ctx.nameOf(agentId) || agentId;
+  const secs = Math.round(GATHER_TIMEOUT_MS / 1000);
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(noResponseFinding(agentId, name,
+      `No response — ${name} did not return anything within ${secs}s. The device or source did not answer in time, ` +
+      `so I have no reading to show for this. Nothing was invented, and nothing was sent to any device on a guess. ` +
+      `Try again, or narrow it to one device.`)), GATHER_TIMEOUT_MS);
+  });
+  // A rejection from gather is turned into an honest finding too, never a throw
+  // that escapes the loop and strands the remaining delegations.
+  const work = Promise.resolve()
+    .then(() => ctx.gather(agentId, d.question, d.device || null, d.incidentId || null))
+    .catch((err) => noResponseFinding(agentId, name,
+      `The read could not complete — ${err && err.message ? err.message : 'an unexpected error'}. ` +
+      `No reading to show, and nothing was invented.`));
+  try {
+    const f = await Promise.race([work, timeout]);
+    // A null/undefined or empty-text finding is silence wearing a finding's
+    // clothes — surface it as an explicit "nothing came back" instead.
+    if (!f || typeof f !== 'object') {
+      return noResponseFinding(agentId, name,
+        `No response — ${name} returned nothing at all for this. The read did not complete, so there is nothing to show.`);
+    }
+    if (!String(f.text || '').trim()) {
+      return { ...noResponseFinding(agentId, f.name || name,
+        `No response — ${f.name || name} came back empty for this. There is nothing to show, and nothing was invented.`),
+        stance: f.stance && f.stance !== 'evidence' ? f.stance : 'unreachable' };
+    }
+    return f;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function ask(question) {
   // NO KEY = NO REASONING. Honest state, zero fabrication, no rule-router.
   if (!claude.hasKey()) return refuseNoKey(question);
@@ -296,7 +351,12 @@ async function ask(question) {
     ctx.say('jarvis', `📨 @${ctx.nameOf(d.agentId)} — ${d.question}`);
     // Pass the STRUCTURED device (CLASS 2) alongside the sub-question so the
     // executor targets the box the planner resolved, not a regex over its prose.
-    const f = await ctx.gather(d.agentId, d.question, d.device || null, d.incidentId || null);
+    // NO SILENT DROPPED TURNS (QA CLASS 6): a tasked read must ALWAYS resolve to
+    // something the operator can see — real output, an honest error, or an honest
+    // denial. gatherGuarded wraps the delegation so a read that hangs, rejects, or
+    // comes back null/empty becomes an explicit "no response" finding instead of
+    // vanishing and leaving the operator staring at a plan that went nowhere.
+    const f = await gatherGuarded(d);
     findings.push(f);
     // Surface each agent's real result under that agent, so the delegation is visible.
     const tag = f.stance === 'evidence' ? '📡'
@@ -760,4 +820,10 @@ async function narrateCorrelation(input) {
   }
 }
 
-module.exports = { init, ask, keyStatus, extractSymptom, rankBlindSpots, synthesizeTriageVerdict, narrateCorrelation };
+module.exports = {
+  init, ask, keyStatus, extractSymptom, rankBlindSpots, synthesizeTriageVerdict, narrateCorrelation,
+  // Exposed for the QA CLASS 6 offline test only (the always-surfaces guarantee):
+  // a delegated read that hangs / rejects / returns null-or-empty must resolve to
+  // an explicit honest finding, never silence.
+  _test: { gatherGuarded, GATHER_TIMEOUT_MS },
+};
