@@ -101,3 +101,18 @@ servicenow honest "not connected" until Vikas provides (write-path/webhook/SNOW 
 fix-classes merged (intent-first shell removal, ambiguity-ask, intake, guardrail, gate-fail-closed, errors,
 chat-sees-incidents, docs, UI). ONLY REMAINING: one end-to-end LIVE-LLM test pass, gated on Anthropic credit
 top-up (+ optionally TEAMS_WEBHOOK, SNOW_INSTANCE/USER/PASS, DevNet SSH creds to exercise the live externals).
+
+## NetClaw pull — A1/A2/A4 DONE (2026-08-19)
+- A1 (CW-8) MCP connector for Jarvis: MERGED. Hand-rolled zero-dep JSON-RPC/stdio client (mcp-client.js) +
+  mcp-connector.js; every tool call through approvals.gate (deny=zero external call), read-only posture
+  (write-flagged tools refused unless approved), 16MB buffer cap (hostile flood → honest disconnect), honest
+  external-tools capability (off until a server configured), audit (argKeys not values). NO real external MCP
+  server auto-wired — that's the next security-vetted step. Jarvis CHOOSING a tool = live-LLM test (credits).
+- A2 Catalyst Center adapter: MERGED. 11 new live-verified reads in catalyst-center.js (health/interfaces/
+  vlans/sites/topology/clients/pathtraces/compliance/images), honest envelopes, read-only, netclaw attribution.
+- A4 native syslog + SNMP-trap feeds: MERGED. sources/syslog-feed.js + snmptrap-feed.js + live-events.js; UDP
+  receivers, robust parse (no crash on hostile input), secret+community scrub (shared session-log scrubber),
+  honest not-receiving when off, localhost bind by default; folded into triage evidence by time window.
+  Needs Vikas to point real devices' logging/traps at host:port + set *_BIND=0.0.0.0 for real events.
+- All 17 test suites green. Assessment: docs/netclaw-assessment.md. Not yet done from the assessment: A5
+  (batfish), A6 (packet/Nautobot), the MCP client's SSE/HTTP transport, wiring a REAL external MCP server.
