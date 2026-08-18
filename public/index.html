@@ -3229,6 +3229,27 @@ function renderChat(d){
 }
 
 /* Send a direct message to the selected agent (or an @mentioned one). */
+/* ---------- CLASS 9: this console's own conversation key ----------
+   Stored like the theme key. Kept across reloads so one operator holds one
+   thread; NOT shared with any other browser, so two operators never share a
+   remembered device, a remembered incident, or a parked question. */
+var CONVERSATION_ID = '';
+try{ CONVERSATION_ID = localStorage.getItem('noc-conversation-id') || ''; }catch(e){}
+if(!CONVERSATION_ID){
+  /* Minted here rather than waiting for the socket's init, so the very FIRST
+     message already carries a key. A message sent with no key would be filed
+     under a throwaway id and its answer would not be remembered. */
+  CONVERSATION_ID = 'sess-ui-' + Date.now().toString(36) + '-' +
+    Math.random().toString(36).slice(2,10);
+  try{ localStorage.setItem('noc-conversation-id', CONVERSATION_ID); }catch(e){}
+}
+function adoptConversationId(fromServer){
+  if(CONVERSATION_ID) return;                    /* ours already — keep the thread */
+  if(!fromServer || typeof fromServer !== 'string') return;
+  CONVERSATION_ID = fromServer;
+  try{ localStorage.setItem('noc-conversation-id', CONVERSATION_ID); }catch(e){}
+}
+
 function sendAgentMessage(){
   var inp = $('cmdInput'); if(!inp) return;
   var text = inp.value.trim(); if(!text) return;
@@ -3240,7 +3261,7 @@ function sendAgentMessage(){
   inp.value=''; syncSendDisabled();
   fetch('/api/command', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ agent: selectedAgent, command: text })
+    body: JSON.stringify({ agent: selectedAgent, command: text, conversationId: CONVERSATION_ID || undefined })
   }).catch(function(err){
     renderChat({type:'incoming', agent:'system', agentName:'NOC Triage', agentIcon:'⚠️',
       text:'Could not reach the server: ' + err.message, timestamp:new Date().toISOString()});
@@ -3940,7 +3961,16 @@ $('srcList').addEventListener('click', function(e){
    FIRST connect restores; reconnects skip so history is never duplicated. */
 var initRestored = false;
 function handleInit(data){
-  if(!data || initRestored) return;
+  if(!data) return;
+  /* CLASS 9 — per-operator session isolation. The server files this console's
+     conversational state (the device we settled on, the incident we are
+     discussing, any parked "which device?" question) under a conversation key.
+     We keep OUR key so a reload stays one continuous thread, and so a second
+     operator on another browser is a genuinely separate conversation instead of
+     landing in ours. It is an opaque routing key: no identity, no secret. This
+     runs before the initRestored guard because a reconnect must re-adopt it. */
+  adoptConversationId(data.sessionId);
+  if(initRestored) return;
   initRestored = true;
   var acts = data.activityHistory;
   if(Array.isArray(acts)){

@@ -119,6 +119,17 @@ it back to the operator as it stands. Do not substitute an inventory listing for
 netops to list the switches does not answer "show version"), and do not pick one yourself
 from a list an agent returns.
 
+THIS CONSOLE'S OWN INCIDENTS. This app opens and runs its own triage bridges, and each one
+gets an id of the form INC-YYYYMMDD-NNN (internally trg-…). One engineer on the roster reads
+that record — see its "sees" list. So "what is the latest incident?", "summarise
+INC-20260817-013", "who is on this incident?", "give me a shift handover" ARE answerable:
+delegate them to that engineer. Do NOT tell the operator this console cannot see its own
+incidents. When the operator names an incident id, put it in the delegation's "incidentId"
+field exactly as they wrote it; when they name none, set "incidentId" to null and the
+engineer returns the live incident list to reason over. Never invent an incident id — if
+the operator quotes one that does not exist, the engineer says so and you relay that.
+For every non-incident delegation, set "incidentId" to null.
+
 First, in "intent", state in one or two plain sentences what the operator is actually
 asking for (the parsed intent). Then, in "symptom", extract the incident shape from the
 complaint: a TIME ANCHOR ("since 2pm" -> an ISO timestamp resolved against the current
@@ -189,10 +200,17 @@ async function ask(question) {
             items: {
               type: 'object',
               additionalProperties: false,
-              required: ['agentId', 'question', 'device'],
+              required: ['agentId', 'question', 'device', 'incidentId'],
               properties: {
                 agentId: { type: 'string', enum: ids },
                 question: { type: 'string' },
+                // CLASS 9, same idiom as `device`: when the operator names one of
+                // THIS console's incidents ("summarise INC-20260817-013"), the id
+                // travels as a STRUCTURED field so the executor looks up exactly
+                // that record. null when no incident was named — the executor then
+                // grounds on the incident LIST and the conversation's own memory,
+                // and never invents a record.
+                incidentId: { type: ['string', 'null'] },
                 // CLASS 2 durable fix: the device a CLI command targets travels
                 // as a STRUCTURED field, not buried in reworded prose. The
                 // executor reads THIS, not a regex over `question`, so a plan
@@ -278,7 +296,7 @@ async function ask(question) {
     ctx.say('jarvis', `📨 @${ctx.nameOf(d.agentId)} — ${d.question}`);
     // Pass the STRUCTURED device (CLASS 2) alongside the sub-question so the
     // executor targets the box the planner resolved, not a regex over its prose.
-    const f = await ctx.gather(d.agentId, d.question, d.device || null);
+    const f = await ctx.gather(d.agentId, d.question, d.device || null, d.incidentId || null);
     findings.push(f);
     // Surface each agent's real result under that agent, so the delegation is visible.
     const tag = f.stance === 'evidence' ? '📡'

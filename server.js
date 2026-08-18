@@ -635,7 +635,10 @@ jarvis.init({
   // `device` (CLASS 2) is the planner's STRUCTURED target for a device-CLI
   // sub-question — threaded to the executor so the box comes from the plan, not
   // a regex over the reworded question.
-  gather: (agentId, question, device) => live.gatherForJarvis(agentId, question, device),
+  // `incidentId` (CLASS 9) is the planner's STRUCTURED reference to one of THIS
+  // console's own incidents — threaded the same way `device` is.
+  gather: (agentId, question, device, incidentId) =>
+    live.gatherForJarvis(agentId, question, device, incidentId),
   // The roster the planner reasons over: who exists + what each can actually see.
   roster: () => (agents.jarvis.manages || []).map((id) => ({
     id,
@@ -666,6 +669,10 @@ wss.on('connection', (ws, req) => {
     return;
   }
   const clientKey = (req && (req.socket?.remoteAddress || 'unknown')) || 'unknown';
+  // CLASS 9: this socket's own conversation key. One browser = one operator =
+  // one id, for the life of the connection, unless the client sends its own.
+  // Two operators on two sockets can no longer land on one key.
+  const socketSessionId = newSessionId('ws');
   clients.add(ws);
   console.log(`[WS] Client connected. Total: ${clients.size}`);
 
@@ -685,7 +692,12 @@ wss.on('connection', (ws, req) => {
       // instead of coming back empty. Same payload shapes chat_message /
       // activity_new already broadcast; already secret-scrubbed on disk.
       chatHistory: chatStore.getChatHistory(),
-      activityHistory: chatStore.getActivityHistory()
+      activityHistory: chatStore.getActivityHistory(),
+      // CLASS 9: the conversation key this socket will be filed under. The client
+      // may keep it and send it back on every command so ONE operator holds ONE
+      // thread across a reload; if it sends nothing, this same id is used anyway.
+      // It is an opaque routing key — it carries no identity and no secret.
+      sessionId: socketSessionId
     },
     timestamp: new Date().toISOString()
   }));
@@ -702,7 +714,7 @@ wss.on('connection', (ws, req) => {
       }
       const parsed = JSON.parse(message);
       if (parsed.type === 'command') {
-        handleCommand(parsed.data);
+        handleCommand(parsed.data, socketSessionId);
       }
     } catch (e) {
       console.error('[WS] Invalid message:', e.message);
@@ -721,16 +733,71 @@ wss.on('connection', (ws, req) => {
 // every message can name the question that caused it. Without that, a slow
 // reply appears under whatever was asked in the meantime and the reader
 // attributes real fault data to the wrong exchange.
-function handleCommand(data) {
+// ── Per-operator session isolation (QA CLASS 9) ─────────────────────────────
+// Every scrap of conversational state in this app — the device the operator
+// settled on, the incident the conversation is about, the parked "which device?"
+// question — is keyed by this id inside live-agents. The id therefore decides
+// whether two operators share a mind or have their own.
+//
+// THE DEFECT THIS CLOSES: the fallback used to be the literal string 'default',
+// and no client ever sent anything else. Every operator on the console — every
+// browser, every tab, every curl — landed in ONE conversation, so operator B's
+// "sw2" answered operator A's parked question and A's remembered device silently
+// steered B's next command. QA saw it live.
+//
+// THE RULE NOW: an id is never shared unless a client deliberately asks to share
+// one by sending the SAME conversationId. Absent that, a socket gets its own id
+// for its whole life; a one-shot HTTP command that carries a NAMED operator is
+// filed under that operator's own key (so the desk — which sends X-Operator-Name
+// but no conversationId — keeps ONE continuous thread per person, and two
+// operators are two threads); and a truly anonymous one-shot gets a throwaway id
+// that belongs to nobody. There is no path left that lands two operators on one
+// key by accident — the unsafe shared 'default' simply does not exist any more.
+let sessionSeq = 0;
+function newSessionId(kind) {
+  return `sess-${kind}-${Date.now().toString(36)}-${(++sessionSeq).toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// A client-supplied id is honoured (that is how one operator keeps one thread
+// across a reload), but only as an opaque, bounded, printable token — it is a
+// Map key that partitions memory, so it is length-capped and stripped of
+// anything but plain id characters before it is trusted.
+function normalizeConversationId(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return null;
+  const clean = s.replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 96);
+  return clean || null;
+}
+
+// CLASS 9: a STABLE per-operator key derived from X-Operator-Name (set on the
+// request by the CW-1 name middleware, carried through session.runAsOperator).
+// This is what keeps the desk's device/incident memory continuous for one person
+// while keeping two people apart — the operator identity half of "keyed off
+// operator + conversation". Null when nobody is named (a bare curl), so an
+// anonymous caller falls through to a throwaway id and shares nothing.
+function operatorConversationId() {
+  const op = typeof session.currentOperator === 'function' ? session.currentOperator() : null;
+  if (!op) return null;
+  const clean = String(op).replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 64);
+  return clean ? `op-${clean}` : null;
+}
+
+function handleCommand(data, fallbackSessionId) {
   const question = String((data && data.command) || '');
   const ctxValue = {
     requestId: newRequestId(),
     question,
     agent: (data && data.agent) || null,
     askedAt: new Date().toISOString(),
-    // The conversation this message belongs to. Carries the device the operator
-    // picked (live-agents device memory) no further than this conversation.
-    conversationId: String((data && data.conversationId) || 'default'),
+    // The conversation this message belongs to. Carries the device and the
+    // incident the operator settled on, and their parked question, no further
+    // than this one conversation — never to another operator. Resolution order:
+    // an explicit client id (a reload keeps its thread) → the socket's own id →
+    // the named operator's stable key (the desk) → a throwaway anon id.
+    conversationId: normalizeConversationId(data && data.conversationId)
+      || fallbackSessionId
+      || operatorConversationId()
+      || newSessionId('anon'),
   };
   return requestContext.run(ctxValue, () => handleCommandInner(data));
 }

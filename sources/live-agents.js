@@ -16,6 +16,11 @@ const session = require('./session-log');
 const approvals = require('./approvals');
 const guardrails = require('./guardrails');
 const { checkCommand, checkIntent, splitIntent, commandWord, READ_VERBS } = guardrails;
+// QA Class 9 — the read-only window onto THIS console's OWN incidents. The chat
+// brain used to be blind to incidents this very app minted; Incident-Handler now
+// reads them from here alongside its external sources. Read-only by construction:
+// this module has no write path into the triage engine.
+const incidentRead = require('./incident-read');
 
 // The host app injects its broadcast/status/task-board plumbing here so this
 // module stays free of server internals.
@@ -555,6 +560,10 @@ async function executeDeviceCli({ agentId, request, purpose, announce, device, a
 // operator settled on in one conversation must not silently steer another.
 const deviceMemory = new Map();   // conversationId -> hostname
 const pendingChoice = new Map();  // conversationId -> parked request awaiting a pick
+// QA CLASS 9 — the incident this conversation is working on, remembered for
+// follow-ups ("who's on it?", "summarise it") exactly like the device above, and
+// scoped exactly as narrowly: one conversation, never global, never shared.
+const incidentMemory = new Map(); // conversationId -> INC-…/trg-… id
 
 function conversationId() {
   try { return (ctx && typeof ctx.conversationId === 'function' && ctx.conversationId()) || 'default'; }
@@ -562,9 +571,31 @@ function conversationId() {
 }
 function rememberDevice(hostname) { if (hostname) deviceMemory.set(conversationId(), String(hostname)); }
 function rememberedDevice() { return deviceMemory.get(conversationId()) || null; }
+function rememberIncident(id) { if (id) incidentMemory.set(conversationId(), String(id)); }
+function rememberedIncident() { return incidentMemory.get(conversationId()) || null; }
 function forgetConversation() {
   deviceMemory.delete(conversationId());
   pendingChoice.delete(conversationId());
+  incidentMemory.delete(conversationId());
+}
+
+// Which of THIS console's own incidents does this sub-question point at?
+//   1. the planner's STRUCTURED incident id (`hint`) — the reliable path, the
+//      same idiom as the structured `device` field CLASS 2 established;
+//   2. otherwise any incident id the operator quoted in the sub-question — pure
+//      identity resolution over an id this console mints, never intent guessing;
+//   3. otherwise the incident THIS conversation already settled on.
+// Nothing is invented: an id that resolves to no record is still returned, and
+// incidentRead.recordText() answers it with a plain "no such incident".
+function ownIncidentIdsFor(topic, hint) {
+  const fromPlan = typeof hint === 'string' && incidentRead.idsMentionedIn(hint).length
+    ? incidentRead.idsMentionedIn(hint)
+    : [];
+  if (fromPlan.length) { rememberIncident(fromPlan[0]); return fromPlan; }
+  const quoted = incidentRead.idsMentionedIn(topic);
+  if (quoted.length) { rememberIncident(quoted[0]); return quoted; }
+  const remembered = rememberedIncident();
+  return remembered ? [remembered] : [];
 }
 function rememberPendingChoice(p) { pendingChoice.set(conversationId(), { ...p, at: Date.now() }); }
 function pendingChoiceNow() { return pendingChoice.get(conversationId()) || null; }
@@ -837,6 +868,26 @@ function resumeClarification(agentId, message) {
     return true;
   }
 
+  // A FRESH COMMAND SUPERSEDES THE PARKED ONE. This test has to run BEFORE the
+  // name / number matches below, and that ordering IS the fix (QA, logged):
+  // "show running-config on sw3" sent while "show version" was parked used to hit
+  // the candidate-name match on "sw3" and replay the PARKED command — the
+  // operator asked for the running-config and got a version read on a box they
+  // named. A message that carries its own read command is not an answer to
+  // "which device?" at any length; it is the operator moving on. We drop the
+  // parked question, say so out loud (it was never sent anywhere), and let the
+  // new request route normally.
+  //
+  // Class-level, not case-level: the rule is about the SHAPE of the message
+  // (does it name its own command?), so it holds for every read verb, every
+  // device name, and every phrasing — not just the one sentence QA found.
+  if (isDeviceCliRequest(text)) {
+    pendingChoice.delete(conversationId());
+    say(p.agentId,
+      `↪️ New request — dropping the question I had parked. "${p.command}" was never sent to any device.`);
+    return false;
+  }
+
   // "all" → run it on every reachable box, each output labelled.
   if (wantsAllDevices(t)) {
     pendingChoice.delete(conversationId());
@@ -866,9 +917,10 @@ function resumeClarification(agentId, message) {
     return true;
   }
 
-  // Not an answer, but a whole new request (a real command, or a full sentence)
-  // → let go of the parked question and route it normally. Never swallow it.
-  if (isDeviceCliRequest(text) || t.split(/\s+/).length > 6) {
+  // Not an answer, but a whole new request (a full sentence — the command shape
+  // is already handled above) → let go of the parked question and route it
+  // normally. Never swallow it.
+  if (t.split(/\s+/).length > 6) {
     pendingChoice.delete(conversationId());
     return false;
   }
@@ -1412,22 +1464,57 @@ const DEBATE_BUILDERS = {
   },
 
   'incident-handler': {
-    source: () => `${catalyst.label} / ${aci.label}`,
-    async build(topic) {
-      const issues = await catalyst.getIssues();
-      let faultLine;
+    source: () => `this console's own incident record / ${catalyst.label} / ${aci.label}`,
+    // QA CLASS 9 — the silo is closed here. `hint` is the STRUCTURED incident id
+    // the planner resolved (same idiom as config-keeper's `device`); when the
+    // planner names none, any id the operator quoted in the sub-question is
+    // resolved as a fallback. THIS CONSOLE'S OWN incidents lead the finding —
+    // they are the ones an operator means by "the latest incident" — and the
+    // external sources follow. Every part is real live state or an honest gap.
+    // Arg 2 is the planner's structured DEVICE (config-keeper's target) and is
+    // meaningless here; arg 3 is the structured INCIDENT id. Positional, so no
+    // caller has to branch on which agent it is talking to.
+    async build(topic, _planDevice, hint) {
+      const parts = [];
+
+      // 1. This console's OWN incidents (the record the desk shows).
+      try {
+        const wanted = ownIncidentIdsFor(topic, hint);
+        if (wanted.length) {
+          // A named incident: the full honest record, or a plain not-found.
+          parts.push(wanted.map((id) => incidentRead.recordText(id)).join('\n\n'));
+          // Ground the named look-up in the wider list too, so a mistyped id can
+          // be answered with the real ones rather than a dead end.
+          parts.push(incidentRead.summaryText(12));
+        } else {
+          parts.push(incidentRead.summaryText(12));
+        }
+      } catch (e) {
+        parts.push(`This console's own incident record could not be read (${e.message}), so I am not claiming anything about it.`);
+      }
+
+      // 2. Catalyst Center's open issues (external, unchanged).
+      try {
+        const issues = await catalyst.getIssues();
+        parts.push(`Catalyst Center (${catalyst.host}) lists ${issues.length} open issue(s)` +
+          (issues.length ? ` — ${issues.slice(0, 3).map((i) => `${i.priority} ${i.name} (${i.status}, seen ${i.occurrences}x)`).join('; ')}` : '') + '.');
+      } catch (e) {
+        parts.push(`Catalyst Center issue feed unreachable (${e.message}), so I have no open issues from it to add.`);
+      }
+
+      // 3. ACI fabric faults (external, unchanged).
       try {
         const faults = await aci.getFaults(['critical', 'major']);
         const crit = faults.filter((f) => f.severity === 'critical').length;
-        faultLine = `ACI fabric (${aci.host}) has ${crit} critical and ${faults.length - crit} major fault(s)` +
-          (faults.length ? ` — e.g. F${faults[0].code} ${String(faults[0].description || '').slice(0, 80)}` : '');
+        parts.push(`ACI fabric (${aci.host}) has ${crit} critical and ${faults.length - crit} major fault(s)` +
+          (faults.length ? ` — e.g. F${faults[0].code} ${String(faults[0].description || '').slice(0, 80)}` : '') + '.');
       } catch (e) {
-        faultLine = `ACI fault feed unreachable (${e.message}), so I have no fabric faults to add`;
+        parts.push(`ACI fault feed unreachable (${e.message}), so I have no fabric faults to add.`);
       }
-      return `Open incidents right now: Catalyst Center lists ${issues.length} issue(s)` +
-        (issues.length ? ` — ${issues.slice(0, 3).map((i) => `${i.priority} ${i.name} (${i.status}, seen ${i.occurrences}x)`).join('; ')}` : '') +
-        `. ${faultLine}.\nOn ${shortTopic(topic)}: that is what is already open. ` +
-        `I have no incident history beyond what these sources return, so I am not citing past outages.`;
+
+      return parts.join('\n\n') +
+        `\n\nOn ${shortTopic(topic)}: the incidents above are this console's own record plus what the ` +
+        `external sources report right now. I am citing nothing beyond them.`;
     },
   },
 
@@ -1579,7 +1666,7 @@ const DEBATE_BUILDERS = {
 //
 // Returns { agentId, name, connected, stance, text }:
 //   stance ∈ 'evidence' | 'not-connected' | 'denied' | 'unreachable'
-async function gatherForJarvis(agentId, question, planDevice) {
+async function gatherForJarvis(agentId, question, planDevice, planIncidentId) {
   // CLASS FIX (CLI routing): a "run <show/ping/traceroute/dir/more> on <device>"
   // sub-question is a DEVICE CLI job. Only Config-Keeper holds the Command Runner
   // path, so whoever the planner picked, the execution seam re-points it there
@@ -1652,8 +1739,10 @@ async function gatherForJarvis(agentId, question, planDevice) {
             reasoning: 'Jarvis (Principal Engineer) delegated this read to answer its sub-question.',
           },
           // planDevice (CLASS 2): the config-keeper builder uses it as the
-          // STRUCTURED CLI target; other builders ignore the extra arg.
-          () => builder.build(question, planDevice),
+          // STRUCTURED targets the planner resolved: arg 2 = the CLI device
+          // (config-keeper), arg 3 = the incident id (incident-handler, CLASS 9).
+          // Positional and additive — every other builder ignores both.
+          () => builder.build(question, planDevice, planIncidentId),
         ));
 
       if (g.denied) {
@@ -1770,9 +1859,14 @@ const CAPABILITIES = {
     // "triage my landlord problem" through as a real live read (dictionary
     // overlap). A real network noun (incident, fault, device, fabric…) must be
     // named, so a nonsense triage is refused honestly instead of running a read.
-    subjects: /\b(incident|incidents|fault|faults|issue|issues|outage|rca|root[\s-]?cause|impact|severity|critical|major|network|fabric|aci|catalyst|device|devices)\b/i,
-    verbs: ['triage', 'diagnose', 'troubleshoot', 'investigate'],
+    subjects: /\b(incident|incidents|inc-\d+|trg-|fault|faults|issue|issues|outage|rca|root[\s-]?cause|impact|severity|critical|major|handover|hand[\s-]?off|shift|bridge|verdict|hypothesis|owner|commander|network|fabric|aci|catalyst|device|devices)\b/i,
+    verbs: ['triage', 'diagnose', 'troubleshoot', 'investigate', 'summarise', 'summarize', 'hand over', 'handover', 'brief'],
     can: [
+      // QA CLASS 9 — say OUT LOUD, in the roster the planner reasons over, that
+      // this console's OWN incidents are readable. The planner cannot delegate a
+      // question about INC-… if nothing on the roster claims to see it.
+      "read THIS console's own incident record — every incident this app has opened, by its INC-… or trg-… id: severity, status, title, who opened it, the roles on the bridge (commander/owner/scribe/joiners), when it opened and closed, and the committed verdict (ranked hypothesis, next check, confidence, correlation)",
+      "answer 'what is the latest incident', 'summarise INC-…', 'who is on this incident', and shift-handover questions from that record — and say plainly when an incident id does not exist, rather than inventing one",
       'read open issues from Catalyst Center',
       'read critical faults from the ACI fabric (when the APIC is reachable)',
     ],
@@ -1901,4 +1995,10 @@ module.exports = {
   // "forget the device" reset. server.js calls these BEFORE it routes anything,
   // so both surfaces (Jarvis and a direct @mention) inherit the same behaviour.
   resumeClarification, maybeForget,
+  // QA CLASS 9 — exposed for the isolation tests: per-conversation memory must be
+  // provably separate between operators, and there is no other way to observe it.
+  _conversation: {
+    rememberedDevice, rememberDevice, rememberedIncident, rememberIncident,
+    pendingChoiceNow, rememberPendingChoice, forgetConversation, ownIncidentIdsFor,
+  },
 };
