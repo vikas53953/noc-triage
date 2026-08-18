@@ -872,9 +872,20 @@ approvals.setBroadcast((type, data) => {
 // Surface a problem on the dashboard instead of dying quietly (or loudly).
 // The detail stays in the server log; the browser gets plain words.
 function reportSystemError(what, err) {
-  const detail = err && err.message ? err.message : String(err || '');
-  console.error(`[System] ${what}: ${detail}`);
-  broadcast('system_error', { message: `${what} — check the server window for detail.` });
+  // BULLETPROOF: this runs from the process-level uncaughtException /
+  // unhandledRejection guards, so it must NEVER throw itself — a throw here
+  // (e.g. broadcast failing mid-fault during a bad WS send) would defeat the
+  // guard and force Node to exit 1. Everything is wrapped so a stray async
+  // error anywhere (watcher callback, audit write, broadcast) can never take
+  // the whole server down.
+  try {
+    const detail = err && err.message ? err.message : String(err || '');
+    console.error(`[System] ${what}: ${detail}`);
+    if (err && err.stack) console.error(err.stack);
+  } catch (_) { /* logging must not crash the guard */ }
+  try {
+    broadcast('system_error', { message: `${what} — check the server window for detail.` });
+  } catch (_) { /* a failing broadcast must not crash the guard */ }
 }
 
 // Every failed write in the app lands here.
