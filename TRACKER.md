@@ -222,3 +222,14 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
   isDeviceCliRequest — conversational change asks route to the change-proposal path (pre-existing; verify in review).
 - Reviewer (own clone noc-rev52, port 3106) running adversarial sweep with FRESH attack strings; merges if it holds.
 - LLM-path verification still pending credits (deterministic-only evidence).
+
+## 2026-08-18 ~14:20 — autonomous resume (fresh session)
+- Prior session's #52 reviewer died before reporting (only PR comment = Codex usage-limit noise, not a
+  review). RELAUNCHED independent adversarial reviewer (Opus, clone noc-rev52, port 3106, fresh attack
+  strings, deterministic paths only — LLM credits still exhausted). It merges #52 only if it holds.
+- FIXED the duplicate-session launcher bug (logged 09:50): autonomous-resume.ps1 alive-check looked for
+  node.exe, but claude runs as claude.exe → matched nothing → stacked sessions. Class fix: detect a live
+  driver by WORK PRODUCT (newest of .git HEAD/FETCH_HEAD/index, TRACKER.md, autoresume.log modified
+  <30 min ago ⇒ skip), not process names — also immune to idle/stale claude.exe windows blocking resume
+  forever. Dry-run verified (fresh fetch ⇒ skip=True; syntax OK).
+- Next after #52 verdict: Class 9 rebuild (fix/chat-sees-incidents, shares server.js), then Class 5+6.

@@ -10,13 +10,26 @@ $ErrorActionPreference = 'SilentlyContinue'
 $repo = 'C:\Users\vikasmit\noc-triage'
 $lock = Join-Path $env:TEMP 'noc-triage-autoresume.lock'
 
-# Only resume when NO session is alive. If a claude/node session is already
-# running, a live session (interactive or a prior resume) is handling the work —
-# skip, so we never stack two sessions pushing to the same repo. This launcher
-# is meant to revive the work ONLY after a session has died (e.g. quota wall).
-$alive = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
-  Where-Object { $_.CommandLine -match 'claude' }
-if ($alive) { exit 0 }
+# Only resume when NO driver is actively working this repo. Process-name checks
+# proved wrong twice (claude runs as claude.exe, not node.exe — the old check
+# matched nothing and stacked sessions; and idle/stale claude.exe windows would
+# make an "any claude.exe" check block resume forever). Class fix: detect a live
+# driver by its WORK PRODUCT — any driver (interactive, headless, another
+# launcher) touches the repo's git state / TRACKER / log every turn. If none of
+# those changed recently, the work is dead and a resume is warranted. A rare
+# duplicate spawn during a long quiet turn is tolerated waste (TRACKER rule:
+# every driver re-checks PR state before merging); a never-firing launcher is not.
+$signals = @(
+  (Join-Path $repo '.git\HEAD'),
+  (Join-Path $repo '.git\FETCH_HEAD'),
+  (Join-Path $repo '.git\index'),
+  (Join-Path $repo 'TRACKER.md'),
+  (Join-Path $repo 'autoresume.log')
+)
+$latest = $signals | Where-Object { Test-Path $_ } |
+  ForEach-Object { (Get-Item $_).LastWriteTime } |
+  Sort-Object -Descending | Select-Object -First 1
+if ($latest -and ((Get-Date) - $latest).TotalMinutes -lt 30) { exit 0 }
 
 # Second guard: don't stack rapid re-launches.
 if (Test-Path $lock) {
