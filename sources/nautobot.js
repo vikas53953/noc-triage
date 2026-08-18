@@ -93,27 +93,64 @@ const NOT_CONNECTED_NOTE =
 // short Cisco abbreviations are expanded, case + surrounding space dropped. This
 // is intent (same physical port), not fabrication — we never merge two genuinely
 // different ports, only two spellings of the same one.
-const IFACE_ABBR = [
-  [/^gi(?=[\d/])/, 'gigabitethernet'],
-  [/^ge(?=[\d/])/, 'gigabitethernet'],
-  [/^te(?=[\d/])/, 'tengigabitethernet'],
-  [/^tw(?=[\d/])/, 'twentyfivegige'],
-  [/^fo(?=[\d/])/, 'fortygigabitethernet'],
-  [/^hu(?=[\d/])/, 'hundredgige'],
-  [/^fa(?=[\d/])/, 'fastethernet'],
-  [/^eth(?=[\d/])/, 'ethernet'],
-  [/^et(?=[\d/])/, 'ethernet'],
-  [/^po(?=\d)/, 'port-channel'],
-  [/^lo(?=\d)/, 'loopback'],
-  [/^vl(?=\d)/, 'vlan'],
-  [/^tu(?=\d)/, 'tunnel'],
-];
+//
+// THE RULE (fixed as a class, PR #69 review): collapse EVERY spelling of a family
+// to ONE canonical stem — every short code AND every long form. Both "…GigE" and
+// "…GigabitEthernet" long spellings, and the short code, must converge, or a
+// high-speed uplink written three ways (Te1/1/1 vs TenGigE1/1/1 vs
+// TenGigabitEthernet1/1/1 — the SAME physical port) would mismatch and invent a
+// phantom "undocumented + absent" diff pair. The old table expanded a short code
+// to ONE chosen long form but left the real long spellings un-normalised and the
+// per-family targets disagreed (te→"tengigabitethernet" while hu→"hundredgige"),
+// so it only truly matched Fa/Gi. This maps the whole leading TYPE token (short
+// or long) through one lookup, then reattaches the numeric index unchanged.
+//
+// Keyed by the full type token, lowercased with spaces/hyphens removed. Order of
+// keys is irrelevant — it is an exact-token lookup, never a prefix/substring
+// match, so "gigabitethernet"→gi and "tengigabitethernet"→te never collide.
+const IFACE_TYPE_STEM = {
+  // Fast Ethernet (100M)
+  fa: 'fa', fast: 'fa', fastethernet: 'fa',
+  // Gigabit Ethernet (1G)
+  gi: 'gi', ge: 'gi', gig: 'gi', gige: 'gi', gigabit: 'gi', gigabitethernet: 'gi',
+  // 10 Gigabit
+  te: 'te', ten: 'te', tengig: 'te', tengige: 'te', tengigabit: 'te', tengigabitethernet: 'te',
+  // 25 Gigabit
+  twe: 'twe', twa: 'twe', twentyfive: 'twe', twentyfivegig: 'twe', twentyfivegige: 'twe', twentyfivegigabitethernet: 'twe',
+  // 40 Gigabit
+  fo: 'fo', forty: 'fo', fortygig: 'fo', fortygige: 'fo', fortygigabitethernet: 'fo',
+  // 50 Gigabit
+  fi: 'fi', fifty: 'fi', fiftygig: 'fi', fiftygige: 'fi', fiftygigabitethernet: 'fi',
+  // 100 Gigabit
+  hu: 'hu', hun: 'hu', hundred: 'hu', hundredgig: 'hu', hundredgige: 'hu', hundredgigabitethernet: 'hu',
+  // 200 / 400 Gigabit
+  twohundredgige: 'tw2', twohundredgigabitethernet: 'tw2',
+  fourhundredgige: 'fh', fourhundredgigabitethernet: 'fh',
+  // Generic Ethernet (Nexus / Arista short "Et")
+  et: 'et', eth: 'et', ethernet: 'et',
+  // Port-channel / LAG bundle
+  po: 'po', portchannel: 'po', 'port-channel': 'po', lag: 'po', bundle: 'po', 'bundle-ether': 'po',
+  // Loopback
+  lo: 'lo', loop: 'lo', loopback: 'lo',
+  // VLAN / SVI
+  vl: 'vl', vlan: 'vl',
+  // Tunnel
+  tu: 'tu', tun: 'tu', tunnel: 'tu',
+  // Management
+  ma: 'mgmt', mgmt: 'mgmt', mgmteth: 'mgmt', management: 'mgmt', managementethernet: 'mgmt',
+};
 function normIface(name) {
-  let s = String(name == null ? '' : name).trim().toLowerCase().replace(/\s+/g, '');
-  for (const [re, full] of IFACE_ABBR) {
-    if (re.test(s)) { s = s.replace(re, full); break; }
-  }
-  return s;
+  const s = String(name == null ? '' : name).trim().toLowerCase().replace(/\s+/g, '');
+  if (!s) return s;
+  // Split the leading TYPE token (letters, allowing an internal hyphen like
+  // "port-channel" or "bundle-ether") from the numeric INDEX (1/0/1, 10, 0/0/0,
+  // 0/1.100 …). A name that is all letters (rare) keeps its own token as-is.
+  const m = /^([a-z]+(?:-[a-z]+)*)[\s-]*(\d.*)?$/.exec(s);
+  if (!m) return s;
+  const type = m[1];
+  const index = (m[2] || '').replace(/^[-\s]+/, '');
+  const stem = IFACE_TYPE_STEM[type] || type; // unknown type → compare by its own spelling
+  return stem + index;
 }
 
 // ── Low-level HTTP(S) GET. Never rejects — resolves { ok, status, body } or ───
@@ -369,6 +406,14 @@ function index(list) {
   return m;
 }
 
+// A presence gap is an interface on one side only — not a value that disagrees.
+// Used only for the honest "records likely incomplete" framing on a big drift.
+function isPresenceGap(d) {
+  return /absent on device/.test(String(d.actual))
+    || /present on device \(undocumented\)/.test(String(d.actual))
+    || String(d.intended) === 'not in Nautobot';
+}
+
 // ── reconcile — the one public operation ────────────────────────────────────
 // Compares Nautobot's INTENDED state for `device` against the LIVE/ACTUAL read
 // and returns the honest verdict. Shape (always these keys):
@@ -422,9 +467,22 @@ async function reconcile(deviceArg, opts = {}) {
   // 3) Compare intended vs actual → honest differences + verdict.
   const differences = diff(intended, actual);
   const verdict = differences.length ? 'drift' : 'in-sync';
-  const note = verdict === 'in-sync'
+  let note = verdict === 'in-sync'
     ? `${device} matches Nautobot's source of truth — no drift found across ${countChecked(intended)} intended field(s).`
     : `${device} has drifted from Nautobot's source of truth — ${differences.length} difference(s) between intended and actual.`;
+  // Honest framing (PR #69 review): when the drift is mostly PRESENCE gaps —
+  // interfaces the device has that Nautobot does not list — that usually means
+  // the Nautobot RECORDS are incomplete for this device, not that the network is
+  // rogue. Say so plainly rather than let a big count read as an alarm.
+  if (verdict === 'drift') {
+    const gaps = differences.filter(isPresenceGap).length;
+    const undocumented = differences.filter((d) => /present on device \(undocumented\)/.test(String(d.actual))).length;
+    if (gaps >= 3 && gaps > differences.length - gaps) {
+      note += undocumented >= gaps - undocumented
+        ? ' Most of these are interfaces the device has but Nautobot does not list — that usually means the Nautobot records are incomplete for this device, not that the network is rogue. Filling in the intended interfaces will sharpen the comparison.'
+        : ' Most of these are presence gaps between the records and the live device — likely incomplete Nautobot records rather than a misconfigured network. Reconcile the inventory to sharpen the comparison.';
+    }
+  }
 
   recordReconcile({ device, verdict, differenceCount: differences.length, connected: true });
   auditReconcile(device, verdict, differences.length);

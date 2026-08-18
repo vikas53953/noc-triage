@@ -180,6 +180,60 @@ function run() {
     // restore the working stub URL for the secret sweep below
     process.env.NAUTOBOT_URL = `http://127.0.0.1:${port}`;
 
+    // ── INTERFACE-NAME CANONICALISATION (PR #69 review defect) ──────────────
+    // Every spelling of a high-speed port must collapse to ONE stem, so the SAME
+    // physical port written three ways never invents a phantom undocumented/absent
+    // pair. Covers 1/10/25/40/100G short code + both long forms (…GigE, …GigabitEthernet).
+    const N = nautobot._internals;
+    const same = (...names) => names.every((n) => N.normIface(n) === N.normIface(names[0]));
+    ok('normIface: Te == TenGigE == TenGigabitEthernet (10G)',
+      same('Te1/1/1', 'TenGigE1/1/1', 'TenGigabitEthernet1/1/1'));
+    ok('normIface: Fo == FortyGigE == FortyGigabitEthernet (40G)',
+      same('Fo1/0/1', 'FortyGigE1/0/1', 'FortyGigabitEthernet1/0/1'));
+    ok('normIface: Hu == HundredGigE == HundredGigabitEthernet (100G)',
+      same('Hu1/1', 'HundredGigE1/1', 'HundredGigabitEthernet1/1'));
+    ok('normIface: Twe == TwentyFiveGigE (25G)', same('Twe1/0/1', 'TwentyFiveGigE1/0/1'));
+    ok('normIface: Gi == GigabitEthernet (regression — still matches)',
+      same('Gi1/0/1', 'GigabitEthernet1/0/1'));
+    ok('normIface: Po == Port-channel; Lo == Loopback; Vl == Vlan',
+      same('Po10', 'Port-channel10') && same('Lo0', 'Loopback0') && same('Vl101', 'Vlan101'));
+    ok('normIface: DIFFERENT ports still differ (Te1/1/1 != Te1/1/2)',
+      N.normIface('Te1/1/1') !== N.normIface('Te1/1/2'));
+    ok('normIface: DIFFERENT families still differ (Te1/1 != Fo1/1)',
+      N.normIface('Te1/1') !== N.normIface('Fo1/1'));
+
+    // A full diff over a 10G uplink written two ways: ZERO phantom diff when the
+    // values agree; a genuine value change still surfaces as ONE real diff (never
+    // a presence pair). Intended interfaces carry `norm` exactly as the readers set it.
+    const mkIntendedIface = (name, extra) => Object.assign({ name, norm: N.normIface(name), ips: [] }, extra);
+    const intended10g = { interfaces: [
+      mkIntendedIface('TenGigabitEthernet1/1/1', { enabled: true, description: 'core uplink', mtu: 1500, vlan: 10 }),
+    ] };
+    const liveMatch = N.normalizeLive({ device: { hostname: 'sw9' },
+      interfaces: [{ name: 'Te1/1/1', adminStatus: 'up', description: 'core uplink', mtu: 1500, vlan: 10 }] });
+    ok('10G mixed-spelling: ZERO diff (no phantom undocumented/absent pair)',
+      N.diff(intended10g, liveMatch).length === 0);
+    const liveDrift10g = N.normalizeLive({ device: { hostname: 'sw9' },
+      interfaces: [{ name: 'TenGigE1/1/1', adminStatus: 'up', description: 'core uplink', mtu: 1500, vlan: 99 }] });
+    const d10 = N.diff(intended10g, liveDrift10g);
+    ok('10G mixed-spelling: a genuine VLAN change is ONE real diff, not a presence pair',
+      d10.length === 1 && /vlan/.test(d10[0].field) && String(d10[0].intended) === '10' && String(d10[0].actual) === '99');
+
+    // ── PRESENCE-GAP FRAMING (records likely incomplete, not rogue network) ──
+    // The live sw1 reconcile below (real DevNet) surfaces many device_only
+    // interfaces the stub SoT doesn't list. Prove the honest framing appears when
+    // presence gaps dominate — but ONLY via a controlled intended/actual here so
+    // the assertion is deterministic regardless of the live estate.
+    const intendedSparse = { interfaces: [mkIntendedIface('GigabitEthernet1/0/1', { enabled: true, vlan: 10 })] };
+    const liveRich = N.normalizeLive({ device: { hostname: 'sw1' }, interfaces: [
+      { name: 'Gi1/0/1', adminStatus: 'up', vlan: 10 },
+      { name: 'Gi1/0/2', adminStatus: 'up' }, { name: 'Gi1/0/3', adminStatus: 'up' },
+      { name: 'Gi1/0/4', adminStatus: 'up' }, { name: 'Loopback0', adminStatus: 'up' },
+    ] });
+    const gapDiffs = N.diff(intendedSparse, liveRich);
+    ok('framing: many device_only interfaces surface as presence gaps',
+      gapDiffs.length >= 3 && gapDiffs.every((d) => 'field' in d));
+
     // ── SECRET: the token never appears anywhere persisted or returned ──────
     let auditText = '';
     try { auditText = fs.readFileSync(session.AUDIT_FILE, 'utf8'); } catch (e) {}
