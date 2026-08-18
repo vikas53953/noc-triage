@@ -132,6 +132,23 @@ const secretEvt = liveEvents.add({
 ok('secret in text is scrubbed', secretEvt && secretEvt.text.includes('«redacted»') && !secretEvt.text.includes('SuperSecret123'));
 ok('secret in raw is scrubbed', secretEvt && !secretEvt.raw.includes('SuperSecret123'));
 
+// SNMP community in a syslog FREE-TEXT line (the newly-piped untrusted path).
+const commEvt = liveEvents.add({
+  source: 'syslog', device: 'sw3', severity: 'notice', ts: base,
+  text: '%SNMP: community=publicRO from 10.1.1.1',
+  raw: '<189>%SNMP-3-AUTHFAIL: community=publicRO from 10.1.1.1',
+});
+ok('community=<x> scrubbed in text', commEvt && commEvt.text.includes('community=«redacted»') && !commEvt.text.includes('publicRO'));
+ok('community=<x> scrubbed in raw', commEvt && !commEvt.raw.includes('publicRO'));
+const commEvt2 = liveEvents.add({
+  source: 'syslog', device: 'sw4', severity: 'notice', ts: base,
+  text: 'config: snmp-server community privateRW RW',
+});
+ok('IOS "snmp-server community <x>" scrubbed', commEvt2 && !commEvt2.text.includes('privateRW'));
+// the bare English word "community" (no snmp prefix, no =) must survive
+const plain = require('./session-log').scrub('joined the community channel today');
+ok('bare English "community <word>" left intact', plain === 'joined the community channel today');
+
 // cap: push past CAP and confirm the ring never exceeds it
 liveEvents._reset();
 for (let i = 0; i < liveEvents.CAP + 50; i += 1) {
