@@ -4,7 +4,7 @@
 first. Vikas is AWAY; work is FULLY AUTONOMOUS — no waiting for his approval. Fix the CLASS not the case.
 Every reviewable thing he sees = a visual HTML page. Never fabricate. Keep this file updated every turn.
 
-Last updated: 2026-08-17 ~22:40 IST · driver: Fable session 7d4aaef3
+Last updated: 2026-08-18 · driver: fresh Fable session (autonomous resume)
 
 ## Mode & standing orders (Vikas, 2026-08-17)
 - FULLY AUTONOMOUS. Do not wait for approval/permission. Run QA from every angle, write a spec report,
@@ -90,3 +90,12 @@ Last updated: 2026-08-17 ~22:40 IST · driver: Fable session 7d4aaef3
 
 - Class 3+4 flagged: sources/alerts.js has its OWN NETWORK_SUBJECT copy (machine-alert path) — consider same
   plain-words treatment later (separate non-operator path, low priority).
+
+## DRIVER COORDINATION (2026-08-18 ~09:50 IST)
+- The 30-min launcher spawned a SECOND live session while the 2026-08-17 session was still alive (its
+  "skip if alive" check failed — fix autonomous-resume.ps1 later: detect a live claude driver properly).
+- New session (launched 09:48) has adversarial+operator reviews IN FLIGHT for PR #47, #48, #49 (separate
+  clones noc-rev47/48/49, ports 3101-3103, report-only — they do NOT merge).
+- RULE for every driver: before ANY merge, `git fetch` + `gh pr view <n>` — if already merged, skip and
+  move on. Merge order stays #47 → #48/#49 → then build #7/#9 on the fresh master. Duplicate reviews are
+  acceptable waste; duplicate MERGES are not.
