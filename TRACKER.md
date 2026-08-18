@@ -324,3 +324,17 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
   honest-stuck, then plans the fix (change proposal via CW-2). Decision: confidence + safety-cap model.
   Contract docs/copilot-cw7-contract.md. Backend+UI pair. LLM-heavy → deterministic verify (stubbed planner)
   now, real multi-round test on credits.
+
+## 2026-08-18 — master branch protected
+- GitHub branch protection on master: force-push BLOCKED, deletion BLOCKED, direct pushes STILL ALLOWED
+  (no required-PR/status-checks — keeps the autonomous merge-then-push flow). Safety net against history rewrite/wipe.
+
+## 2026-08-19 — NetClaw pull: A1/A2/A4 building (Vikas approved A1→A2→A4)
+- Assessment: docs/netclaw-assessment.md + visual page https://claude.ai/code/artifact/ccdf5935-1fb2-41f1-a208-086a217135f3
+- CW-8/A1: MCP connector for Jarvis (mcp-client.js + jarvis/server/capabilities) — the unlock. Contract
+  docs/copilot-cw8-contract.md. Behind the gate, read-only, honest-if-no-servers, proven vs a stub MCP server.
+- A2: grow catalyst-center.js from netclaw catc read catalogue (pure Node, no MCP, Apache-2.0 attribution).
+- A4: native Node syslog + SNMP-trap live feeds → live-events store the bridge reasons over; honest not-receiving.
+- Parallel on mostly-disjoint files (A1+A4 share server.js — A4 keeps its block minimal/separable). Credits
+  out → deterministic build/verify; Jarvis choosing an MCP tool + live feed reasoning = end test on credits.
+- Note: NOT auto-wiring any real external MCP server yet — security vetting first (per assessment).
