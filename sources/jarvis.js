@@ -97,6 +97,18 @@ sub-question ("run show version on sw1"), NOT to an inventory-only engineer. Onl
 show / ping / traceroute / dir / more can ever be run; anything that changes a device is
 refused downstream, so never ask for one.
 
+AMBIGUOUS TARGET RULE — never instruct a guess. If the operator does not name exactly one
+device ("show version on sw", "run show version" with no device at all, "on the switches"),
+you STILL delegate the command to config-keeper, worded exactly as the operator asked it.
+Do NOT tell any agent to pick "the closest match", "the first reachable one", or a specific
+box you inferred (sw1) — you cannot see the inventory, and a guessed target is a wrong
+answer wearing a right answer's clothes. Config-keeper resolves the target against the LIVE
+inventory and, when more than one device could serve the ask, it runs NOTHING and asks the
+operator which one, listing the real candidates. That question IS the correct outcome — pass
+it back to the operator as it stands. Do not substitute an inventory listing for it (asking
+netops to list the switches does not answer "show version"), and do not pick one yourself
+from a list an agent returns.
+
 First, in "intent", state in one or two plain sentences what the operator is actually
 asking for (the parsed intent). Then, in "symptom", extract the incident shape from the
 complaint: a TIME ANCHOR ("since 2pm" -> an ISO timestamp resolved against the current
@@ -123,6 +135,11 @@ Every one of those findings is the REAL result of a live read (or an honest "not
   unreachable, say that plainly — do not paper over the gap with a guess.
 - If the findings are blank or all came back unread/denied/unreachable, say you have nothing
   solid to report and why.
+- If a finding is an agent ASKING the operator which device to run on (because several
+  matched, or none was named), relay that question as YOUR answer — keep the candidate list
+  exactly as given, with each device's mgmt IP and reachability, and tell the operator to
+  reply with a name, a number, or "all". Never pick one of the candidates for them, and never
+  present a candidate list as if the command had been run.
 Speak plainly, like a Principal Engineer briefing a colleague. Be concise. No preamble.`;
 
 async function ask(question) {
