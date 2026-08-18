@@ -385,6 +385,17 @@ async function executeDeviceCli({ agentId, request, purpose, announce, device, a
     return writeRefusal(agentId, raw, split.change, null);
   }
   const refusedChange = split.compound ? split.change : null;
+  // THE SAME SINK, for the change half of a COMPOUND ask. A compound refusal is
+  // still a refused write, so it belongs on the record here — at the DECISION —
+  // for the same reason the whole-request refusal does: the renderers differ,
+  // and the one that runs next may never run at all. When the read half throws
+  // (source unreachable) the caller's catch said only "source unreachable", and
+  // the refused change vanished — no message, no activity line, no audit. Said
+  // and recorded here, it survives whatever happens to the read.
+  if (refusedChange) {
+    auditRefusedWrite(agentId, raw, { ...refusedChange, compound: true });
+    if (announce) say(agentId, changeRefusalText(refusedChange).trimEnd());
+  }
   // From here on the ONLY text considered is the read half.
   const readOnlyText = refusedChange ? split.readText : raw;
 
@@ -912,15 +923,10 @@ async function configKeeper(agentId, command, opts) {
       purpose: `operator asked: "${raw.slice(0, 80)}"`,
     });
 
-    // COMPOUND ask: the change half is refused OUT LOUD before anything else is
-    // said, so the read below can never be mistaken for the change going ahead.
-    if (res.refusedChange) {
-      say(agentId, `${changeRefusalText(res.refusedChange)}`.trimEnd());
-      ctx.appendToActivityLog(
-        `[${new Date().toISOString()}] [${agentName}] Refused the change half of a compound ask ` +
-        `("${res.refusedChange.keyword}") — ran the read half only
-`);
-    }
+    // COMPOUND ask: the change half is refused OUT LOUD and put on the record by
+    // executeDeviceCli, at the moment it is decided — not here. Saying it here
+    // meant the message and the activity line were lost whenever the read half
+    // threw before returning. See the refusal sink in executeDeviceCli.
 
     if (res.refused && res.kind === 'write') {
       refuseWrite(agentId, raw, res.intent);
@@ -1252,15 +1258,23 @@ function auditRefusedWrite(agentId, command, intent) {
   const agentName = (ctx && ctx.agents && ctx.agents[agentId] && ctx.agents[agentId].name) || agentId;
   const what = String(command || '').slice(0, 60);
   const word = (intent && intent.keyword) ? intent.keyword : 'a state-changing request';
+  // A COMPOUND ask ("reload sw2 then show version") has its change half refused
+  // while the read half still runs, so this record must not claim nothing was
+  // sent to any device — the read was. Every record has to be true on its own.
+  const half = Boolean(intent && intent.compound);
+  const tail = half
+    ? 'refused the change half — only the read half was run'
+    : 'nothing sent to any device';
   try {
     ctx.appendToActivityLog(
       `[${new Date().toISOString()}] [${agentName}] Refused a state-changing request ("${word}") — ` +
-      `"${what}" — nothing sent to any device\n`);
+      `"${what}" — ${tail}\n`);
   } catch (e) { /* activity log must never break the refusal */ }
   try {
     session.audit({
       what: `ask: ${String(command || '').slice(0, 200)}`,
-      result: `refused — change request ("${word}") on a read-only path (zero device calls)`,
+      result: `refused — change request ("${word}") on a read-only path ` +
+        (half ? '(change half refused; the read half ran)' : '(zero device calls)'),
     });
   } catch (e) { /* audit store must never break the refusal */ }
 }

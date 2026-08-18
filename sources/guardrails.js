@@ -141,6 +141,25 @@ for (const base of STATE_CHANGING) {
 // A read verb must never be shadowed by a generated write form.
 for (const rv of READ_VERBS) WRITE_FORM_TO_BASE.delete(rv);
 
+// PUNCTUATION INSIDE THE VERB (reviewer fix, class-level). tokensOf keeps
+// hyphens and apostrophes, so a verb somebody typed with punctuation in it
+// ("re-set the host-name on sw1", "re-load sw2", "shut-down gi1/0/3") missed the
+// lookup entirely and the whole intent screen fell silent — the operator got
+// "I could not find a read command" for what was plainly a change. Same class as
+// the carrier and adverb shields: nothing standing inside or in front of the
+// verb may hide it. The raw form is tried FIRST (so nothing already recognised
+// changes), then the same token with its punctuation removed.
+function writeBaseOf(tok) {
+  if (!tok) return undefined;
+  const raw = String(tok);
+  const direct = WRITE_FORM_TO_BASE.get(raw);
+  if (direct) return direct;
+  const stripped = raw.replace(/[-'.]/g, '');
+  if (stripped === raw) return undefined;
+  if (READ_VERBS.includes(stripped)) return undefined;   // never shadow a read
+  return WRITE_FORM_TO_BASE.get(stripped);
+}
+
 // Verbs on the list above that are ALSO ordinary English. They mean "change the
 // device" only when what follows is device-shaped; followed by any of these
 // words they are authoring, not configuring, and must not be refused.
@@ -471,7 +490,7 @@ function scanClauseForCommand(clause, sep, start, excuseEvents) {
   for (let i = start; i < toks.length; i++) {
     const w = toks[i];
     if (READ_VERBS.includes(w)) return { kind: 'read', word: w };
-    const base = WRITE_FORM_TO_BASE.get(w);
+    const base = writeBaseOf(w);
     if (!base) continue;
     if (base === 'write' || base === 'wr') {
       const after = toks.slice(i + 1).join(' ');
@@ -507,7 +526,7 @@ function classifyClause(clause, sep) {
     if (inner) return inner;
     return { kind: null };
   }
-  const base = WRITE_FORM_TO_BASE.get(raw);
+  const base = writeBaseOf(raw);
   if (!base) return { kind: null };
   // 'write'/'wr' keep the document-author exception ("write me a report" is a
   // Doc-Writer job, "write mem" / "write erase" is not).
@@ -580,7 +599,21 @@ function splitIntent(text) {
   const readClauses = [];
   let change = null;
   for (const { text: clause, sep } of clauseParts(raw)) {
-    const c = classifyClause(clause, sep);
+    // The leading-verb reading first — it is the strict one, and it owns the
+    // event-noun and soft-verb exceptions.
+    let c = classifyClause(clause, sep);
+    // REVIEWER FIX (same class as the carrier/adverb shields): when the leading
+    // word is neither read nor write, the real verb may simply be sitting behind
+    // ordinary words that are not on the filler list — "maybe we should reload
+    // sw2", "i was wondering if you could reload sw2". Judged by the leading word
+    // alone those clauses classified as NOTHING, so a read alongside them ran and
+    // the change was dropped without a word — the silent substitution this file
+    // exists to prevent. So the clause gets the same WIDER scan the refusal sink
+    // uses: its first real verb, wherever it sits. A read still wins.
+    if (!c.kind) {
+      const wide = scanClauseForCommand(clause, sep, 0, true);
+      if (wide) c = wide;
+    }
     if (c.kind === 'read') { readClauses.push(clause.trim()); continue; }
     if (c.kind === 'write' && !change) change = { keyword: c.word, clause: clause.trim() };
   }

@@ -77,6 +77,26 @@ async function run(request) {
     vague.text.slice(0, 160));
   ok('vague ask is NOT audited as a refused change', vague.audits === 0, `got ${vague.audits}`);
 
+  // ── Reviewer addition (PR #52 review) ─────────────────────────────────────
+  // A COMPOUND ask is a refused write too. It used to be said and logged by the
+  // RENDERER, so when the read half threw (source unreachable — the normal state
+  // with no sandbox credentials) the operator was told only "source unreachable"
+  // and the refusal left no message, no activity line and no audit record.
+  console.log('\nCOMPOUND ask — the refused change half is said AND recorded, even when the read fails:');
+  for (const ask of [
+    'reload sw2 then show version',
+    'maybe we should reload sw2, and show me the version',
+  ]) {
+    const r = await run(ask);
+    ok(`${JSON.stringify(ask)} — the change is named out loud`,
+      /did NOT do the change/i.test(r.text), r.text.slice(0, 160));
+    ok(`${JSON.stringify(ask)} — exactly one audit record`, r.audits === 1, `got ${r.audits}`);
+    ok(`${JSON.stringify(ask)} — one refusal activity line`,
+      (r.activity.match(/Refused a state-changing request/g) || []).length === 1, r.activity.slice(0, 200));
+    ok(`${JSON.stringify(ask)} — the record does not claim nothing was sent`,
+      /only the read half was run/.test(r.activity), r.activity.slice(0, 200));
+  }
+
   console.log(`\n${pass} passed, ${fail} failed\n`);
   process.exit(fail ? 1 : 0);
 })();

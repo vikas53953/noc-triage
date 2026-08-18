@@ -244,5 +244,52 @@ for (const t of SINK_NOT_CHANGE) {
   ok(JSON.stringify(t), v.destructive === false, `the sink called it a change ("${v.keyword}")`);
 }
 
+// ── Reviewer additions (PR #52 review) ──────────────────────────────────────
+// Two holes found by attacking the branch with fresh strings.
+
+console.log('\nPUNCTUATION INSIDE THE VERB must not hide it ("re-set" is "reset"):');
+for (const t of [
+  're-set the host-name on sw1',
+  're-load sw2 tonight',
+  'shut-down gi1/0/3 on sw2',
+  're-boot the switch sw3',
+]) {
+  ok(JSON.stringify(t), checkIntent(t).destructive === true, 'a hyphen defeated the whole intent screen');
+}
+for (const t of [
+  'the e-mail went out to the team',
+  'set up a follow-up call',
+  'copy the write-up to the ticket',
+  'we had a re-org last week',
+]) {
+  ok(JSON.stringify(t), checkIntent(t).destructive === false, 'ordinary hyphenated English was refused');
+}
+
+console.log('\nA CHANGE ASK ALONGSIDE A READ must never be dropped silently:');
+// The change verb sits behind words that are not on the filler list, so the
+// leading-word reading saw nothing — the read ran and the change vanished.
+for (const t of [
+  'maybe we should reload sw2, and show me the version',
+  'could you maybe clear the counters on sw2 and show ip interface brief',
+  'i was wondering if you could reload sw2 and also show version on sw1',
+  'show version on sw1 and it would be great if someone reloaded sw2',
+]) {
+  const s = splitIntent(t);
+  ok(`${JSON.stringify(t)} — the change is seen`, s.destructive === true, 'the change was dropped silently');
+  ok(`${JSON.stringify(t)} — the read half is kept`, s.readClauses.length > 0, 'the read half was lost');
+  ok(`${JSON.stringify(t)} — handled as compound`, s.compound === true, 'not compound');
+}
+// A plain read must stay a plain read — no invented change half.
+for (const t of [
+  'show version on sw2',
+  'please show me the interface counters on sw2',
+  'run show boot system',
+  'show running-config',
+]) {
+  const s = splitIntent(t);
+  ok(`${JSON.stringify(t)} — still a plain read`,
+    s.destructive === false && s.readClauses.length > 0, `keyword="${s.change && s.change.keyword}"`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
