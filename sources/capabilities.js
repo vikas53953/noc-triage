@@ -133,10 +133,18 @@ const ABILITIES = [
       + 'The internal queue stays the single source of truth, and the structured ServiceNow export stays available as the fallback.',
   },
   {
+    // CW-7: investigate is now the ITERATIVE LOOP, not a one-shot triage. Jarvis
+    // grills the problem (asks the operator when it is too vague and runs nothing
+    // until answered), then probes round by round — each round it picks the single
+    // highest-value read-only check, delegates it to the right agent through the
+    // permission gate, and narrows the hypotheses + a confidence score from the
+    // REAL report — stopping when the root cause is isolated (confidence), when it
+    // hits the safety round cap (honest best guess), or when it is stuck (says what
+    // it needs). A config fix comes back as an approve-first change proposal.
     key: 'investigate',
     label: 'Investigate a problem end to end',
-    plain: 'Give me a symptom and I run a full triage — real reads across every front, blind spots, and a ranked hypothesis with confidence.',
-    example: 'investigate why the branch sites are dropping packets',
+    plain: 'Give me a symptom and I investigate it as a loop — I grill it until it is specific, then probe round by round with the right agents, narrowing the hypotheses and a confidence score from each real report, until I isolate the root cause (or hit the round cap and say so honestly) and plan the fix.',
+    example: 'why is branch-3 slow since 2pm — investigate it',
     available: true,
   },
   {
