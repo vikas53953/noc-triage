@@ -87,3 +87,6 @@ Last updated: 2026-08-17 ~22:40 IST · driver: Fable session 7d4aaef3
 ## Follow-up hooks logged (apply after Class 1 merges — it owns server.js)
 - Class 10: add 'leadership' to server.js:2483 doc allow-list + names map (leadership: 'Leadership summary')
   so the /doc/leadership URL alias works (slt already works). artifacts.js already leadership-aware.
+
+- Class 3+4 flagged: sources/alerts.js has its OWN NETWORK_SUBJECT copy (machine-alert path) — consider same
+  plain-words treatment later (separate non-operator path, low priority).
