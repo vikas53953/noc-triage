@@ -30,6 +30,7 @@ const tickets = require('./sources/tickets');
 const ticketStore = require('./sources/ticket-store');
 const teams = require('./sources/teams');            // CW-4: Teams bridge (one-way post)
 const servicenow = require('./sources/servicenow-client'); // CW-6: two-way ServiceNow sync
+const investigation = require('./sources/investigation'); // CW-7: iterative investigation loop
 const guardrails = require('./sources/guardrails');
 const { checkIntent } = guardrails;
 
@@ -677,6 +678,62 @@ app.post('/api/copilot/tickets/:id/snow/pull', async (req, res) => {
 });
 // ── end CW-6 block ──────────────────────────────────────────────────────────
 
+// ── CW-7: the iterative investigation loop ──────────────────────────────────
+// Thin routes ON PURPOSE, adjacent to CW-6. Every rule — the grill/ambiguity wait
+// (fire no probe until the operator answers), the probe→report→narrow loop, the
+// confidence stop, the hard round cap, the honest stuck/blocked/reasoning-
+// unavailable stops, the audit of every round, the never-fabricate law — lives in
+// sources/investigation.js (the engine) + sources/jarvis.js (the reasoning
+// planner). No route here can investigate by a different path or skip a step. The
+// 428 name gate above covers the POST routes (all under /api/copilot/).
+//
+// STREAMING: the desk starts an investigation, gets its id, then follows it live
+// over the websocket — `investigation_update` (full snapshot on each state change:
+// grilling, investigating, resolved, capped, stuck, blocked) and
+// `investigation_round` ({round, probe, agent, report, hypotheses[], confidence,
+// status}) per probe round.
+
+// POST /api/copilot/investigate { problem, operatorTz? } → opens an investigation,
+// returns its id immediately (202); the understand + probe loop runs in the
+// background and streams. An ambiguous problem comes back status "awaiting-operator"
+// with clarifying questions and NO probe fired.
+app.post('/api/copilot/investigate', (req, res) => {
+  const body = req.body || {};
+  const problem = String(body.problem || '').trim();
+  if (!problem) return res.status(400).json({ error: 'Give me a problem to investigate — I will not investigate nothing.' });
+  const operatorTz = typeof body.operatorTz === 'string' ? body.operatorTz.trim() : null;
+
+  const rec = investigation.create({ problem, operatorTz, who: req.operator });
+  // Fire the loop; it streams its own progress. A crash is reported honestly and
+  // never leaves the investigation silently dead.
+  investigation.run(rec.id).catch((err) =>
+    reportSystemError('the investigation loop could not run', err));
+  res.status(202).json({ investigation: rec, watch: `/api/copilot/investigate/${rec.id}` });
+});
+
+// POST /api/copilot/investigate/:id/answer { text } → the operator's answer to a
+// grill/clarifying question; resumes the loop (re-assesses specificity, then probes).
+app.post('/api/copilot/investigate/:id/answer', async (req, res) => {
+  const id = String(req.params.id || '');
+  const text = String((req.body && req.body.text) || '').trim();
+  if (!text) return res.status(400).json({ error: 'An empty answer narrows nothing — tell me what changed.' });
+  if (!investigation.get(id)) return res.status(404).json({ error: `No investigation with id "${id}".` });
+  // Kick the resume off in the background (it may run a full probe loop) and
+  // answer with the current record; the desk follows the rest over the websocket.
+  investigation.answer(id, text, req.operator).catch((err) =>
+    reportSystemError('the investigation could not resume', err));
+  res.status(202).json({ investigation: investigation.get(id), watch: `/api/copilot/investigate/${id}` });
+});
+
+// GET /api/copilot/investigate/:id → the full record (problem, understood, rounds,
+// hypotheses, confidence, root cause, fix plan/proposal, status).
+app.get('/api/copilot/investigate/:id', (req, res) => {
+  const rec = investigation.get(String(req.params.id || ''));
+  if (!rec) return res.status(404).json({ error: `No investigation with id "${req.params.id}".` });
+  res.json({ investigation: rec });
+});
+// ── end CW-7 block ──────────────────────────────────────────────────────────
+
 // Create HTTP server
 const server = http.createServer(app);
 
@@ -872,6 +929,28 @@ jarvis.init({
     note: live.NO_BACKEND[id] ? `not connected — ${live.NO_BACKEND[id]}` : '',
   })),
 });
+
+// CW-7 — hand the investigation LOOP engine its plumbing. The engine orchestrates
+// deterministically (rounds, cap, gate, audit, streaming); the REASONING (which
+// probe, which hypothesis, what confidence) is the injected planner —
+// jarvis.investigationPlanner — so the loop never picks a probe itself, and it can
+// be swapped for a scripted planner in tests. Every probe is a delegated read that
+// goes through the SAME gate + guardrail + session log as any other read
+// (live.gatherForJarvis), so deny = zero wire holds unchanged.
+investigation.init({
+  probe: ({ agentId, question, device, incidentId }) =>
+    live.gatherForJarvis(agentId, question, device || null, incidentId || null),
+  broadcast,
+  roster: () => (agents.jarvis.manages || []).map((id) => ({
+    id,
+    name: agents[id]?.name || id,
+    connected: !live.NO_BACKEND[id],
+    sees: (live.CAPABILITIES[id] && live.CAPABILITIES[id].can) || [],
+    note: live.NO_BACKEND[id] ? `not connected — ${live.NO_BACKEND[id]}` : '',
+  })),
+  audit: (entry) => session.audit(entry),
+});
+investigation.setPlanner(jarvis.investigationPlanner);
 
 // Hand the triage engine the same broadcast/status plumbing. It reuses the live
 // adapters directly for its reads; this seam only carries dashboard events.
