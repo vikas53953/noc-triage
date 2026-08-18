@@ -25,6 +25,8 @@ const notifier = require('./sources/notifier');
 const capabilities = require('./sources/capabilities');
 const changeRunner = require('./sources/change-runner');
 const changeStore = require('./sources/change-store');
+const tickets = require('./sources/tickets');
+const ticketStore = require('./sources/ticket-store');
 const guardrails = require('./sources/guardrails');
 const { checkIntent } = guardrails;
 
@@ -458,6 +460,109 @@ app.post('/api/copilot/drift/:device/rebaseline', async (req, res) => {
 });
 // ── end CW-2 block ──────────────────────────────────────────────────────────
 
+// ── CW-3: the built-in ticket queue ─────────────────────────────────────────
+// Thin routes ON PURPOSE. Every rule — the validated status transitions, the
+// "cannot close without a resolution note" guard, the audit of every transition,
+// the secret-scrub + XSS-escape on the way to disk — lives in sources/tickets.js
+// and sources/ticket-store.js, so no future route (CW-4 / CW-6 will add adjacent
+// ones) can move a ticket by a different path or with a step missing.
+//
+// The 428 name gate above already covers every write here (all under
+// /api/copilot/, so isCopilotSurface is true): a state-changing call with no
+// X-Operator-Name is refused 428 before it reaches these handlers, and audited.
+// The logic layer re-checks the operator name as a belt to that brace.
+//
+// INTENT-FIRST: there is NO keyword routing here that creates a ticket from
+// chat. create() is the tool the planner calls AFTER the operator confirms the
+// proposal it composed (the real-Claude compose path is wired but PENDING
+// CREDITS); the desk's "Create ticket" confirm is what POSTs to it.
+
+// A ticket may LINK to one of this console's own incidents (INC-YYYYMMDD-NNN, or
+// the internal trg-… id). The link is validated against the REAL incident list —
+// a link is never fabricated. Returns the canonical incidentId + a label, or an
+// error the route turns into a 400. Empty input = no link (allowed).
+function resolveIncidentLink(raw) {
+  const wanted = String(raw == null ? '' : raw).trim();
+  if (!wanted) return { ok: true, incidentId: null, incidentLabel: null };
+  const w = wanted.toLowerCase();
+  const match = triage.listIncidents().find(
+    (i) => String(i.incidentId || '').toLowerCase() === w || String(i.triageId || '').toLowerCase() === w
+  );
+  if (!match) {
+    return { ok: false, error: `No incident with id "${wanted}" — I will not link a ticket to an incident that does not exist.` };
+  }
+  return {
+    ok: true,
+    incidentId: match.incidentId || match.triageId,
+    incidentLabel: match.title ? String(match.title).slice(0, 200) : null,
+  };
+}
+
+// GET /api/copilot/tickets — the queue (most-recent first). Filterable by
+// ?status= and ?assignee=. Read-only, so no name gate.
+app.get('/api/copilot/tickets', (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 100, 500);
+  res.json({ tickets: tickets.list({ status: req.query.status, assignee: req.query.assignee, limit }) });
+});
+
+// GET /api/copilot/tickets/:id — the full ticket (history + work notes).
+app.get('/api/copilot/tickets/:id', (req, res) => {
+  const t = tickets.get(String(req.params.id || ''));
+  if (!t) return res.status(404).json({ error: `No ticket with id "${req.params.id}".` });
+  res.json({ ticket: t });
+});
+
+// POST /api/copilot/tickets — create { severity, title, description, incidentId? }.
+app.post('/api/copilot/tickets', (req, res) => {
+  const body = req.body || {};
+  const link = resolveIncidentLink(body.incidentId);
+  if (!link.ok) return res.status(400).json({ error: link.error });
+  const out = tickets.create({
+    severity: body.severity,
+    title: body.title,
+    description: body.description,
+    incidentId: link.incidentId,
+    incidentLabel: link.incidentLabel,
+    who: req.operator,
+  });
+  if (!out.ok) return res.status(out.status || 400).json({ error: out.error });
+  res.status(201).json({ ticket: out.ticket });
+});
+
+// POST /api/copilot/tickets/:id/assign — { assignee }.
+app.post('/api/copilot/tickets/:id/assign', (req, res) => {
+  const out = tickets.assign(String(req.params.id || ''), {
+    assignee: (req.body || {}).assignee,
+    who: req.operator,
+  });
+  if (!out.ok) return res.status(out.status || 400).json({ error: out.error });
+  res.json({ ticket: out.ticket });
+});
+
+// POST /api/copilot/tickets/:id/status — { status, note? }. Validated
+// transitions; closing needs a resolution note (enforced in the logic layer).
+app.post('/api/copilot/tickets/:id/status', (req, res) => {
+  const body = req.body || {};
+  const out = tickets.setStatus(String(req.params.id || ''), {
+    status: body.status,
+    note: body.note,
+    who: req.operator,
+  });
+  if (!out.ok) return res.status(out.status || 400).json({ error: out.error });
+  res.json({ ticket: out.ticket });
+});
+
+// POST /api/copilot/tickets/:id/note — { text } appends a work note.
+app.post('/api/copilot/tickets/:id/note', (req, res) => {
+  const out = tickets.addNote(String(req.params.id || ''), {
+    text: (req.body || {}).text,
+    who: req.operator,
+  });
+  if (!out.ok) return res.status(out.status || 400).json({ error: out.error });
+  res.json({ ticket: out.ticket });
+});
+// ── end CW-3 block ──────────────────────────────────────────────────────────
+
 // Create HTTP server
 const server = http.createServer(app);
 
@@ -532,6 +637,11 @@ session.setCommandShareBroadcast((data) => broadcast('command_share', data));
 // transition — is pushed to the desk, so the change wrap the operator is
 // watching is the record itself, not a UI guess at what is happening.
 changeStore.setBroadcast((type, data) => broadcast(type, data));
+
+// CW-3: every write to a ticket — created, assigned, status moved, work note —
+// is pushed to the desk so the queue the operator is watching IS the record,
+// not a UI guess. ticket_new / ticket_update carry the full stored ticket.
+ticketStore.setBroadcast((type, data) => broadcast(type, data));
 
 // The permission gate (Phase C) broadcasts approval requests + decisions so the
 // approval surface updates live: approval_new, approval_update, approval_mode.

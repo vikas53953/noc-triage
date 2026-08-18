@@ -77,12 +77,16 @@ const ABILITIES = [
     available: true,
   },
   {
+    // CW-3: the built-in ticket queue is live. The queue is the SINGLE SOURCE OF
+    // TRUTH for tickets; ServiceNow (CW-6) becomes a mirror that syncs when
+    // connected, never a second truth. INTENT-FIRST: chat never creates a ticket
+    // directly — an "open a ticket for X" ask reaches the planner, which composes
+    // a PROPOSAL the operator confirms; the confirm is what actually creates it.
     key: 'tickets',
     label: 'Raise and track tickets',
-    plain: 'Create, assign and close tickets from the conversation, with one queue as the single source of truth.',
-    example: 'raise a ticket for this incident',
-    available: false,
-    reason: 'The ticket queue arrives in CW-3 — for now I record actions in the audit log, not as tickets.',
+    plain: 'Create, assign and close tickets from the conversation, with one built-in queue as the single source of truth.',
+    example: 'open a P2 for the branch-3 slowness',
+    available: true,
   },
   {
     key: 'teams',
