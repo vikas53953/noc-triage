@@ -344,3 +344,16 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
 - A1 (CW-8 MCP connector, PR #67) in security review — hand-rolled zero-dep client, gated, read-only, honest, 552 tests.
 - A4 (live feeds, PR #66) in review — native syslog+trap UDP receivers.
 - CW-7 UI (PR #64) final race-fix confirm running.
+
+## OVERNIGHT STATE (2026-08-19, Vikas asleep — keep building autonomously)
+IN FLIGHT (resume by reading each PR's review comment, then merge-on-approve → restart :3000 → verify):
+- CW-7 UI (PR #64): final race-fix confirm running → on APPROVE merge, CW-7 investigation loop COMPLETE.
+- A1 MCP connector (PR #67): security review running → merge on approve (unlock for external tools).
+- A4 live feeds (PR #66): community-scrub class fix in flight → re-verify → merge.
+- A2 (PR #65): MERGED.
+MERGE ORDER when several approve together: they share server.js/package.json — merge one, resolve the
+trivial test-list/require conflicts (keep BOTH sides), npm test must stay green, then next.
+AFTER these land: netclaw A5 (batfish offline change-validation) + A6 (packet capture / Nautobot) are the
+next candidates IF Vikas confirms; do NOT start them unprompted — they're bigger and he only greenlit A1/A2/A4.
+STANDING: credits OUT → deterministic verify only; the big live-LLM end-to-end test is Vikas's when credits
+return. Never fabricate. Fix the class. Update TRACKER + push every step. Master protected (no force-push).
