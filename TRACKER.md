@@ -369,3 +369,10 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - REMAINING (all need Vikas): live-LLM end-to-end test (credit top-up); optionally TEAMS_WEBHOOK, SNOW creds,
   SSH sandbox creds, real syslog/trap device pointing, and a vetted real external MCP server. Nothing blocking.
 - Next candidates from netclaw assessment (NOT started — need Vikas's OK): A5 batfish, A6 packet/Nautobot.
+
+## 2026-08-19 — remaining NetClaw pull (Vikas greenlit "go with remaining")
+- A5 Batfish (offline change-validation, pairs with change engine) + A8 Nautobot (source-of-truth reconcile)
+  BUILDING (feat/a5-batfish, feat/a8-nautobot). A6 packet-capture QUEUED behind (shares server.js).
+- All honest-if-absent (need Batfish service / Nautobot creds). Credits out → deterministic verify + stub
+  endpoints now; LLM path later. Each: build → adversarial review → merge → verify → TRACKER++.
+- Overnight autonomous; launcher armed. Vikas asleep. No blocking questions.
