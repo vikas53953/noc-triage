@@ -179,5 +179,5 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
 - Class 10 server.js follow-up applied: /doc/leadership now aliases to slt.
 - Class 9 (chat sees own incidents + per-operator session isolation) BUILDING (fix/chat-sees-incidents).
 - Class 5+6 QUEUED behind Class 9 (both touch server.js — sequential).
-- Class 8 UI (PR #50) review running.
+- Class 8 UI (PR #50) MERGED + review-verified live (reload persistence, XSS-on-restore safe, mobile, contrast). 2 non-blocking minors logged.
 - MERGED QA classes so far: 10, 3+4, 1. Remaining: 9 (building), 5+6 (queued), 8 (review).
