@@ -25,3 +25,7 @@ venv/
 __pycache__/
 .DS_Store
 Thumbs.db
+
+autoresume.log
+autoresume-launcher.log
+autoresume-probe*

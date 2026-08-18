@@ -1,43 +1,44 @@
 # Autonomous resume launcher for noc-triage.
 # Fires on a schedule (Windows Task Scheduler). Each run starts a FRESH claude
-# session in the repo — a new session has no quota carryover, so this survives a
-# quota wall that a same-session timer cannot. The fresh session reads TRACKER.md
-# + HANDOFF.md and continues the top pending item.
+# session in the repo — a new session has no session-quota carryover, so this
+# survives a session-limit wall that a same-session timer cannot. The fresh
+# session reads TRACKER.md + HANDOFF.md and continues the top pending item.
 #
-# It exits immediately if a claude is already running in this repo (no stacking).
+# HARD-LEARNED: a scheduled task runs with a stripped PATH, so `& claude` (the
+# npm PATH shim) resolves to nothing and dies silently (6-byte empty log). Fix:
+# call claude by ABSOLUTE PATH, never via PATH. Log launcher decisions to a
+# SEPARATE file from the claude session output so failures are diagnosable.
 
-$ErrorActionPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
 $repo = 'C:\Users\vikasmit\noc-triage'
 $lock = Join-Path $env:TEMP 'noc-triage-autoresume.lock'
+$diag = Join-Path $repo 'autoresume-launcher.log'   # launcher decisions
+$out  = Join-Path $repo 'autoresume.log'            # fresh claude session output
+$claude = 'C:\Users\vikasmit\AppData\Roaming\npm\claude.cmd'  # ABSOLUTE, no PATH dependency
 
-# Only resume when NO driver is actively working this repo. Process-name checks
-# proved wrong twice (claude runs as claude.exe, not node.exe — the old check
-# matched nothing and stacked sessions; and idle/stale claude.exe windows would
-# make an "any claude.exe" check block resume forever). Class fix: detect a live
-# driver by its WORK PRODUCT — any driver (interactive, headless, another
-# launcher) touches the repo's git state / TRACKER / log every turn. If none of
-# those changed recently, the work is dead and a resume is warranted. A rare
-# duplicate spawn during a long quiet turn is tolerated waste (TRACKER rule:
-# every driver re-checks PR state before merging); a never-firing launcher is not.
+function Log($msg) { "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg" | Out-File -FilePath $diag -Append -Encoding utf8 }
+
+# Liveness by WORK PRODUCT: any live driver touches git state / TRACKER every
+# turn. If nothing changed in 30 min, the work is dead → resume warranted.
+# (autoresume.log deliberately NOT a signal — the launcher writes it itself.)
 $signals = @(
   (Join-Path $repo '.git\HEAD'),
-  (Join-Path $repo '.git\FETCH_HEAD'),
+  (Join-Path $repo '.git\ORIG_HEAD'),
   (Join-Path $repo '.git\index'),
-  (Join-Path $repo 'TRACKER.md'),
-  (Join-Path $repo 'autoresume.log')
+  (Join-Path $repo 'TRACKER.md')
 )
 $latest = $signals | Where-Object { Test-Path $_ } |
   ForEach-Object { (Get-Item $_).LastWriteTime } |
   Sort-Object -Descending | Select-Object -First 1
-if ($latest -and ((Get-Date) - $latest).TotalMinutes -lt 30) { exit 0 }
+if ($latest -and ((Get-Date) - $latest).TotalMinutes -lt 30) { Log "skip: work-product fresh ($latest)"; exit 0 }
 
-# Second guard: don't stack rapid re-launches.
 if (Test-Path $lock) {
   $age = (Get-Date) - (Get-Item $lock).LastWriteTime
-  if ($age.TotalMinutes -lt 25) { exit 0 }
+  if ($age.TotalMinutes -lt 25) { Log "skip: lock fresh"; exit 0 }
 }
 New-Item -ItemType File -Path $lock -Force | Out-Null
 
+if (-not (Test-Path $claude)) { Log "ABORT: claude.cmd missing at $claude"; exit 1 }
 Set-Location $repo
 
 $prompt = @'
@@ -49,5 +50,13 @@ fabricate; verify live before claiming done. Keep TRACKER.md + HANDOFF.md update
 If everything is genuinely done, update TRACKER and stop.
 '@
 
-# Uses Vikas's standard headless launch (see memory: session startup command).
-& claude --dangerously-skip-permissions -p $prompt *> (Join-Path $repo 'autoresume.log')
+Log "launch: starting fresh claude session via $claude"
+try {
+  # Absolute path to the .cmd shim, called directly by PowerShell. The ORIGINAL
+  # bug was the bare `claude` name (PATH-dependent, empty under the task's PATH);
+  # an absolute path removes that dependency entirely.
+  & $claude --dangerously-skip-permissions -p $prompt *> $out
+  Log "done: claude exited code $LASTEXITCODE, wrote $((Get-Item $out -ErrorAction SilentlyContinue).Length) bytes"
+} catch {
+  Log "ERROR launching claude: $($_.Exception.Message)"
+}
