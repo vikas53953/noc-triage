@@ -291,3 +291,11 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
   is back with credits (his instruction: "test all at once at the end").
 - Needs Vikas for LIVE (built honest-if-absent): CW-4 Teams webhook, CW-5 DevNet sandbox creds, CW-6 ServiceNow creds.
 - Merge discipline: land CW-3 + CW-5, then CW-4, then CW-6; resolve shared-file conflicts at merge.
+
+## 2026-08-18 — CW-5 MERGED
+- CW-5 SSH-live MERGED (PR #57, APPROVED, tests green). Per-device transport at the choke point; sw1-sw4 stay
+  Command Runner (no regression); SSH devices honest "auth needed" until Vikas adds DevNet sandbox creds.
+  Minor follow-up logged: ambiguity device list doesn't offer SSH sandboxes (discoverability). Human should do
+  a one-time real-creds SSH dial before relying on SSH output in prod.
+- CW-3 tickets (backend #56 + UI #58) in integrated review.
+- NEXT after CW-3 merges: CW-4 Teams, then CW-6 ServiceNow.
