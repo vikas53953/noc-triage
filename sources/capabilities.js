@@ -110,6 +110,29 @@ const ABILITIES = [
       + 'Note: Incoming Webhooks are one-way (post only) — reading replies back needs a Teams bot/Power-Automate flow to feed them into the bridge.',
   },
   {
+    // CW-6 REALITY: the two-way ServiceNow sync is BUILT and every Table API call
+    // is real. What gates `available` is whether an instance + creds exist to sync
+    // THROUGH: SNOW_INSTANCE + SNOW_USER + SNOW_PASS. Any missing → available:false
+    // with the honest "add instance + creds" reason and NOTHING is synced (never a
+    // fabricated INC); all three set → available:true and syncs are real.
+    // `engineBuilt:true` always (like CW-2/CW-4) so the desk shows the wiring is
+    // done and the only missing piece is Vikas's ServiceNow instance + creds.
+    // Resolved dynamically in publicShape so late-set creds flip it without a
+    // restart; the credential VALUES never enter the shape — only the boolean.
+    // The internal queue stays the single source of truth; SNOW is a mirror. The
+    // structured ServiceNow EXPORT (artifacts.js) remains the fallback when unset.
+    key: 'servicenow',
+    label: 'Sync tickets to ServiceNow',
+    plain: 'Push an internal ticket to a real ServiceNow incident and pull its state back — the internal queue stays the source of truth; ServiceNow is a mirror.',
+    example: 'open a ServiceNow ticket for this incident',
+    dynamic: 'servicenow',
+    available: false,
+    engineBuilt: true,
+    reason: 'ServiceNow not connected — add instance + creds (set SNOW_INSTANCE, SNOW_USER and SNOW_PASS in .env.local). '
+      + 'The two-way sync is built and every Table API call is real once all three are set; until then nothing is synced (never a fabricated INC number). '
+      + 'The internal queue stays the single source of truth, and the structured ServiceNow export stays available as the fallback.',
+  },
+  {
     key: 'investigate',
     label: 'Investigate a problem end to end',
     plain: 'Give me a symptom and I run a full triage — real reads across every front, blind spots, and a ranked hypothesis with confidence.',
@@ -151,6 +174,10 @@ const ACT_VERBS = {
   drift: /check|compare|audit|validate|verify|diff|re[\s-]?baseline|baseline/,
   tickets: /raise|open|create|log|file|close|assign|escalate[\s-]?to/,
   teams: /post|send|share|notify|message|ping|escalate/,
+  // CW-6: "push/sync/open a ServiceNow incident". Only an imperative aimed at a
+  // ServiceNow object counts (see ACT_OBJECTS.servicenow) — a question about a
+  // ticket is never caught here.
+  servicenow: /push|sync|open|create|raise|log|file|mirror|escalate/,
 };
 
 // The object each unbuilt ability must be aimed AT before it can claim an ask.
@@ -159,6 +186,10 @@ const ACT_OBJECTS = {
   drift: /\b(baseline|drift|deviation|compliance|golden[\s-]?config|clean\b)\b/i,
   tickets: /\b(ticket|tickets|case|servicenow|snow|jira|change[\s-]?request|incident[\s-]?record)\b/i,
   teams: /\b(teams|ms[\s-]?teams|microsoft[\s-]?teams|slack|channel|webhook)\b/i,
+  // A ServiceNow object specifically — NOT the bare word "ticket" (that is the
+  // internal queue, which is always available). Only "servicenow"/"snow" names
+  // the mirror, so "open a ticket" stays an internal-queue ask.
+  servicenow: /\b(servicenow|service[\s-]?now|snow)\b/i,
 };
 
 // Read-only commands: the verbs the guardrail already allows through to a device.
@@ -250,6 +281,12 @@ function resolveAvailable(a) {
     const raw = process.env.TEAMS_WEBHOOK;
     return !!(raw && String(raw).trim());
   }
+  if (a.dynamic === 'servicenow') {
+    // Available exactly when all three creds are present. The VALUES never leave
+    // env — only the boolean they imply reaches the browser shape.
+    const set = (v) => !!(v && String(v).trim());
+    return set(process.env.SNOW_INSTANCE) && set(process.env.SNOW_USER) && set(process.env.SNOW_PASS);
+  }
   return !!a.available;
 }
 
@@ -279,7 +316,7 @@ function byKey(key) { return ABILITIES.find((x) => x.key === key) || null; }
 // is not read as anything but a question.
 function requestedUnbuiltAbility(text) {
   const t = normalize(text);
-  for (const key of ['change', 'drift', 'tickets', 'teams']) {
+  for (const key of ['change', 'drift', 'tickets', 'teams', 'servicenow']) {
     const a = byKey(key);
     if (!a || resolveAvailable(a)) continue;
     if (!ACT_OBJECTS[key].test(t)) continue;
