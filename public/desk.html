@@ -954,7 +954,12 @@ function sendAsk(){
      still goes to Jarvis untouched — nothing is hijacked, and no change is
      fired by typing. The card is the only trigger, and it needs a press. */
   if(looksLikeChange(t)) proposalCard({ device:'', commands:[], reason:t }, 'you');
-  else if(looksLikeTicket(t)) ticketProposalCard({ title:'', description:t, incidentId: (SEL && (SEL.incidentId || SEL.triageId)) || '' }, 'you');
+  /* NOTE (CW-3, INTENT-FIRST): a ticket proposal is NEVER guessed from the ask by
+     a client-side keyword. The planner composes it from real context and the desk
+     receives it as a ticket_proposal WS event / ticketProposal on a reply. The ask
+     above goes to Jarvis untouched. Explicit operator actions (the "New ticket"
+     button and "Raise ticket" on an incident) still open a blank/prefilled draft —
+     that is a deliberate press, not pattern-matching a sentence. */
   api('/api/command', { method:'POST', body: JSON.stringify({ agent:'jarvis', command:t }) })
     .then(function(r){
       if(!r.ok) return r.json().catch(function(){ return {}; }).then(function(b){
@@ -2601,16 +2606,11 @@ function ticketProposalCard(p, drafter){
   });
   return el;
 }
-/* An ask that reads like "raise/open/create a ticket" gets a proposal card
-   ALONGSIDE Jarvis's real answer — the ask still goes to Jarvis untouched, so
-   nothing is hijacked and no create is fired by typing. */
-function looksLikeTicket(t){
-  t = String(t || '');
-  if(/\?\s*$/.test(t)) return false;
-  if(READ_ONLY_START.test(t)) return false;
-  if(!/\b(ticket|case)\b/i.test(t)) return false;
-  return /\b(raise|open|create|log|file|cut|new)\b/i.test(t);
-}
+/* INTENT-FIRST: there is deliberately NO client-side keyword detector for ticket
+   intent. Composing a ticket from an operator's words is the planner's job (it has
+   the real context); the desk only DISPLAYS what the planner sends back as a
+   ticket_proposal, and CONFIRMS it. A keyword guess here would do the planner's
+   compose job by pattern-match, which the CW-3 contract forbids. */
 
 /* tools on the tickets tab */
 $('tktNew').addEventListener('click', function(){
