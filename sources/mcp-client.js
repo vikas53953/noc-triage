@@ -23,6 +23,15 @@ const { spawn } = require('child_process');
 
 const PROTOCOL_VERSION = '2024-11-05';
 const DEFAULT_TIMEOUT_MS = 15000;
+// Hard ceiling on the stdout read buffer. A well-behaved MCP server frames every
+// message as ONE line (no embedded newlines) terminated by "\n", so the buffer
+// only ever holds one in-flight frame. A misbehaving/hostile server that streams
+// bytes without a newline would otherwise grow this buffer without limit (the
+// per-request timeout rejects the promise but does NOT stop the accumulation).
+// So the buffer is CAPPED: exceed it before a complete frame arrives and the
+// connection is dropped with an honest error — bounded memory, never an OOM, and
+// never a fabricated result. 16MB is comfortably above any real device transcript.
+const DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
 class McpClient {
   // opts: { name, transport:'stdio', command, args?, env?, cwd?, timeoutMs? }
@@ -34,6 +43,8 @@ class McpClient {
     this.env = opts.env || null;
     this.cwd = opts.cwd || null;
     this.timeoutMs = opts.timeoutMs || DEFAULT_TIMEOUT_MS;
+    this.maxBufferBytes = opts.maxBufferBytes && opts.maxBufferBytes > 0
+      ? opts.maxBufferBytes : DEFAULT_MAX_BUFFER_BYTES;
 
     this.proc = null;
     this.connected = false;
@@ -42,6 +53,7 @@ class McpClient {
     this._pending = new Map(); // id -> { resolve, reject, timer, method }
     this._buf = '';
     this._closedReason = null;
+    this._overflowed = false;
   }
 
   // ── Connect: spawn the process and run the MCP initialize handshake ─────────
@@ -75,7 +87,8 @@ class McpClient {
       // A process that exits before/without answering is a dead server, not a
       // silent success. Fail every in-flight request with the exit detail.
       this.proc.once('exit', (code, signal) => {
-        this._closedReason = `server process exited (code ${code}${signal ? `, signal ${signal}` : ''})`;
+        // Keep the honest overflow reason if we killed the process for that.
+        if (!this._overflowed) this._closedReason = `server process exited (code ${code}${signal ? `, signal ${signal}` : ''})`;
         this.connected = false;
         this._failAllPending(new Error(this._closedReason));
         if (!settled) { settled = true; reject(new Error(this._closedReason)); }
@@ -181,6 +194,7 @@ class McpClient {
   }
 
   _onStdout(chunk) {
+    if (this._overflowed) return; // connection already dropped — stop accumulating
     this._buf += chunk.toString();
     // Newline-delimited JSON framing (MCP stdio): one message per line.
     let idx;
@@ -191,6 +205,28 @@ class McpClient {
       let msg;
       try { msg = JSON.parse(line); } catch (e) { continue; } // ignore non-JSON log noise
       this._dispatch(msg);
+    }
+    // BOUNDED BUFFER: whatever is left is an incomplete frame. If it has grown
+    // past the cap without a terminating newline, the server is misbehaving —
+    // drop the connection honestly rather than let memory grow without limit.
+    if (this._buf.length > this.maxBufferBytes) this._overflow();
+  }
+
+  // Tear the connection down because the read buffer blew its cap. Bounded memory,
+  // honest error, no fabricated result: every in-flight request rejects with the
+  // reason, the buffer is released, and the server process is killed. connect()'s
+  // catch turns this into "server unavailable + reason" at the connector.
+  _overflow() {
+    this._overflowed = true;
+    this.connected = false;
+    const reason = `MCP server "${this.name}" exceeded the ${this.maxBufferBytes}-byte message buffer ` +
+      `without sending a complete message — dropped the connection to avoid unbounded memory (no fabricated result).`;
+    this._closedReason = reason;
+    this._buf = ''; // release the accumulated bytes immediately
+    this._failAllPending(new Error(reason));
+    if (this.proc) {
+      try { this.proc.stdin.end(); } catch (e) { /* ignore */ }
+      try { this.proc.kill(); } catch (e) { /* ignore */ }
     }
   }
 

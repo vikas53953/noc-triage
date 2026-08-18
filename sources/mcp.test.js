@@ -184,6 +184,54 @@ function configureStub() {
     ok('a refused write is audited', mine.some((e) => /refused \(write\)/.test(e.result)), JSON.stringify(mine));
   }
 
+  // ── 9. BOUNDED BUFFER — a server that floods bytes with NO newline is capped ─
+  // and disconnected honestly (bounded memory, no OOM, no fabricated result).
+  const FLOOD = path.join(__dirname, '..', 'test', 'mcp-flood-server.js');
+  {
+    // 9a. Direct client, small cap so the flood trips it fast.
+    const c = new mcpClient.McpClient({
+      name: 'flood', transport: 'stdio', command: process.execPath, args: [FLOOD],
+      maxBufferBytes: 128 * 1024, timeoutMs: 8000,
+    });
+    let threw = null;
+    try { await c.connect(); } catch (e) { threw = e; }
+    ok('flood → connect rejects (does not hang)', !!threw, threw && threw.message);
+    ok('flood → honest buffer-cap reason', threw && /message buffer/i.test(threw.message), threw && threw.message);
+    ok('flood → buffer bounded (released, ≤ cap)', c._buf.length <= 128 * 1024, `buf=${c._buf.length}`);
+    ok('flood → client marked not connected', c.connected === false);
+    c.close();
+  }
+  {
+    // 9b. Via the connector: status shows that server disconnected + reason, no tool.
+    process.env.MCP_SERVERS = JSON.stringify([
+      { name: 'flood', transport: 'stdio', command: process.execPath, args: [FLOOD], enabled: true, maxBufferBytes: 128 * 1024, timeoutMs: 8000 },
+    ]);
+    mcp._reset();
+    await mcp.connectAll();
+    const s = mcp.status().servers.find((x) => x.name === 'flood');
+    ok('flood via connector → connected:false', s && s.connected === false, JSON.stringify(s));
+    ok('flood via connector → reason mentions the buffer cap', s && /buffer/i.test(s.reason || ''), JSON.stringify(s));
+    ok('flood via connector → NO fake tool', mcp.rosterEntries().length === 0);
+    ok('flood via connector → capability OFF', mcp.anyToolsConnected() === false);
+  }
+  {
+    // 9c. The normal stub still connects + returns real results; the safety
+    // invariants (deny = zero-call, write refused) still hold after the flood.
+    configureStub();
+    mcp._reset();
+    await mcp.connectAll();
+    approvals.setMode('auto');
+    const res = await mcp.callTool({ server: 'stub', tool: 'echo', args: { message: 'still-good' }, who: 'tester' });
+    ok('normal stub still returns the REAL result after a flood', res.ok === true && res.text === 'echo: still-good', JSON.stringify(res));
+    approvals.setMode('deny');
+    externalCalls = 0;
+    const d = await mcp.callTool({ server: 'stub', tool: 'echo', args: {}, who: 'tester' });
+    ok('deny still ZERO external calls after a flood', d.denied === true && externalCalls === 0, `externalCalls=${externalCalls}`);
+    approvals.setMode('auto');
+    const w = await mcp.callTool({ server: 'stub', tool: 'set_mtu', args: { iface: 'x', mtu: 1 }, who: 'tester' });
+    ok('write still refused after a flood', w.refused === true && w.kind === 'write', JSON.stringify(w));
+  }
+
   mcp._reset();
   mcpClient.McpClient.prototype.callTool = origCallTool;
   console.log(`\nCW-8 MCP connector: ${pass} passed, ${fail} failed.`);

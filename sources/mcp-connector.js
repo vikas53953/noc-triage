@@ -121,6 +121,7 @@ async function connectOne(rec) {
     env: rec.config.env || null,
     cwd: rec.config.cwd || null,
     timeoutMs: rec.config.timeoutMs || undefined,
+    maxBufferBytes: rec.config.maxBufferBytes || undefined,
   });
   try {
     await client.connect();
