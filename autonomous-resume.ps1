@@ -10,7 +10,15 @@ $ErrorActionPreference = 'SilentlyContinue'
 $repo = 'C:\Users\vikasmit\noc-triage'
 $lock = Join-Path $env:TEMP 'noc-triage-autoresume.lock'
 
-# Don't stack: if a resume launched in the last 25 min, skip.
+# Only resume when NO session is alive. If a claude/node session is already
+# running, a live session (interactive or a prior resume) is handling the work —
+# skip, so we never stack two sessions pushing to the same repo. This launcher
+# is meant to revive the work ONLY after a session has died (e.g. quota wall).
+$alive = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+  Where-Object { $_.CommandLine -match 'claude' }
+if ($alive) { exit 0 }
+
+# Second guard: don't stack rapid re-launches.
 if (Test-Path $lock) {
   $age = (Get-Date) - (Get-Item $lock).LastWriteTime
   if ($age.TotalMinutes -lt 25) { exit 0 }
