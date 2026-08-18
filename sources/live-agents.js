@@ -1053,17 +1053,19 @@ function readCommandFrom(text) {
     return { command: null, note: `"${frag}" on its own is not a command — it needs something to read.` };
   }
 
-  // Map the handful of plain-English phrasings people actually type onto the
-  // real CLI command. The reply always states which command was run, so the
-  // mapping is visible rather than silent.
-  if (/^show\b/.test(t)) {
-    if (/running[\s-]?conf(ig)?/.test(t)) return { rawFragment, command: 'show running-config' };
-    if (/start(up)?[\s-]?conf(ig)?/.test(t)) return { rawFragment, command: 'show startup-config' };
-    if (/\b(version|software|ios|firmware)\b/.test(t)) return { rawFragment, command: 'show version' };
-    if (/\binterface/.test(t)) return { rawFragment, command: 'show ip interface brief' };
-    if (/\binventor(y|ies)\b/.test(t)) return { rawFragment, command: 'show inventory' };
-  }
-
+  // Class fix (Finding 3, 2026-08-18): NO show-command substitution. This block
+  // used to COLLAPSE the operator's command onto a different one — any
+  // "show …interface…" became "show ip interface brief", "software/ios/firmware"
+  // became "show version", and a qualifier like "show running-config interface
+  // Gi1/0/3" was silently dropped down to the whole "show running-config". That
+  // is the exact keyword-substitutes-a-different-read binding this PR exists to
+  // kill: it ran the status-only brief when an operator asked "show interfaces"
+  // for drop/CRC counters, and blocked a packet-drop diagnosis in review.
+  //
+  // We now run the command the operator ACTUALLY asked for. Expanding a shorthand
+  // or fixing a malformed command is the planner/intent's job upstream, not a
+  // hardcoded collapse here. If a device rejects a malformed command, the real
+  // rejection is shown (honest) — never a stand-in command's output.
   return { rawFragment, command: frag };
 }
 
