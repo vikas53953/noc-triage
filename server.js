@@ -2340,9 +2340,11 @@ app.get('/api/records/:id', (req, res) => {
 
 // One triage's auto-written document — 'slt' (leadership) or 'engineer'.
 app.get('/api/records/:id/doc/:which', (req, res) => {
-  const which = req.params.which;
+  // 'leadership' is an intuitive alias operators reach for; it maps to the same
+  // stored slt doc (artifacts.getDoc is leadership-aware).
+  const which = req.params.which === 'leadership' ? 'slt' : req.params.which;
   if (which !== 'slt' && which !== 'engineer' && which !== 'servicenow') {
-    return res.status(400).json({ error: 'Unknown document — use slt, engineer or servicenow.' });
+    return res.status(400).json({ error: 'Unknown document — use slt (leadership), engineer or servicenow.' });
   }
   const content = artifacts.getDoc(req.params.id, which);
   if (content == null) return res.status(404).json({ error: 'Document not found (or path refused).' });
