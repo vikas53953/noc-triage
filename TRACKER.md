@@ -74,3 +74,12 @@ Last updated: 2026-08-17 ~22:40 IST · driver: Fable session 7d4aaef3
 - CW-2 both halves fixed after review (BE 14869f7 guardrail object-less write hole + mixed-message;
   UI fd3dbb7 history gated on engineBuilt + plural /changes route). FINAL integrated re-review running.
 - Ambiguity fix PR #46 review resumed (was near done: memory works, checking isolation + named-device-through-planner).
+
+## QA fix-classes in flight (2026-08-18)
+- #6 Class 1 (kill keyword shell + device-from-structured-field) — BUILDING (fix/intent-first-no-shell)
+- #8 Class 3+4 (plain-words intake + guardrail homonyms/inflections) — BUILDING (fix/intake-and-guardrail) — disjoint files
+- #10 Class 10 (leadership doc from verdict, /doc 404, ServiceNow CI scope) — BUILDING (fix/doc-accuracy) — disjoint files
+- #7 Class 9 (chat sees own incidents + session isolation) — QUEUED behind #6 (shares jarvis.js/server.js)
+- #9 Class 5+6 (error/gate hardening + silent dropped turns) — QUEUED behind #6 (shares server.js)
+- Stranger-UI sweep — re-running (browser)
+- Merge order to avoid conflicts: land #6 first, then #8/#10, then #7/#9.
