@@ -66,13 +66,20 @@ function scrub(text) {
   // body. A username is half a credential — against real kit it names the
   // service account — so it is redacted too. Host/device names are never
   // redacted; only the login identity + the secret half.
-  s = s.replace(/("?(?:token|Token|apic[-_]?cookie|password|pwd|pass|username|userName|user[-_]?name)"?\s*[:=]\s*")([^"]{4,})(")/gi,
+  s = s.replace(/("?(?:token|Token|apic[-_]?cookie|password|pwd|pass|username|userName|user[-_]?name|snmp[-_ ]?community|community)"?\s*[:=]\s*")([^"]{4,})(")/gi,
     (m, a, _v, c) => a + '«redacted»' + c);
   // UNQUOTED form: a device/alarm message is free text, not JSON, so a credential
   // reaches us as `password=SuperSecret123`, `token: abc…`, `api-key=…`. The quoted
   // rule above cannot see those. Redact the VALUE up to the next whitespace or
   // separator, leaving the key visible so the line still reads as evidence.
-  s = s.replace(/\b(token|apic[-_]?cookie|password|passwd|pwd|pass|secret|api[-_]?key|auth[-_]?token|access[-_]?token|username|user[-_]?name)(\s*[:=]\s*)(?!"|«)([^\s,;&"'}\])]{4,})/gi,
+  // `community` is here because a syslog/trap free-text line from real kit can
+  // carry the SNMP community (a shared read/write secret) as `community=publicRO`.
+  s = s.replace(/\b(token|apic[-_]?cookie|password|passwd|pwd|pass|secret|api[-_]?key|auth[-_]?token|access[-_]?token|username|user[-_]?name|snmp[-_ ]?community|community)(\s*[:=]\s*)(?!"|«)([^\s,;&"'}\])]{4,})/gi,
+    (m, k, sep) => k + sep + '«redacted»');
+  // IOS-style SPACE-separated community: `snmp-server community publicRO RO`,
+  // `snmp community publicRO`. No `=`/`:`, so the rule above misses it. Require
+  // the `snmp` prefix so a bare English "community <word>" is never touched.
+  s = s.replace(/\b(snmp(?:[-\s]server)?[-\s]community)(\s+)(?!«)([^\s,;&"'}\])]{3,})/gi,
     (m, k, sep) => k + sep + '«redacted»');
   // `Authorization: Bearer <token>` / a bare `Bearer <token>` in free text.
   s = s.replace(/\b(Bearer\s+)(?!«)[A-Za-z0-9._~+/=-]{8,}/g, (m, k) => k + '«redacted»');
