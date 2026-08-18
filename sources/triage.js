@@ -156,6 +156,43 @@ function isNetworkSubject(text) {
   return NETWORK_SUBJECT.test(String(text || ''));
 }
 
+// ── Intake understanding (CLASS 3 fix) ───────────────────────────────────────
+// Real incidents arrive in plain words: "branch 3 users report slow internet
+// since 2pm", "users can't reach the file server", "voice calls breaking up",
+// "finance can't reach payroll from Pune", "sw3 users report slowness". The old
+// gate (isNetworkSubject) demanded a hardcoded network keyword and HARD-REJECTED
+// (422) every one of these — while the SAME sentence was understood perfectly in
+// Jarvis chat. That is the console contradicting itself, and exactly the
+// keyword-gating the "no static bindings — intent first" law forbids.
+//
+// Intake now refuses ONLY genuinely empty or garbage input. Any real operator
+// complaint is accepted and opens a bridge; the bridge does an honest sweep of
+// every connected front and ranks the blind spots (deriveScope / rankBlindSpots),
+// so an unmappable or out-of-scope report is answered honestly ("if impact is
+// real it sits in a blind spot") — never fabricated, never bounced.
+//
+// A token is "wordish" if it has a vowel and no run of 5+ consonants (a keysmash
+// like "asdfghjkl" is not). Input with at least one wordish token — i.e. the
+// shape of a real sentence — is a real report. Input with none is garbage UNLESS
+// it names a device id / IP (a lone "sw3" or "10.10.20.99" is a real subject).
+function isWordish(w) {
+  const s = String(w).toLowerCase().replace(/[^a-z]/g, '');
+  if (s.length < 2) return false;
+  if (!/[aeiouy]/.test(s)) return false;        // a real word carries a vowel
+  if (/[^aeiouy]{5,}/.test(s)) return false;    // 5+ consonants in a row → keysmash
+  return true;
+}
+function looksLikeGarbage(text) {
+  const t = String(text || '').trim();
+  if (!t) return true;
+  const tokens = t.split(/\s+/);
+  if (tokens.some(isWordish)) return false;     // a real word present → a real report
+  // No real word. A bare device id ("sw3") or IP is still a real subject.
+  const deviceish = tokens.some((w) => /\d/.test(w) && /[a-z]/i.test(w))
+    || /\b\d{1,3}(?:\.\d{1,3}){3}\b/.test(t);
+  return !deviceish;
+}
+
 // ── Dedupe / correlation to an OPEN incident (Wave 3) ────────────────────────
 // When a new triage opens we surface — but NEVER auto-merge — the OPEN incidents
 // it plausibly overlaps with, so an operator sees "possibly related to INC-X
@@ -1692,14 +1729,16 @@ function buildTriage(severity, description, opts = {}) {
   if (!desc) {
     return { refused: true, reason: 'A triage needs a description of the network problem.' };
   }
-  if (!isNetworkSubject(desc)) {
-    // Honest refusal — no bridge, no live reads, nothing sent to any device.
+  if (looksLikeGarbage(desc)) {
+    // CLASS 3: refuse ONLY genuinely empty/garbage input — never a real operator
+    // complaint. No bridge, no live reads, nothing sent to any device.
     return {
       refused: true,
       reason:
-        `That does not name anything this NOC can see. A triage has to be about the network ` +
-        `it is wired to — Catalyst Center campus, the ACI fabric or the SD-WAN overlay. ` +
-        `I have opened no bridge and read nothing. Re-file it naming a real device, front or symptom.`,
+        `I could not read a network problem in that. Tell me in plain words what is ` +
+        `happening — the site or users affected, the service, and the symptom (e.g. ` +
+        `"branch 3 users report slow internet since 2pm", "voice calls breaking up", ` +
+        `"sw2 packet loss since 2pm"). I have opened no bridge and read nothing.`,
     };
   }
 
