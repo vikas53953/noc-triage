@@ -116,3 +116,22 @@ An independent live review of #48 found REAL gaps now on master (verbatim doc ev
 6. MEDIUM alert-opened incidents have no operatorTz → UTC-only docs (dual-clock never applies to alert path).
 7. Wording: leadership doc mixes raw front keys/verdict jargon (license-not-synced, BFD, FMC) with plain labels.
 → FIX IN FLIGHT: fix/doc-accuracy-2 builder (artifacts.js only, disjoint from #47), then independent review.
+
+## POST-MERGE AUDIT of #49 (Class 3+4) — second reviewer, live evidence, 2026-08-18 ~10:15 IST
+Wire-level gate HELD on all 100+ attack strings (zero device writes ever). But:
+1. BLOCKER clauseGovernsDevice (guardrails.js ~356-366) fails OPEN — steps past exactly one determiner,
+   so any adjective defeats it: "clear all the counters on sw2" / "install the new image on sw1" / "set a
+   new hostname" no longer refused at intent layer (100/233 phrasings regressed vs master; masked in
+   casual tests by the capability shell that #47 REMOVES — must fix before/with #47's merge).
+   Class fix: scan whole clause for device-shaped token; AMBIGUOUS_WRITE + unrecognized object ⇒ REFUSE
+   (fail closed) with small innocent-object allowlist. Fold in verb-shielding ("run/execute/perform write
+   memory") — same class, pre-existing. Test suite was blind (all bare objects) — add adjective cases.
+2. MAJOR refused writes only audit-logged on one branch (server.js ~1097); no-command path leaves no
+   trace → audit belongs at the refusal SINK. DEFERRED to post-#47 hooks (server.js/live-agents.js owned by #47).
+3. MAJOR intake accepts anything ("lunch is cold today" → real INC + full estate sweep + L3/L4 page).
+   Ambiguity law says ASK ("which site/front is this about?") when subject is unrecognizable. Fix with 1.
+4. Operator-experience: "🤔 could not find a read command" is the WRONG reply to a write ask — must say
+   plainly "that's a change, I'm read-only" (master's behavior). Restore with 1.
+Pre-existing (not regressions, logged): unicode/zero-width obfuscation passes checkIntent (blocked at
+checkCommand, messaging only); Class 5 gate fail-open on bad mode value (already queued as task #9).
+→ FIX IN FLIGHT: fix/guardrail-fail-closed builder (guardrails.js + triage.js + tests, disjoint from #47).
