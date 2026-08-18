@@ -820,8 +820,221 @@ async function narrateCorrelation(input) {
   }
 }
 
+// ── CW-7: the INVESTIGATION planner (reasoning hooks for the loop engine) ────
+// sources/investigation.js orchestrates the iterative loop deterministically;
+// THIS object is the reasoning half — the four LLM steps the loop asks for. It is
+// injected into the engine as the default planner so the engine never imports
+// jarvis directly (that would make the loop impossible to test without the LLM).
+//
+// Every method reasons with a real Claude call and states ONLY what the evidence
+// supports. There is NO keyword/decision-tree here: `probe` reads the current
+// hypotheses + the real reports so far and the model picks the single
+// highest-value unknown; `assess` narrows STRICTLY from the one real report it is
+// given. `available()` is the honest-under-a-dead-LLM gate: no key → the engine
+// stops and says "reasoning unavailable", never a canned investigation.
+function investigationAvailable() { return claude.hasKey(); }
+
+// Compact renderings the reasoning calls read.
+function hypothesesText(hyps) {
+  if (!Array.isArray(hyps) || !hyps.length) return '(none yet)';
+  return hyps.map((h) => `- [${h.id}] (${h.status || 'standing'}) ${h.text}`).join('\n');
+}
+function roundsText(rounds) {
+  if (!Array.isArray(rounds) || !rounds.length) return '(no probes run yet)';
+  return rounds.map((r) =>
+    `Round ${r.round} — asked ${r.agent}: "${r.probe && r.probe.question}"\n` +
+    `  ${r.report && r.report.stance}: ${String((r.report && r.report.text) || '').slice(0, 500)}`).join('\n');
+}
+function rosterTextFrom(roster) {
+  return (roster || []).map((a) => {
+    const head = `- ${a.id} (${a.name})` + (a.connected ? '' : ' [NOT CONNECTED]');
+    const sees = a.sees && a.sees.length ? `\n    sees: ${a.sees.join('; ')}` : '';
+    return head + sees;
+  }).join('\n');
+}
+
+const INV_UNDERSTAND_SYSTEM =
+`You are Jarvis, L4 / Principal Engineer, about to run an ITERATIVE investigation on a live NOC.
+Before probing anything you must decide whether the problem is SPECIFIC ENOUGH to investigate.
+A problem is specific enough when you can name a first read-only check worth running — it has
+enough of a symptom, a scope (a device/site/front) and/or a timeframe to act on.
+If it is TOO VAGUE ("the network is slow", "something is wrong") — no scope, no timeframe, no
+target you could probe — set specific=false and ask the OPERATOR 1-3 pointed clarifying questions
+that would let you start (which sites/devices, since when, what exactly is failing). Do NOT guess a
+scope and investigate it. When it IS specific, set specific=true, state the understood problem in
+one plain sentence, and list your initial candidate hypotheses (unproven, to be tested by probes).
+State no network fact — you have no data yet; these are hypotheses to test, not findings.`;
+
+const INV_PROBE_SYSTEM =
+`You are Jarvis, L4 / Principal Engineer, mid-investigation on a live NOC. You have a set of standing
+hypotheses and the real reports from the probes run so far. Choose the SINGLE highest-value next
+probe — the ONE read-only check that would most narrow the hypothesis set (confirm or eliminate the
+most). Delegate it to the RIGHT agent from the roster (only those agents can see the network, and
+only what their "sees" line lists). The probe MUST be read-only (show / ping / traceroute / dir /
+more, or a read query an agent already supports) — never a change. For a device-CLI probe put the
+target device in "device" as its bare name or mgmt IP; else null. If NOTHING you can reach would
+narrow this further — you need a device you cannot reach, an operator input, or credentials you do
+not have — set "stuck" to a plain sentence saying exactly what it needs, and pick no probe. Never
+invent a probe just to look busy; a real dead-end is an honest stuck, not a wasted round.`;
+
+const INV_ASSESS_SYSTEM =
+`You are Jarvis, L4 / Principal Engineer, narrowing an investigation from ONE real agent report.
+You are given the standing hypotheses, the probe you just ran, and the REAL report it returned.
+Update the hypothesis set using ONLY that report plus what was already established:
+- mark each hypothesis standing / eliminated / confirmed, and keep its short text.
+- set confidence: a number 0..1 for how confident you are in the leading (confirmed or most likely)
+  cause. It is HIGH only when a hypothesis is genuinely confirmed by a real report; keep it low while
+  causes are still open, and DO NOT inflate it — a false certainty is a defect. If the report was an
+  honest "not connected / unreachable / denied", it eliminated nothing: leave confidence where it was
+  and say so in the note.
+Never confirm a cause the report does not actually support, and never state a device/number not in it.`;
+
+const INV_FIX_SYSTEM =
+`You are Jarvis, L4 / Principal Engineer, closing an investigation whose root cause is now isolated.
+Compose a fix, grounded ONLY in the evidence gathered (the rounds/reports). Return:
+- rootCause: the isolated cause in one plain sentence, citing what proved it.
+- summary: the fix plan in plain words a NOC engineer can act on.
+- proposal: if (and only if) the fix is a CONFIG CHANGE on a device we can name, return
+  { device, commands:[exact config lines], reason }. It will be routed through the change engine as
+  an approve-FIRST proposal — never applied automatically — so give the real lines. If the fix is
+  manual/external (replace hardware, call a carrier, an operator action), set proposal to null and put
+  the steps in summary. Never propose a change the evidence does not justify.`;
+
+async function invUnderstand({ problem, operatorTz, answers }) {
+  const format = { type: 'json_schema', schema: {
+    type: 'object', additionalProperties: false,
+    required: ['specific', 'understood', 'hypotheses', 'questions'],
+    properties: {
+      specific: { type: 'boolean' },
+      understood: { type: 'string' },
+      hypotheses: { type: 'array', items: { type: 'object', additionalProperties: false,
+        required: ['id', 'text'], properties: { id: { type: 'string' }, text: { type: 'string' } } } },
+      questions: { type: 'array', items: { type: 'string' } },
+    },
+  } };
+  const answerBlock = (answers && answers.length)
+    ? `\n\nThe operator has since answered your clarifying questions:\n` +
+      answers.map((a) => `- ${a.text || a}`).join('\n')
+    : '';
+  const res = await claude.reason({
+    system: INV_UNDERSTAND_SYSTEM,
+    messages: [{ role: 'user', content:
+      `Current time (UTC): ${new Date().toISOString()}${operatorTz ? `  Operator timezone: ${operatorTz}` : ''}\n\n` +
+      `Problem the operator gave:\n"${String(problem || '')}"${answerBlock}\n\n` +
+      `Decide if this is specific enough to start probing. If not, ask; if yes, state it + initial hypotheses.` }],
+    maxTokens: 3000, effort: 'high', format,
+  });
+  if (res.refused) throw new Error('reasoning declined');
+  const p = JSON.parse(res.text);
+  return {
+    specific: p.specific !== false,
+    understood: p.understood || String(problem || ''),
+    hypotheses: Array.isArray(p.hypotheses) ? p.hypotheses : [],
+    questions: Array.isArray(p.questions) ? p.questions : [],
+  };
+}
+
+async function invProbe({ problem, understood, hypotheses, rounds, roster }) {
+  const format = { type: 'json_schema', schema: {
+    type: 'object', additionalProperties: false,
+    required: ['stuck', 'agentId', 'question', 'device', 'rationale'],
+    properties: {
+      stuck: { type: ['string', 'null'] },
+      agentId: { type: ['string', 'null'], enum: [...(roster || []).map((a) => a.id), null] },
+      question: { type: ['string', 'null'] },
+      device: { type: ['string', 'null'] },
+      rationale: { type: ['string', 'null'] },
+    },
+  } };
+  const res = await claude.reason({
+    system: INV_PROBE_SYSTEM,
+    messages: [{ role: 'user', content:
+      `Understood problem: ${understood || problem}\n\n` +
+      `Agents you can task (the only things that see the network):\n${rosterTextFrom(roster)}\n\n` +
+      `Standing hypotheses:\n${hypothesesText(hypotheses)}\n\n` +
+      `Probes run so far and their REAL reports:\n${roundsText(rounds)}\n\n` +
+      `Pick the single highest-value next read-only probe, or set "stuck".` }],
+    maxTokens: 2500, effort: 'high', format,
+  });
+  if (res.refused) throw new Error('reasoning declined');
+  const p = JSON.parse(res.text);
+  if (p.stuck && String(p.stuck).trim()) return { stuck: String(p.stuck).trim() };
+  if (!p.agentId || !p.question) return { stuck: 'The model returned no runnable probe and no reason — stopping rather than guessing.' };
+  return { agentId: p.agentId, question: p.question, device: p.device || null, incidentId: null, rationale: p.rationale || null };
+}
+
+async function invAssess({ understood, hypotheses, probe, report }) {
+  const format = { type: 'json_schema', schema: {
+    type: 'object', additionalProperties: false,
+    required: ['hypotheses', 'confidence', 'note'],
+    properties: {
+      hypotheses: { type: 'array', items: { type: 'object', additionalProperties: false,
+        required: ['id', 'text', 'status'],
+        properties: { id: { type: 'string' }, text: { type: 'string' },
+          status: { type: 'string', enum: ['standing', 'eliminated', 'confirmed'] } } } },
+      confidence: { type: 'number' },
+      note: { type: 'string' },
+    },
+  } };
+  const res = await claude.reason({
+    system: INV_ASSESS_SYSTEM,
+    messages: [{ role: 'user', content:
+      `Understood problem: ${understood}\n\n` +
+      `Standing hypotheses:\n${hypothesesText(hypotheses)}\n\n` +
+      `Probe just run — ${probe.agentName || probe.agentId}: "${probe.question}"\n` +
+      `REAL report (your ONLY new evidence):\n${RULE}\n[${report.stance}] ${report.text}\n${RULE}\n\n` +
+      `Update the hypotheses (standing/eliminated/confirmed) and set confidence 0..1.` }],
+    maxTokens: 2500, effort: 'high', format,
+  });
+  if (res.refused) throw new Error('reasoning declined');
+  const p = JSON.parse(res.text);
+  return {
+    hypotheses: Array.isArray(p.hypotheses) ? p.hypotheses : hypotheses,
+    confidence: typeof p.confidence === 'number' ? p.confidence : 0,
+    note: p.note || '',
+  };
+}
+
+async function invFix({ understood, hypotheses, rounds, rootCause }) {
+  const format = { type: 'json_schema', schema: {
+    type: 'object', additionalProperties: false,
+    required: ['rootCause', 'summary', 'proposal'],
+    properties: {
+      rootCause: { type: 'string' },
+      summary: { type: 'string' },
+      proposal: { type: ['object', 'null'], additionalProperties: false,
+        required: ['device', 'commands', 'reason'],
+        properties: { device: { type: 'string' }, commands: { type: 'array', items: { type: 'string' } },
+          reason: { type: 'string' } } },
+    },
+  } };
+  const res = await claude.reason({
+    system: INV_FIX_SYSTEM,
+    messages: [{ role: 'user', content:
+      `Understood problem: ${understood}\n\n` +
+      `Final hypotheses:\n${hypothesesText(hypotheses)}\n` +
+      (rootCause ? `Isolated root cause: ${rootCause}\n` : '') + `\n` +
+      `The evidence (every real probe report):\n${roundsText(rounds)}\n\n` +
+      `Compose the root cause + fix plan. A config fix → a proposal; a manual fix → proposal null.` }],
+    maxTokens: 3000, effort: 'high', format,
+  });
+  if (res.refused) throw new Error('reasoning declined');
+  const p = JSON.parse(res.text);
+  return { rootCause: p.rootCause || rootCause || '', summary: p.summary || '', proposal: p.proposal || null };
+}
+
+const investigationPlanner = {
+  available: investigationAvailable,
+  understand: invUnderstand,
+  probe: invProbe,
+  assess: invAssess,
+  fix: invFix,
+};
+
 module.exports = {
   init, ask, keyStatus, extractSymptom, rankBlindSpots, synthesizeTriageVerdict, narrateCorrelation,
+  // CW-7: the reasoning planner injected into the investigation loop engine.
+  investigationPlanner,
   // Exposed for the QA CLASS 6 offline test only (the always-surfaces guarantee):
   // a delegated read that hangs / rejects / returns null-or-empty must resolve to
   // an explicit honest finding, never silence.
