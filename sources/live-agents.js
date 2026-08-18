@@ -14,7 +14,7 @@ const aci = require('./aci');
 const sdwan = require('./sdwan');
 const session = require('./session-log');
 const approvals = require('./approvals');
-const { checkCommand, checkIntent, commandWord, READ_VERBS } = require('./guardrails');
+const { checkCommand, checkIntent, splitIntent, commandWord, READ_VERBS } = require('./guardrails');
 
 // The host app injects its broadcast/status/task-board plumbing here so this
 // module stays free of server internals.
@@ -349,31 +349,56 @@ async function executeDeviceCli({ agentId, request, purpose, announce, device, a
   const agentName = (ctx.agents[agentId] && ctx.agents[agentId].name) || agentId;
 
   // 1. Write intent, on the whole raw request.
-  const intent = checkIntent(raw);
-  if (intent.destructive) return { refused: true, kind: 'write', intent, command: null };
+  //
+  // CW-2 pre-work 2 — COMPOUND "read then change". "reload sw1 then show me the
+  // version" is two asks. The old code refused the whole sentence, which is safe
+  // but drops the read without a word; running the whole sentence would be a
+  // write. So the sentence is SPLIT: the change half is refused OUT LOUD, and
+  // the read half is honoured — but only from the read clauses, rebuilt without
+  // a single character of the change half, so nothing from it can reach the
+  // parser or the wire. The reply says both things happened.
+  const split = splitIntent(raw);
+  if (split.destructive && !split.compound) {
+    return { refused: true, kind: 'write', intent: split.change, command: null };
+  }
+  const refusedChange = split.compound ? split.change : null;
+  // From here on the ONLY text considered is the read half.
+  const readOnlyText = refusedChange ? split.readText : raw;
 
   // 2. Parse a read command out of the plain English.
-  const read = readCommandFrom(raw);
-  if (!read.command) return { refused: true, kind: 'no-command', note: read.note || null };
+  const read = readCommandFrom(readOnlyText);
+  if (!read.command) return { refused: true, kind: 'no-command', note: read.note || null, refusedChange };
 
   // 2a. Guardrail on the RAW fragment first — chaining/redirection characters
   //     ("; & | > < ` $" and newlines) are still present at this point. The
   //     canonicalised string below has had its whitespace flattened, so a
   //     newline-separated second command would have been invisible to it.
   const rawVerdict = checkCommand(read.rawFragment || read.command);
-  if (!rawVerdict.allowed) return { refused: true, kind: 'guardrail', reason: rawVerdict.reason };
+  if (!rawVerdict.allowed) return { refused: true, kind: 'guardrail', reason: rawVerdict.reason, refusedChange };
   const verdict = checkCommand(read.command);
-  if (!verdict.allowed) return { refused: true, kind: 'guardrail', reason: verdict.reason };
+  if (!verdict.allowed) return { refused: true, kind: 'guardrail', reason: verdict.reason, refusedChange };
 
   // 3. Which box did the operator name? Parsed from the text alone (no wire
   //    call yet) so the approval record can name the target before anything runs.
-  const namedAll = namedDevicesIn(raw);
+  // WHICH BOX, on a compound ask. The device belongs to the SENTENCE, not to a
+  // clause: "reload sw2 then show me the version" names sw2 once and means it
+  // for both halves. Reading the device out of the read half alone answered
+  // with sw1 — the first reachable box — which is the wrong-answer-in-right-
+  // clothes this path exists to prevent. So the read half is asked first (it
+  // wins if it names its own box) and the full sentence is the fallback.
+  let namedAll = namedDevicesIn(readOnlyText);
+  if (!namedAll.length && refusedChange) {
+    const fromWholeSentence = namedDevicesIn(raw);
+    const fromChangeClause = deviceInChangeClause(refusedChange);
+    namedAll = fromWholeSentence.length ? fromWholeSentence : (fromChangeClause ? [fromChangeClause] : []);
+  }
   // More than one box named ("compare the running config of sw2 against sw3")
   // is a request this path cannot honour: Command Runner is driven here as one
   // command on one device, and running sw2 alone while the operator asked about
   // sw2 AND sw3 is half an answer presented as the whole one. Say so; run none.
   if (namedAll.length > 1) {
     return { refused: true, kind: 'multi-device', command: verdict.command, devices: namedAll,
+      refusedChange,
       reason: `You named ${namedAll.length} devices (${namedAll.join(', ')}), and I run one command on one ` +
         `device at a time — so I ran nothing rather than answer for ${namedAll[0]} alone and let it look like ` +
         `the whole picture. Ask me for each box in turn ("${verdict.command} on ${namedAll[0]}", then ` +
@@ -450,9 +475,9 @@ async function executeDeviceCli({ agentId, request, purpose, announce, device, a
     };
   });
 
-  if (g.denied) return { denied: true, command: verdict.command };
+  if (g.denied) return { denied: true, command: verdict.command, refusedChange };
   const r = g.result || {};
-  if (r.unknownDevice) return { refused: true, kind: 'unknown-device', reason: r.unknownDevice, command: verdict.command };
+  if (r.unknownDevice) return { refused: true, kind: 'unknown-device', reason: r.unknownDevice, command: verdict.command, refusedChange };
   if (r.ambiguous) {
     // Ran NOTHING. Park the request so the operator's next word ("sw2", "2",
     // "all") finishes the job they actually asked for — the question is useless
@@ -465,15 +490,16 @@ async function executeDeviceCli({ agentId, request, purpose, announce, device, a
       refused: true, kind: 'ambiguous', command: verdict.command,
       candidates: r.ambiguous.candidates,
       reason: ambiguityQuestion(raw, verdict.command, r.ambiguous),
+      refusedChange,
     };
   }
   const runs = r.runs || [];
-  if (r.multi) return { ok: true, multi: true, command: verdict.command, runs, note: r.note };
+  if (r.multi) return { ok: true, multi: true, command: verdict.command, runs, note: r.note, refusedChange };
   const one = runs[0];
   // This conversation is now working on THIS box: a follow-up that names no
   // device lands here instead of starting the guessing game over.
   if (one) rememberDevice(one.target.hostname);
-  return { ok: true, command: verdict.command, target: one.target, note: r.note, body: one.body, deviceOk: one.ok };
+  return { ok: true, command: verdict.command, target: one.target, note: r.note, body: one.body, deviceOk: one.ok, refusedChange };
 }
 
 // ── Conversation memory + the parked question ───────────────────────────────
@@ -516,8 +542,24 @@ function ambiguityQuestion(raw, command, amb) {
 
 // Plain-words rendering of a choke-point result. Shared by every caller so the
 // same refusal reads the same way in chat, in a debate and in a Jarvis finding.
+// The change half of a compound ask, refused OUT LOUD. Prepended to whatever
+// happened to the read half, so the operator is never left assuming the change
+// went through because the read did.
+function changeRefusalText(refusedChange) {
+  if (!refusedChange) return '';
+  return `🚫 I did NOT do the change you asked for — "${refusedChange.keyword}"` +
+    (refusedChange.clause && refusedChange.clause.toLowerCase() !== refusedChange.keyword
+      ? ` (in "${String(refusedChange.clause).slice(0, 80)}")` : '') +
+    `. That changes device state, and this path is read-only.\n` +
+    `Changes go through the change engine (POST /api/copilot/change), which wraps every one in an ` +
+    `approval, a before/after capture, a diff, a validation and a rollback plan.\n` +
+    `What follows is the READ half of your request only — so it shows the device AS IT IS NOW, ` +
+    `not as it would be after the change I refused.\n${RULE}\n`;
+}
+
 function cliResultText(res, raw) {
   if (!res) return 'Nothing ran.';
+  if (res.refusedChange) return changeRefusalText(res.refusedChange) + cliResultText({ ...res, refusedChange: null }, raw);
   if (res.denied) {
     return `Read denied by the operator — ran nothing. The command "${res.command}" was not approved, ` +
       `so nothing was sent to any device and I will not invent a result.`;
@@ -591,6 +633,18 @@ function namedDevicesIn(text) {
     }
   }
   return hits;
+}
+
+// In a CHANGE clause the box is the verb's OBJECT, not a prepositional phrase:
+// "reload sw2" names sw2 without ever saying "on". namedDevicesIn deliberately
+// ignores that shape (it would misread "ping 8.8.8.8" as a device), so the
+// compound path asks for it explicitly — and only for the clause it already
+// knows is a command, with the change verb itself as the anchor.
+function deviceInChangeClause(change) {
+  if (!change || !change.clause || !change.keyword) return null;
+  const re = new RegExp(`\\b${change.keyword}\\b\\s+(?:the\\s+)?(?:device|switch|router|host|box)?\\s*(${DEVICE_TOKEN})\\b`, 'i');
+  const m = re.exec(String(change.clause));
+  return m ? m[1].toLowerCase() : null;
 }
 
 function namedDeviceIn(text) {
@@ -819,6 +873,16 @@ async function configKeeper(agentId, command, opts) {
       agentId, request: raw, announce: true, device, all: allDevices,
       purpose: `operator asked: "${raw.slice(0, 80)}"`,
     });
+
+    // COMPOUND ask: the change half is refused OUT LOUD before anything else is
+    // said, so the read below can never be mistaken for the change going ahead.
+    if (res.refusedChange) {
+      say(agentId, `${changeRefusalText(res.refusedChange)}`.trimEnd());
+      ctx.appendToActivityLog(
+        `[${new Date().toISOString()}] [${agentName}] Refused the change half of a compound ask ` +
+        `("${res.refusedChange.keyword}") — ran the read half only
+`);
+    }
 
     if (res.refused && res.kind === 'write') {
       refuseWrite(agentId, raw, res.intent);

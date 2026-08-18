@@ -88,6 +88,16 @@ const CONFIG_SECRET_RULES = [
   { re: /^(\s*wpa-psk\s+(?:ascii|hex)\s+(?:\d+\s+)?)(\S.*)$/i, keep: 1 },
 ];
 
+// Already redacted? Then leave it alone. THE SCRUB MUST BE IDEMPOTENT: config
+// text is scrubbed on the way into the config store, again on the way into a
+// change record, and again whenever a stored config is compared or re-stored.
+// Without this guard the second pass redacted the FIRST pass's fingerprint, so
+// «redacted:24e4f4b3» became «redacted:60da57ba» — and the same untouched
+// password then showed up as a CHANGED LINE in a diff. A drift report that
+// invents a password change out of its own scrubbing is a fabricated finding,
+// which is the one thing this system may never produce.
+const ALREADY_REDACTED = /^«redacted:[0-9a-f]{8}»$/;
+
 function scrubConfig(text) {
   if (text == null) return '';
   // Phase B first (JSON-shaped credential fields, if any wrap the CLI output).
@@ -100,6 +110,7 @@ function scrubConfig(text) {
         const tail = rule.tail ? (m[rule.tail] || '') : '';
         // The secret is whatever the rule captured between head and tail.
         const secret = rule.tail ? (m[2] || '') : line.slice(head.length);
+        if (ALREADY_REDACTED.test(String(secret).trim())) return line;
         return head + redactSecret(secret) + tail;
       }
     }
@@ -256,9 +267,38 @@ function latest(device) {
   return history[history.length - 1];
 }
 
+/**
+ * Diff two config TEXTS directly (CW-2: the change wrap compares its own
+ * pre/post captures, and the drift check compares live against a stored
+ * baseline — neither is "this run vs the last run", which is what diff() does).
+ *
+ * Both sides are scrubbed the SAME way before comparing, so a redaction can
+ * never show up as a difference; only a real change does. Returns:
+ *   { changed, added, removed, unified, lines:[{ change:'added'|'removed', line }] }
+ */
+function diffTexts(beforeText, afterText) {
+  const before = scrubConfig(beforeText);
+  const after = scrubConfig(afterText);
+  if (before === after) {
+    return { changed: false, added: 0, removed: 0, unified: '', lines: [] };
+  }
+  const ops = lcsDiff(before.split('\n'), after.split('\n'));
+  const lines = ops
+    .filter((o) => o.t !== ' ')
+    .map((o) => ({ change: o.t === '+' ? 'added' : 'removed', line: o.line }));
+  return {
+    changed: true,
+    added: lines.filter((l) => l.change === 'added').length,
+    removed: lines.filter((l) => l.change === 'removed').length,
+    unified: toUnified(ops),
+    lines,
+  };
+}
+
 module.exports = {
   snapshot,
   diff,
+  diffTexts,
   latest,
   // exported for tests / reuse
   scrubConfig,

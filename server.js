@@ -23,7 +23,10 @@ const approvals = require('./sources/approvals');
 const artifacts = require('./sources/artifacts');
 const notifier = require('./sources/notifier');
 const capabilities = require('./sources/capabilities');
-const { checkIntent } = require('./sources/guardrails');
+const changeRunner = require('./sources/change-runner');
+const changeStore = require('./sources/change-store');
+const guardrails = require('./sources/guardrails');
+const { checkIntent } = guardrails;
 
 // One module owns where the workspace is and how any caller-supplied path is
 // turned into a real path. Nothing else in this file builds a path from input.
@@ -339,6 +342,122 @@ app.get('/api/copilot/audit', (req, res) => {
 });
 // ── end CW-1 block ──────────────────────────────────────────────────────────
 
+// ── CW-2: the change engine + drift checks ──────────────────────────────────
+// Thin routes ON PURPOSE. Every rule — the permission gate, the six-step wrap,
+// the honest statuses, the scrubbing, the audit — lives in
+// sources/change-runner.js and sources/change-store.js, so no future route can
+// make a change by a different path or with a step missing. The 428 name gate
+// above already covers these (they are all under /api/copilot/).
+
+// A change command is free text an operator typed; keep it printable, single-
+// line and bounded before it goes anywhere near a device or a store.
+function cleanChangeCommands(raw) {
+  if (!Array.isArray(raw)) return { error: 'commands must be a list of configuration lines.' };
+  const out = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') return { error: 'every command must be text.' };
+    const line = item.replace(/[^\x20-\x7E]/g, '').replace(/\s+$/, '');
+    if (!line.trim()) continue;
+    if (line.length > 300) return { error: 'a configuration line longer than 300 characters is not something I will send.' };
+    out.push(line);
+  }
+  if (!out.length) return { error: 'no configuration lines given — there is no change to make.' };
+  if (out.length > 100) return { error: 'more than 100 lines in one change — split it up.' };
+  return { commands: out };
+}
+
+// POST /api/copilot/change — start a wrapped change. Answers 202 with the
+// record id straight away; the wrap itself takes real minutes on real kit, and
+// the desk follows it through change_update events and GET /api/copilot/change/:id.
+app.post('/api/copilot/change', (req, res) => {
+  const body = req.body || {};
+  const device = String(body.device || '').trim();
+  const reason = String(body.reason || '').trim();
+  if (!device) return res.status(400).json({ error: 'Name the device — I will not pick one for you.' });
+  if (!reason) return res.status(400).json({ error: 'Give a reason for the change — it goes in the record and the approval.' });
+  const cleaned = cleanChangeCommands(body.commands);
+  if (cleaned.error) return res.status(400).json({ error: cleaned.error });
+
+  let created = null;
+  const running = changeRunner.run(
+    { device, commands: cleaned.commands, reason, who: req.operator },
+    { onCreated: (rec) => { created = rec; } },
+  );
+  running
+    .then((rec) => broadcast('change_update', rec))
+    .catch((err) => {
+      reportSystemError('the change engine could not finish that change', err);
+      if (created) {
+        try {
+          broadcast('change_update', changeStore.status(created.id, 'failed', {
+            by: req.operator, note: `The wrap threw before it finished — ${err.message}. Treat this change as UNKNOWN, not applied.`,
+          }));
+        } catch (e) { /* the audit line above already recorded it */ }
+      }
+    });
+
+  if (!created) return res.status(500).json({ error: 'The change record could not be opened, so nothing was started.' });
+  res.status(202).json({ change: created, watch: `/api/copilot/change/${created.id}` });
+});
+
+// POST /api/copilot/change/:id/rollback — replay the stored rollback commands
+// through the SAME engine. A rollback is a change: its own record, its own gate.
+app.post('/api/copilot/change/:id/rollback', (req, res) => {
+  const id = String(req.params.id || '');
+  const original = changeStore.get(id);
+  if (!original) return res.status(404).json({ error: `No change record with id "${id}".` });
+
+  let created = null;
+  const running = changeRunner.rollback(id, req.operator, { onCreated: (rec) => { created = rec; } });
+  running
+    .then((rec) => { if (rec && !rec.error) broadcast('change_update', rec); })
+    .catch((err) => reportSystemError('the change engine could not finish that rollback', err));
+
+  if (!created) {
+    // rollback() refused before opening a record (nothing to replay) — answer
+    // with its own honest reason rather than a generic failure.
+    return running.then((r) => res.status(409).json(r && r.error ? r : { error: 'That change has nothing to roll back.' }))
+      .catch(() => res.status(500).json({ error: 'The rollback could not be started.' }));
+  }
+  res.status(202).json({ change: created, rollbackOf: id, watch: `/api/copilot/change/${created.id}` });
+});
+
+app.get('/api/copilot/changes', (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 50, 300);
+  res.json({ changes: changeStore.list({ device: req.query.device, limit }) });
+});
+
+app.get('/api/copilot/change/:id', (req, res) => {
+  const rec = changeStore.get(String(req.params.id || ''));
+  if (!rec) return res.status(404).json({ error: `No change record with id "${req.params.id}".` });
+  res.json({ change: rec });
+});
+
+// GET /api/copilot/drift/:device — live running-config vs the stored baseline.
+// "no-baseline" is an honest STATE, answered 200, not an error.
+app.get('/api/copilot/drift/:device', async (req, res) => {
+  try {
+    const out = await changeRunner.drift(String(req.params.device || ''));
+    if (out.error) return res.status(404).json(out);
+    res.json(out);
+  } catch (err) {
+    res.status(502).json({ error: `The drift check could not run — ${err.message}. No verdict is being claimed.` });
+  }
+});
+
+// POST /api/copilot/drift/:device/rebaseline — store the live config as the new
+// reference. Operator-named (the 428 gate) and audited inside the engine.
+app.post('/api/copilot/drift/:device/rebaseline', async (req, res) => {
+  try {
+    const out = await changeRunner.rebaseline(String(req.params.device || ''), req.operator);
+    if (out.error) return res.status(502).json(out);
+    res.json(out);
+  } catch (err) {
+    res.status(502).json({ error: `The re-baseline could not run — ${err.message}. The baseline is unchanged.` });
+  }
+});
+// ── end CW-2 block ──────────────────────────────────────────────────────────
+
 // Create HTTP server
 const server = http.createServer(app);
 
@@ -408,6 +527,11 @@ session.setBroadcast((rec) => broadcast('session_record', rec));
 // the real raw output (already secret-scrubbed by the session log), why it ran and
 // what it means — in addition to the summary chat_message.
 session.setCommandShareBroadcast((data) => broadcast('command_share', data));
+
+// CW-2: every write to a change record — created, each wrap step, each status
+// transition — is pushed to the desk, so the change wrap the operator is
+// watching is the record itself, not a UI guess at what is happening.
+changeStore.setBroadcast((type, data) => broadcast(type, data));
 
 // The permission gate (Phase C) broadcasts approval requests + decisions so the
 // approval surface updates live: approval_new, approval_update, approval_mode.
@@ -956,9 +1080,20 @@ function runAgentAction(agentId, command) {
   // still refused deterministically, before the model, on either route. Plain
   // prose reaches the planner, where the choke point (executeDeviceCli) re-runs
   // this same check on whatever is actually about to be executed.
+  //
+  // CW-2 pre-work 2: a COMPOUND "read then change" ("reload sw1 then show me
+  // the version") is NOT refused here. It is passed down to the CLI choke point
+  // (live-agents.executeDeviceCli), which refuses the change half out loud AND
+  // honours the read half — one place owns both halves, so neither is dropped
+  // silently. Only requests the choke point can actually reach are passed on;
+  // anything else is still refused right here, exactly as before.
   const screenThis = agentId !== 'jarvis' || live.isDeviceCliRequest(command);
   const writeIntent = screenThis ? checkIntent(command) : { destructive: false };
-  if (writeIntent.destructive) {
+  const compoundGoesToChokePoint = writeIntent.destructive
+    && screenThis
+    && live.isDeviceCliRequest(command)
+    && guardrails.splitIntent(command).compound;
+  if (writeIntent.destructive && !compoundGoesToChokePoint) {
     appendToActivityLog(`[${new Date().toISOString()}] [${agent.name}] Refused a state-changing request ("${writeIntent.keyword}") — "${command.slice(0, 60)}"\n`);
     return live.refuseWrite(agentId, command, writeIntent);
   }
@@ -1202,8 +1337,24 @@ function simulateJarvisAction(agentId, command) {
       agentName: a ? a.name : 'Jarvis',
       agentIcon: a ? a.icon : '🎖️',
       text: check.text,
+      // A change ask is a PROPOSAL, not a refusal. Tagging the message lets the
+      // desk render it as the caption to its proposal card (one coherent
+      // response) instead of a second, contradicting bubble.
+      kind: check.changeProposal ? 'change_proposal' : undefined,
       timestamp: new Date().toISOString(),
     });
+    // Audit + activity must say what is TRUE. A change ask was OFFERED as a
+    // proposal (the engine is built; it simply does not fire from chat), not
+    // "honestly refused" — recording it as a refusal would misstate the system.
+    if (check.changeProposal) {
+      session.audit({
+        what: `ask: ${String(command).slice(0, 200)}`,
+        result: 'offered a change proposal to confirm — nothing fired, zero device calls',
+      });
+      appendToActivityLog(`[${new Date().toISOString()}] [Jarvis] Offered a change proposal (chat never fires a change) — asked: "${String(command).slice(0, 60)}"\n`);
+      updateAgentStatus(agentId, 'idle', 'Drafted a change proposal — waiting for you to confirm');
+      return;
+    }
     session.audit({
       what: `ask: ${String(command).slice(0, 200)}`,
       result: `honestly refused — ${check.ability ? `${check.ability.key} not available` : 'no capability covers this'} (zero device calls)`,
