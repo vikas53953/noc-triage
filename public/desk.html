@@ -2558,13 +2558,16 @@ var TKT_STATUSES = ['open','assigned','in-progress','resolved','closed'];
    The INTERNAL ticket queue is the SINGLE SOURCE OF TRUTH. ServiceNow is a
    MIRROR that syncs only when Vikas has supplied an instance + creds. Until
    then every branch is HONEST: no fake INC number, no fake link, no fake sync.
-     GET  /api/copilot/servicenow/status          → {connected, lastSync}
-     POST /api/copilot/tickets/:id/snow/push       → creates/updates the INC → {number, url}
-     POST /api/copilot/tickets/:id/snow/pull       → mirrors the INC state back (may report a CONFLICT)
-   Creds are secrets — the server never returns them and we never show them.
+     GET  /api/copilot/servicenow/status  → {connected, lastSync}
+     POST /api/copilot/tickets/:id/snow/push  → {ok, connected, number, url, ticket}
+     POST /api/copilot/tickets/:id/snow/pull  → {ok, connected, conflict,
+            mirror:{stateLabel, updatedOn, worknotes, ...}, ticket}
+   The persisted ticket.snow carries {id, number, url, syncedAt, mirror, conflict,
+   mirroredAt} — the UI renders the mirror/conflict from ticket.snow so a RELOAD
+   still shows a pending conflict. Creds are secrets — never returned, never shown.
    ============================================================ */
 var SNOW = { state:'loading', connected:false, lastSync:null, error:'', reason:'',
-             mirror:{}, link:{}, busy:{} };  // mirror/link/busy keyed by ticket id
+             link:{}, busy:{} };  // link (url fallback) + busy (per-ticket error) keyed by ticket id
 var snowInflight = false;
 function loadSnowStatus(){
   if(snowInflight) return;
@@ -2608,42 +2611,66 @@ function snowPill(){
     ? '<span class="snow-pill on"><span class="dot"></span>Connected</span>'
     : '<span class="snow-pill off">Not connected</span>';
 }
-/* The mirror state pulled back from ServiceNow, shown SEPARATELY from internal
-   truth so a pull never silently rewrites the ticket. A conflict is called out. */
-function snowMirrorHtml(t){
-  var m = SNOW.mirror[t.id];
+/* The most-recent internal change on the ticket (its own source of truth):
+   the latest of the ticket's own timestamp, its work notes, and its history.
+   Mirrors the backend's lastTouched so the conflict "Updated" column is honest. */
+function lastInternalTouch(t){
+  var best = t && t.ts ? new Date(t.ts).getTime() : 0;
+  (Array.isArray(t.worknotes) ? t.worknotes : []).forEach(function(n){
+    if(n && n.ts){ var v = new Date(n.ts).getTime(); if(v > best) best = v; }
+  });
+  (Array.isArray(t.history) ? t.history : []).forEach(function(h){
+    if(h && h.ts){ var v = new Date(h.ts).getTime(); if(v > best) best = v; }
+  });
+  return best ? new Date(best).toISOString() : null;
+}
+/* The SNOW work-note journal. The backend hands it as a STRING (the pinned shape
+   also allows an array) — accept both, always escaped at the sink. */
+function snowWorknoteText(m){
   if(!m) return '';
-  if(m.conflict){
-    var mine = m.internal || {};
-    var theirs = m.remote || {};
+  var w = m.worknotes;
+  if(w == null || w === '') w = m.comments;   // fall back to the comments journal
+  if(Array.isArray(w)){
+    return w.map(function(n){ return typeof n === 'string' ? n : (n && (n.text || n.value || n.note) || ''); })
+            .filter(Boolean).join('  •  ');
+  }
+  return String(w == null ? '' : w);
+}
+/* The mirror pulled back from ServiceNow, read from the ticket's PERSISTED
+   snow slot (ticket.snow.mirror / .conflict) so a reload still shows a pending
+   conflict. Shown SEPARATELY from internal truth — a pull never rewrites the
+   ticket. A conflict is called out and never silently resolved. */
+function snowMirrorHtml(t){
+  var s = (t && t.snow && typeof t.snow === 'object') ? t.snow : {};
+  var m = (s.mirror && typeof s.mirror === 'object') ? s.mirror : null;
+  if(!m && !s.conflict) return '';
+  var snowState = m ? (m.stateLabel || m.state || '—') : '—';
+  var snowUpd = (m && m.updatedOn) ? clockOf(m.updatedOn) : '—';
+  var wn = snowWorknoteText(m);
+  var wnRow = wn
+    ? '<div class="v" style="margin-top:.35rem"><b>Latest SNOW work note:</b> ' + esc(wn) + '</div>' : '';
+  if(s.conflict){
+    var intUpd = lastInternalTouch(t);
     return '<div class="snow-conflict"><b>⚠ Conflict — both sides changed.</b> ' +
       'The internal ticket and its ServiceNow mirror have each moved since the last sync. ' +
       'Nothing was overwritten. Reconcile deliberately — push to make ServiceNow match the ' +
       'internal truth, or open the INC to fold its changes in by hand.' +
       '<div class="cols">' +
         '<div class="col"><div class="h">Internal (truth)</div>' +
-          '<div class="v"><b>State:</b> ' + esc(mine.state || t.status || '—') + '</div>' +
-          '<div class="v"><b>Updated:</b> ' + esc(mine.updatedAt ? clockOf(mine.updatedAt) : '—') + '</div></div>' +
+          '<div class="v"><b>State:</b> ' + esc(t.status || '—') + '</div>' +
+          '<div class="v"><b>Updated:</b> ' + esc(intUpd ? clockOf(intUpd) : '—') + '</div></div>' +
         '<div class="col"><div class="h">ServiceNow mirror</div>' +
-          '<div class="v"><b>State:</b> ' + esc(theirs.state || '—') + '</div>' +
-          '<div class="v"><b>Updated:</b> ' + esc(theirs.updatedAt ? clockOf(theirs.updatedAt) : '—') + '</div></div>' +
-      '</div>' +
-      (theirs.worknote ? '<div class="v" style="margin-top:.35rem"><b>Latest SNOW work note:</b> ' + esc(theirs.worknote) + '</div>' : '') +
+          '<div class="v"><b>State:</b> ' + esc(snowState) + '</div>' +
+          '<div class="v"><b>Updated:</b> ' + esc(snowUpd) + '</div></div>' +
+      '</div>' + wnRow +
     '</div>';
   }
-  var rows = '';
-  if(m.state) rows += '<div class="row"><span>State in ServiceNow</span><b>' + esc(m.state) + '</b></div>';
-  if(m.assignedTo) rows += '<div class="row"><span>Assigned to</span><b>' + esc(m.assignedTo) + '</b></div>';
-  if(m.updatedAt) rows += '<div class="row"><span>Last updated there</span><b>' + esc(clockOf(m.updatedAt)) + '</b></div>';
-  var notes = Array.isArray(m.worknotes) ? m.worknotes : [];
-  var notesHtml = notes.length
-    ? notes.slice(-3).map(function(n){ n = n || {};
-        return '<div class="row"><span>' + esc(n.who || n.by || 'SNOW') + (n.ts ? ' · ' + esc(clockOf(n.ts)) : '') +
-          '</span><b>' + esc(n.text || '') + '</b></div>'; }).join('')
-    : '';
-  if(!rows && !notesHtml) rows = '<div class="row"><span>Mirror read</span><b>no change</b></div>';
+  var rows = '<div class="row"><span>State in ServiceNow</span><b>' + esc(snowState) + '</b></div>';
+  if(m && m.number) rows += '<div class="row"><span>Incident</span><b>' + esc(m.number) + '</b></div>';
+  rows += '<div class="row"><span>Last updated there</span><b>' + esc(snowUpd) + '</b></div>';
   return '<div class="snow-mirror"><div class="r-lbl">Pulled from ServiceNow · ' +
-    esc(m.pulledAt ? clockOf(m.pulledAt) : nowClock()) + '</div>' + rows + notesHtml +
+    esc(s.mirroredAt ? clockOf(s.mirroredAt) : nowClock()) + '</div>' + rows +
+    (wn ? '<div class="row"><span>Work note</span><b>' + esc(wn) + '</b></div>' : '') +
     '<div class="stamp" style="margin-top:.3rem">This is a read-only mirror — the internal ticket above stays the source of truth.</div></div>';
 }
 /* The whole ServiceNow slot for a ticket detail. Every branch is honest. */
@@ -2725,24 +2752,27 @@ function snowSync(t, kind){
         renderTicketDetail();
         return;
       }
+      /* The server returns the authoritative, PERSISTED ticket (b.ticket) whose
+         snow slot carries mirror/conflict — render from that so a reload shows the
+         same. If b.ticket is absent, fold the pinned mirror/conflict fields into
+         the ticket we hold. Either way we read ticket.snow, never invented fields. */
+      if(b.ticket && typeof b.ticket === 'object'){
+        TKT.sel = b.ticket; TKT.selState = 'ok';
+      } else if(kind === 'pull'){
+        var sn = (TKT.sel && TKT.sel.snow) || {};
+        if(TKT.sel) TKT.sel.snow = Object.assign({}, sn, { mirror: b.mirror || sn.mirror, conflict: !!b.conflict, mirroredAt: new Date().toISOString() });
+      }
       if(kind === 'pull'){
-        /* A pull is a read-only mirror. Cache it against the ticket; conflicts included. */
-        SNOW.mirror[t.id] = {
-          state: b.state, assignedTo: b.assignedTo, updatedAt: b.updatedAt,
-          worknotes: b.worknotes, conflict: !!b.conflict, internal: b.internal, remote: b.remote,
-          pulledAt: b.pulledAt || new Date().toISOString()
-        };
         if(b.conflict) toast('ServiceNow pull found a conflict — both sides changed. Nothing overwritten.', true);
         else toast('Pulled the ServiceNow mirror — by ' + OP);
         renderTicketDetail();
+        loadTickets(true);
       } else {
-        /* A push updates the real record. Remember any URL it returned, then re-read
-           the ticket so the INC number/sync time come from the server, not this click. */
         if(b.url) SNOW.link[t.id] = b.url;
         toast((num ? 'Updated' : 'Created') + ' the ServiceNow INC' + (b.number ? ' ' + b.number : '') + ' — by ' + OP);
-        delete SNOW.mirror[t.id];   // a fresh push clears a stale pulled mirror
+        if(b.ticket && typeof b.ticket === 'object') renderTicketDetail();
+        else selectTicket(t.id);   // fallback re-read when the server didn't echo the ticket
         loadSnowStatus();
-        selectTicket(t.id);
         loadTickets(true);
       }
     })
