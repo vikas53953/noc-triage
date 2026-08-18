@@ -66,3 +66,11 @@ Last updated: 2026-08-17 ~22:40 IST · driver: Fable session 7d4aaef3
 4. Fold in stranger-UI sweep when it lands (Class 8)
 5. THEN Class 1 (kill shell) on clean master, then #7/#8/#9/#10 — each own PR, reviewed, live-verified
 6. Keep TRACKER + HANDOFF + GitHub current every turn
+
+## 2026-08-18 update
+- OVERNIGHT LAUNCHER ARMED: Windows task "noc-triage-autoresume" fires every 30m, runs
+  autonomous-resume.ps1 → fresh claude session resumes from TRACKER (survives quota wall; skips if a
+  session is already alive). Earlier failure: same-session ScheduleWakeup can't beat a session-wide limit.
+- CW-2 both halves fixed after review (BE 14869f7 guardrail object-less write hole + mixed-message;
+  UI fd3dbb7 history gated on engineBuilt + plural /changes route). FINAL integrated re-review running.
+- Ambiguity fix PR #46 review resumed (was near done: memory works, checking isolation + named-device-through-planner).
