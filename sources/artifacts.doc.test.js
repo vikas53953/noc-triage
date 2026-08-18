@@ -177,6 +177,48 @@ console.log('\nFINDING 2 (b) — no timing data ⇒ no timing claim:');
     !sn.affectedCIs.map((x) => x.ci).includes('True_Test'), JSON.stringify(sn.affectedCIs));
 }
 
+// ── 3c. No incident window ⇒ no in-window claim, even when the reader produced
+// a groups split. sdwan.clusterAlarms ALWAYS returns newCount/chronicCount; with
+// no time anchor it measures against a default rolling 24 hours, which has nothing
+// to do with this incident. Reporting that as "2 new alarms appeared during this
+// incident" on an alert-opened P1 raised a minute ago is a fabricated timing claim.
+console.log('\nFINDING 2 (c) — a default 24h window is never reported as "this incident":');
+{
+  const alertOpened = baseRec({
+    status: 'open', operatorTz: null, closedAt: null,
+    affectedCIs: [{ ci: 'Manager01', type: 'device', front: 'wan' }],
+    evidenceFinal: [
+      // Exactly what readWan() returns on a bridge with no time anchor: a real
+      // groups split, computed against sdwan's default `now - 24h`.
+      ev('wan', 'degraded', ALARM_DUMP, { groups: { total: 254, newCount: 2, chronicCount: 252 } }),
+    ],
+    verdict: {
+      verdict: 'x', impact: 'x', nextChecks: [], activeInWindow: ['wan'], preExisting: [],
+      suspect: [], clean: [], hypothesis: null, blindSpots: [],
+      window: { timeAnchor: null, scope: ['wan'], source: 'alert' },
+    },
+  });
+  const doc = A.renderSltDoc(alertOpened);
+  const broke = doc.split('## What broke')[1].split('## Who or what')[0];
+  ok('no time anchor ⇒ nothing is called "a live problem that started during this incident"',
+    !/A live problem that started during this incident/.test(broke), broke.trim());
+  ok('no time anchor ⇒ the "N new alarms appeared during this incident" claim is not made',
+    !/new alarms? appeared during this incident/.test(broke), broke.trim());
+  ok('no time anchor ⇒ the doc says the timing is unknown',
+    /do not record when they started/.test(broke), broke.trim());
+  ok('the front is still reported, not silently dropped', /Wide-area \/ internet edge/.test(broke), broke.trim());
+  ok('the undated front still keeps its CI on the ticket (it cannot be ruled out)',
+    A.buildServiceNow(alertOpened).affectedCIs.map((x) => x.ci).includes('Manager01'));
+  // The same record WITH a real anchor must still make the in-window claim.
+  const dated = baseRec(Object.assign({}, alertOpened, {
+    verdict: Object.assign({}, alertOpened.verdict, {
+      window: { timeAnchor: '2026-08-18T04:00:00.000Z', scope: ['wan'], source: 'heuristic' },
+    }),
+  }));
+  ok('a REAL incident window still reports the 2 new alarms',
+    /2 new alarms appeared during this incident/.test(A.renderSltDoc(dated)));
+}
+
 // ── 4. Plain labels + no raw front keys / engine jargon ──────────────────────
 console.log('\nFINDING 5 — plain words everywhere the doc composes:');
 {
@@ -240,7 +282,9 @@ console.log('\nFINDING 3 + 6 — ServiceNow CI scope follows the committed verdi
     verdict: {
       verdict: 'x', impact: 'x', nextChecks: [], activeInWindow: ['wan'], preExisting: [],
       suspect: [], clean: ['campus'], hypothesis: null, blindSpots: [],
-      window: { timeAnchor: null, scope: ['fabric'], source: 'heuristic' },
+      // A REAL time anchor — chronic-only is only a provable claim when the readers
+      // had this incident's own window to measure against (see windowEvidence).
+      window: { timeAnchor: '2026-08-17T08:30:00.000Z', scope: ['fabric'], source: 'heuristic' },
     },
   });
   // wan is chronic-only ⇒ not confirmed ⇒ nothing implicated at all.

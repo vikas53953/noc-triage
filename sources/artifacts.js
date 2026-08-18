@@ -168,8 +168,18 @@ function onlyFronts(list) {
 // window) or `groups` (alarm clusters, chronic vs new). Returns null when a card
 // carries no structured split at all — the caller then says what it knows and never
 // guesses. Never derived by reading words out of the detail string.
-function windowEvidence(e) {
-  if (!e) return null;
+//
+// `dated` is the second half of the law, and it is not optional. A split is only a
+// statement about THIS incident when the readers had a real incident window to
+// measure against. When the bridge has no time anchor (an alert-opened incident, or
+// a description with no "since 2pm" in it) the SD-WAN reader STILL clusters alarms —
+// but against a default rolling 24 hours (sdwan.clusterAlarms: `sinceTs ?? now-24h`),
+// which has nothing to do with this incident. Reporting that as "2 new alarms
+// appeared during this incident" on a P1 raised sixty seconds ago is exactly the
+// fabricated-timing class this file exists to kill, so an undated record makes NO
+// timing claim at all: every front falls into the honest "we cannot say when" bucket.
+function windowEvidence(e, dated) {
+  if (!e || !dated) return null;
   const age = e.age;
   if (age && (Number.isFinite(age.inWindow) || Number.isFinite(age.older))) {
     return { newCount: age.inWindow || 0, oldCount: age.older || 0, unit: 'fault' };
@@ -207,16 +217,25 @@ function plainDetail(e) {
 //             incident, or a reader with no per-item timestamps): faults are real
 //             and current, but we cannot say WHEN they started, and we say so.
 // Returns null for a legacy record with no window-aware verdict at all.
+//
+// The whole split is gated on `dated` — see windowEvidence(). With no real incident
+// time anchor NOTHING may be called "new during this incident"; the fronts are still
+// reported, in the unknown bucket, with their timing stated as unknown.
+function hasIncidentWindow(rec) {
+  const w = rec && rec.verdict && rec.verdict.window;
+  return !!(w && w.timeAnchor);
+}
 function brokeSplit(rec) {
   const v = rec.verdict || null;
   if (!v || !Array.isArray(v.activeInWindow)) return null;
+  const dated = hasIncidentWindow(rec);
   const evByFront = {};
   (rec.evidenceFinal || []).forEach((e) => { evByFront[e.front] = e; });
   const broke = [];
   const chronic = [];
   const unknown = [];
   v.activeInWindow.forEach((f) => {
-    const w = windowEvidence(evByFront[f]);
+    const w = windowEvidence(evByFront[f], dated);
     if (!w) unknown.push(f);
     else if (w.newCount <= 0) chronic.push(f);
     else broke.push(f);
@@ -224,14 +243,14 @@ function brokeSplit(rec) {
   (Array.isArray(v.preExisting) ? v.preExisting : []).forEach((f) => {
     if (!broke.includes(f) && !chronic.includes(f) && !unknown.includes(f)) chronic.push(f);
   });
-  return { broke, chronic, unknown, evByFront };
+  return { broke, chronic, unknown, evByFront, dated };
 }
 
 // One bullet for a front that genuinely broke during the incident — plain words,
 // real counts, no alarm-type dump.
-function brokeLine(e, front) {
+function brokeLine(e, front, dated) {
   const label = frontLabel(e ? e.front : front);
-  const w = windowEvidence(e);
+  const w = windowEvidence(e, dated);
   // No timing split available — report the finding and say plainly that we cannot
   // tell when it started, rather than implying it started with this incident.
   if (!w) return `- **${label}** — ${plainDetail(e)} (the system we read does not record when these started, so we cannot say whether they began with this incident).`;
@@ -241,9 +260,9 @@ function brokeLine(e, front) {
 }
 
 // One bullet for a front that was already broken BEFORE the incident.
-function chronicLine(e, front) {
+function chronicLine(e, front, dated) {
   const label = frontLabel(e ? e.front : front);
-  const w = windowEvidence(e);
+  const w = windowEvidence(e, dated);
   if (!w) return `- **${label}** — ${plainDetail(e)} (already there before this incident began).`;
   return `- **${label}** — ${plural(w.oldCount, `long-standing ${w.unit}`)} that pre-date this incident; nothing new appeared here during it.`;
 }
@@ -791,27 +810,27 @@ function renderSltDoc(rec) {
     if (!split.unknown.length) return;
     L.push('');
     L.push('These areas are showing faults too, but the systems we read do not record when they started, so we cannot say whether they began with this incident:');
-    split.unknown.forEach((f) => L.push(brokeLine(split.evByFront[f], f)));
+    split.unknown.forEach((f) => L.push(brokeLine(split.evByFront[f], f, split.dated)));
   };
   const chronicBlock = () => {
     if (!split.chronic.length) return;
     L.push('');
     L.push('These areas also carry faults, but they were already broken before this incident began — they are not what broke here:');
-    split.chronic.forEach((f) => L.push(chronicLine(split.evByFront[f], f)));
+    split.chronic.forEach((f) => L.push(chronicLine(split.evByFront[f], f, split.dated)));
   };
   if (split) {
     if (split.broke.length) {
       L.push(`A live problem that started during this incident was found on ${plural(split.broke.length, 'area')}:`);
-      split.broke.forEach((f) => L.push(brokeLine(split.evByFront[f], f)));
+      split.broke.forEach((f) => L.push(brokeLine(split.evByFront[f], f, split.dated)));
       unknownBlock();
       chronicBlock();
     } else if (split.unknown.length) {
       L.push(`Faults are showing on ${plural(split.unknown.length, 'area')}. The systems we read do not record when they started, so we cannot say whether they began with this incident:`);
-      split.unknown.forEach((f) => L.push(brokeLine(split.evByFront[f], f)));
+      split.unknown.forEach((f) => L.push(brokeLine(split.evByFront[f], f, split.dated)));
       chronicBlock();
     } else if (split.chronic.length) {
       L.push('Nothing new broke during this incident on anything we can see. These areas carry faults, but they were already there before it began — they are not the cause:');
-      split.chronic.forEach((f) => L.push(chronicLine(split.evByFront[f], f)));
+      split.chronic.forEach((f) => L.push(chronicLine(split.evByFront[f], f, split.dated)));
     } else if (c.suspect.length && !c.clean.length) {
       L.push('We could not get a clear reading — the systems we needed to check did not respond (see "What we could not see"). We are not calling this either broken or fine.');
     } else {
@@ -820,7 +839,7 @@ function renderSltDoc(rec) {
   } else if (c.degraded.length) {
     // Legacy fallback (record predates the in-window split).
     L.push(`We found a live problem on ${plural(c.degraded.length, 'area')}:`);
-    c.degraded.forEach((e) => L.push(brokeLine(e)));
+    c.degraded.forEach((e) => L.push(brokeLine(e, e.front, false)));
   } else if (c.suspect.length && !c.clean.length) {
     L.push('We could not get a clear reading — the systems we needed to check did not respond (see "What we could not see"). We are not calling this either broken or fine.');
   } else {
