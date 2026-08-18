@@ -29,6 +29,7 @@ const sshRunner = require('./sources/ssh-runner');   // CW-5: SSH transport stat
 const tickets = require('./sources/tickets');
 const ticketStore = require('./sources/ticket-store');
 const teams = require('./sources/teams');            // CW-4: Teams bridge (one-way post)
+const servicenow = require('./sources/servicenow-client'); // CW-6: two-way ServiceNow sync
 const guardrails = require('./sources/guardrails');
 const { checkIntent } = guardrails;
 
@@ -627,6 +628,54 @@ app.post('/api/copilot/teams/inbound', (req, res) => {
   res.status(201).json({ reply: out.reply });
 });
 // ── end CW-4 block ──────────────────────────────────────────────────────────
+
+// ── CW-6: two-way ServiceNow sync (INTERNAL QUEUE IS TRUTH, SNOW is a mirror) ─
+// Thin routes ON PURPOSE, adjacent to CW-4. Every rule — the honest not-connected
+// no-op (no fabricated INC), the real Table API create/update/read, the secret
+// handling (SNOW_INSTANCE/USER/PASS never leave sources/servicenow-client.js),
+// the conflict-not-clobber logic, the audit of every sync — lives in
+// sources/servicenow-client.js (transport) and sources/tickets.js (the sync that
+// folds the answer into the ticket's `snow` slot). No route here can sync by a
+// different path or with the secret leaking. The 428 name gate above covers the
+// POST routes (all under /api/copilot/). The structured ServiceNow EXPORT
+// (sources/artifacts.js, GET /api/triage/:id/servicenow) stays as the fallback.
+//
+// INTENT-FIRST: there is NO keyword route that pushes to ServiceNow from chat.
+// push is the tool the planner calls AFTER the operator confirms; the desk's
+// "Push to ServiceNow" confirm is what POSTs here.
+
+// GET /api/copilot/servicenow/status → { connected, lastSync }. Read-only, no
+// name gate. NEVER the instance host or creds — only the boolean + last-sync summary.
+app.get('/api/copilot/servicenow/status', (req, res) => {
+  res.json(servicenow.status());
+});
+
+// POST /api/copilot/tickets/:id/snow/push → create-or-update the SNOW INC from
+// the internal ticket. Honest not-connected (does nothing, no fake INC) →
+// { connected:false }. Success → { number, url, ticket }.
+app.post('/api/copilot/tickets/:id/snow/push', async (req, res) => {
+  const out = await tickets.pushToSnow(String(req.params.id || ''), { who: req.operator });
+  if (!out.ok) {
+    if (out.connected === false) return res.status(200).json({ connected: false, ok: false });
+    return res.status(out.status || 502).json({ error: out.error, connected: out.connected !== false });
+  }
+  broadcast('ticket_update', out.ticket);
+  res.json({ ok: true, connected: true, number: out.number, url: out.url, ticket: out.ticket });
+});
+
+// POST /api/copilot/tickets/:id/snow/pull → read the SNOW incident and surface
+// its state/worknotes as a MIRROR (never overwrites internal truth). A both-changed
+// conflict comes back as { conflict:true } and clobbers nothing.
+app.post('/api/copilot/tickets/:id/snow/pull', async (req, res) => {
+  const out = await tickets.pullFromSnow(String(req.params.id || ''), { who: req.operator });
+  if (!out.ok) {
+    if (out.connected === false) return res.status(200).json({ connected: false, ok: false });
+    return res.status(out.status || 502).json({ error: out.error, connected: out.connected !== false });
+  }
+  broadcast('ticket_update', out.ticket);
+  res.json({ ok: true, connected: true, conflict: out.conflict, mirror: out.mirror, ticket: out.ticket });
+});
+// ── end CW-6 block ──────────────────────────────────────────────────────────
 
 // Create HTTP server
 const server = http.createServer(app);
