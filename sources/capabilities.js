@@ -70,6 +70,18 @@ const ABILITIES = [
       + 'and the SSH path stays read-only until CW-5. I will run the whole wrap and freeze honestly at the apply step rather than pretend a change landed.',
   },
   {
+    key: 'batfish-validation',
+    label: 'Validate a change offline (Batfish)',
+    plain: 'Before any device is touched, check a proposed config change against a network model — parse health, undefined references, and whether it breaks who-can-reach-what — and report clean / issues honestly.',
+    example: 'would this ACL change on sw2 break reachability?',
+    dynamic: 'batfish',
+    available: false,
+    engineBuilt: true,
+    reason: 'Batfish not connected — set BATFISH_HOST (needs a Batfish service, e.g. Docker batfish/allinone). '
+      + 'The client and the parse→verdict engine are built and every analysis is real once the service is set; '
+      + 'until then no config is analysed and no verdict is invented (never a fake clean/issues).',
+  },
+  {
     key: 'drift',
     label: 'Check a device against its baseline',
     plain: 'Compare a device\'s live config against its saved baseline and report every deviation — including which recorded change explains it.',
@@ -321,6 +333,9 @@ function resolveAvailable(a) {
     // connector never has to require capabilities back (no cycle).
     try { return require('./mcp-connector').anyToolsConnected(); }
     catch (e) { return false; }
+  }
+  if (a.dynamic === 'batfish') {
+    try { return require('./batfish').connected(); } catch (e) { return false; }
   }
   return !!a.available;
 }

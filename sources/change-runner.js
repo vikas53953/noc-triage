@@ -242,6 +242,23 @@ async function run(input, { onCreated } = {}) {
 
       const criticalsBefore = await countCriticals(device.id);
 
+      // ── STEP 2b: OFFLINE VALIDATION (Batfish) — ADVISORY ONLY ─────────────
+      // If a Batfish service is configured, check the proposed change against a
+      // network model BEFORE the wire. This NEVER blocks: the operator already
+      // approved at the gate, and Batfish being off/erroring must not stop a
+      // change. It only annotates the record so the operator sees a warning.
+      try {
+        const batfish = require('./batfish');
+        if (batfish.configured()) {
+          const bf = await batfish.validateChange(device.hostname,
+            { commands, baseline: preConfig }, { who: input.who });
+          changeStore.patch(id, { batfish: bf });
+          changeStore.step(id, 'batfish',
+            bf.verdict === 'issues' ? 'warning' : bf.verdict === 'clean' ? 'ok' : 'unverified',
+            bf.note || `offline validation: ${bf.verdict}`);
+        }
+      } catch (e) { /* advisory — a failing validator never blocks a change */ }
+
       // ── STEP 3: APPLY ──────────────────────────────────────────────────────
       let apply;
       if (device.transport === 'command-runner') {

@@ -195,8 +195,17 @@ function run() {
     catch (e) { threw = e; }
     ok('hook: validateChange never throws when Batfish is off', threw === null, threw && threw.message);
     ok('hook: off → unknown (caller proceeds, change NOT blocked)', vOff && vOff.verdict === 'unknown');
+    // The change-runner now wires the advisory hook. It must be ADVISORY ONLY:
+    // gated on configured(), inside a try/catch, and it must NOT return/throw/
+    // freeze on the batfish result — a validator can never block an approved change.
     const crSrc = fs.readFileSync(path.join(__dirname, 'change-runner.js'), 'utf8');
-    ok('hook: change-runner has ZERO batfish coupling (no block introduced)', crSrc.indexOf('batfish') === -1);
+    const hookIdx = crSrc.indexOf("require('./batfish')");
+    ok('hook: change-runner calls batfish (advisory pre-step wired)', hookIdx !== -1);
+    ok('hook: batfish call is gated on configured() (no-op when off)', crSrc.indexOf('batfish.configured()') !== -1);
+    ok('hook: batfish call is wrapped so a failing validator never blocks', /require\('\.\/batfish'\)[\s\S]{0,600}catch/.test(crSrc));
+    // Advisory: the hook only patches/steps the record — it never returns/freezes on the batfish verdict.
+    const hookRegion = crSrc.slice(hookIdx, hookIdx + 600);
+    ok('hook: advisory — never returns/freezes on the batfish result', hookRegion.indexOf('return {') === -1);
 
     stub.close(() => resolve());
   });
