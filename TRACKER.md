@@ -338,3 +338,9 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
 - Parallel on mostly-disjoint files (A1+A4 share server.js — A4 keeps its block minimal/separable). Credits
   out → deterministic build/verify; Jarvis choosing an MCP tool + live feed reasoning = end test on credits.
 - Note: NOT auto-wiring any real external MCP server yet — security vetting first (per assessment).
+
+## 2026-08-19 — NetClaw pull progress
+- A2 (Catalyst Center adapter, 11 live reads) MERGED (PR #65, APPROVED). catalyst-center.js additive; live-verified.
+- A1 (CW-8 MCP connector, PR #67) in security review — hand-rolled zero-dep client, gated, read-only, honest, 552 tests.
+- A4 (live feeds, PR #66) in review — native syslog+trap UDP receivers.
+- CW-7 UI (PR #64) final race-fix confirm running.
