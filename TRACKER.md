@@ -357,3 +357,15 @@ AFTER these land: netclaw A5 (batfish offline change-validation) + A6 (packet ca
 next candidates IF Vikas confirms; do NOT start them unprompted — they're bigger and he only greenlit A1/A2/A4.
 STANDING: credits OUT → deterministic verify only; the big live-LLM end-to-end test is Vikas's when credits
 return. Never fabricate. Fix the class. Update TRACKER + push every step. Master protected (no force-push).
+
+## 2026-08-19 — ALL WORK MERGED + a stability hardening
+- CW-7 investigation loop COMPLETE (PR #64 UI merged, race fixed). All 7 QA classes + 7 copilot waves +
+  netclaw A1/A2/A4 = DONE. 17 test suites green.
+- Reviewer flagged a latent server crash (exit 1) after the watcher sees a COPILOT_AUDIT.log write. Could NOT
+  reproduce on a normal audit write (server stayed alive). Root-cause class: the process-level uncaughtException
+  guard called broadcast(), which can throw mid-fault and defeat the guard → exit 1. FIXED: reportSystemError
+  is now bulletproof (every part wrapped; a throwing broadcast/log can never crash the guard). So a stray async
+  error anywhere (watcher/audit/broadcast) can no longer take the server down. Pushed.
+- REMAINING (all need Vikas): live-LLM end-to-end test (credit top-up); optionally TEAMS_WEBHOOK, SNOW creds,
+  SSH sandbox creds, real syslog/trap device pointing, and a vetted real external MCP server. Nothing blocking.
+- Next candidates from netclaw assessment (NOT started — need Vikas's OK): A5 batfish, A6 packet/Nautobot.
