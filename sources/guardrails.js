@@ -109,6 +109,15 @@ const DETERMINERS = new Set([
   'emergency', 'unplanned', 'first', 'second', 'no', 'both', 'said',
 ]);
 
+// Subject pronouns. "you reload", "we reboot", "I wipe it" name an ACTOR being
+// told to act — that is an instruction, not a reference to a past event, even
+// with no object after the verb ("after you reload" full stop). The old bare-
+// event test (b) missed this: it saw only that "reload" was the last token after
+// "after" and excused it, dropping a real write silently. This is exactly the
+// verb-vs-noun class the pre-work exists to close, so the pronoun subject is
+// named here and blocks the excuse in isEventReference below.
+const SUBJECT_PRONOUNS = new Set(['you', 'we', 'i', 'u', 'they', 'he', 'she']);
+
 // Separators that introduce a POINT IN TIME rather than a fresh instruction.
 // Used only by the bare-event test — ";" "&&" "then" are NOT here, so
 // "show version; reload" and "show version then reload" stay refusals.
@@ -121,6 +130,14 @@ const FILLER = new Set([
   'hey', 'hi', 'ok', 'okay', 'just', 'also', 'now', 'then', 'go', 'and',
   'lets', "let's", 'let', 'us', 'me', 'i', 'want', 'need', 'to', 'do',
   'the', 'a', 'an', 'my', 'your', 'our', 'this', 'that', 'it', 'quickly',
+  // SUBJECT PRONOUNS. A pronoun leading a clause ("you reload", "we reboot")
+  // must be STEPPED PAST so the verb behind it is exposed as the command word —
+  // otherwise the pronoun itself is read as the command word and the real verb
+  // ("reload") is never judged at all, dropping the write silently. They are
+  // ALSO listed in SUBJECT_PRONOUNS, where isEventReference reads `prev` (the
+  // stepped-past token) to refuse "after you reload" as the instruction it is.
+  // ('you', 'u', 'i', 'it', 'me', 'us' are already above.)
+  'we', 'they', 'he', 'she',
   // SEQUENCING ADVERBS. These say WHEN the next command runs, never WHAT it is,
   // so they must never be mistaken for the command word. Left in place, the
   // adverb stood at the head of the clause and shielded the real verb behind it:
@@ -241,8 +258,18 @@ function commandShape(clause) {
 // Only ever true for the event-noun list; see the block above for the two tests.
 function isEventReference(shape, sep) {
   if (!EVENT_NOUNS.has(shape.word)) return false;
+  // A subject pronoun in front ("you reload", "we reboot") is an ACTOR being
+  // instructed — never a past-event noun. This wins over BOTH tests below, so
+  // "after you reload" (no object) is refused exactly as "after you reload the
+  // router" already was.
+  if (shape.prev && SUBJECT_PRONOUNS.has(shape.prev)) return false;
   if (shape.prev && DETERMINERS.has(shape.prev)) return true;          // (a)
-  if (shape.bare && sep && TEMPORAL_SEPS.test(sep)) return true;       // (b)
+  // (b) The clause is nothing but the event word after a time separator
+  //     ("…after restart"). Only excused when nothing that could be a SUBJECT
+  //     sits in front of it — a determiner is fine ("after the reload"), a bare
+  //     event is fine ("after restart"), but any other leading word is treated
+  //     as a possible actor and the excuse is withheld, failing safe to refuse.
+  if (shape.bare && sep && TEMPORAL_SEPS.test(sep) && (!shape.prev || DETERMINERS.has(shape.prev))) return true;
   return false;
 }
 
@@ -325,7 +352,7 @@ function assertReadOnly(command) {
 module.exports = {
   checkCommand, checkIntent, assertReadOnly, commandWord,
   splitIntent, clausesOf, clauseParts, commandShape,
-  READ_VERBS, STATE_CHANGING, EVENT_NOUNS, DETERMINERS,
+  READ_VERBS, STATE_CHANGING, EVENT_NOUNS, DETERMINERS, SUBJECT_PRONOUNS,
   // Exported so the SSH sidecar's mirrored rules can be parity-checked against
   // these (sources/ssh-runner.smoke.js). Drift between the two layers must fail
   // a test, not sit silently until someone tightens one side only.

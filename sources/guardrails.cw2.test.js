@@ -25,6 +25,11 @@ const MUST_PASS = [
   'show ip interface brief on sw3 since the last reload',
   'show version on sw1 because of the maintenance window',
   'show inventory on sw4 following the planned upgrade',
+  // A bare event after a time separator with NO subject is still a reference,
+  // not an instruction — these must keep passing after the pronoun fix.
+  'show version on sw2 after the upgrade window',
+  'show running-config on sw3 after restart',
+  'show version on sw1 after the reload',
   'no, show me the version',
   'show me the running config',
   'write me a report on the campus estate',
@@ -39,6 +44,14 @@ const MUST_REFUSE = [
   'show version on sw1; reload',
   'show ip arp\nreload',
   'show version after you reload the router',
+  // OBJECT-LESS write intent after a subject pronoun — the review's must-fix.
+  // "after you reload" (no object) is an instruction, not a past-event noun, and
+  // must be refused exactly as the with-object variant above already was.
+  'show version on sw2 after you reload',
+  'show version then you reboot',
+  'show running-config and you wipe it',
+  'show version once we reload',
+  'show inventory before I erase startup-config',
   'and afterwards reload it',
   'please erase startup-config',
   'reload sw1 then show me the version',

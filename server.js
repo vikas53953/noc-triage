@@ -1320,8 +1320,24 @@ function simulateJarvisAction(agentId, command) {
       agentName: a ? a.name : 'Jarvis',
       agentIcon: a ? a.icon : '🎖️',
       text: check.text,
+      // A change ask is a PROPOSAL, not a refusal. Tagging the message lets the
+      // desk render it as the caption to its proposal card (one coherent
+      // response) instead of a second, contradicting bubble.
+      kind: check.changeProposal ? 'change_proposal' : undefined,
       timestamp: new Date().toISOString(),
     });
+    // Audit + activity must say what is TRUE. A change ask was OFFERED as a
+    // proposal (the engine is built; it simply does not fire from chat), not
+    // "honestly refused" — recording it as a refusal would misstate the system.
+    if (check.changeProposal) {
+      session.audit({
+        what: `ask: ${String(command).slice(0, 200)}`,
+        result: 'offered a change proposal to confirm — nothing fired, zero device calls',
+      });
+      appendToActivityLog(`[${new Date().toISOString()}] [Jarvis] Offered a change proposal (chat never fires a change) — asked: "${String(command).slice(0, 60)}"\n`);
+      updateAgentStatus(agentId, 'idle', 'Drafted a change proposal — waiting for you to confirm');
+      return;
+    }
     session.audit({
       what: `ask: ${String(command).slice(0, 200)}`,
       result: `honestly refused — ${check.ability ? `${check.ability.key} not available` : 'no capability covers this'} (zero device calls)`,

@@ -250,9 +250,37 @@ function refusalFor(ability) {
   return lines.join('\n');
 }
 
+// A CHANGE-intent ask does not get the flat "I can't do that yet" refusal — the
+// change ENGINE is built, and the desk answers a change ask with a proposal card
+// the operator confirms. Two responses to one ask (a card that says "run this"
+// next to Jarvis saying "I can't") is a mixed message; the review flagged it.
+//
+// So for a change ask the map speaks the SAME language as the card: this is a
+// change, it does not fire from chat, here it is as a proposal to confirm, and
+// it will go through the full wrap (and freeze honestly if there is no write
+// path). The refusal is NOT suppressed into silence — that would leave a desk
+// without the card mute — it is REPLACED by the one coherent proposal message.
+// `changeProposal:true` lets the server log it as an offered proposal, not a
+// refusal, and lets a caller that already draws a card skip the text if it wants.
+function changeProposalText() {
+  const change = byKey('change');
+  const lines = [];
+  lines.push(`📝 That is a change — and changes never fire straight from chat.`);
+  lines.push(`I have set it up as a **proposal**: check the device, the exact commands and the reason, then confirm it to run.`);
+  lines.push('');
+  lines.push(`Every confirmed change goes through the full safety wrap — permission gate, before/after capture, diff, validation and a rollback plan.`);
+  if (change && change.engineBuilt && !change.available) {
+    lines.push('');
+    lines.push(`Honest heads-up: ${change.reason}`);
+  }
+  return lines.join('\n');
+}
+
 // THE routing seam: "should this ask be refused, and what do I say?"
 //   { allowed:true,  ability }               → carry on to real reasoning.
 //   { allowed:false, ability|null, text }    → say text, touch no device.
+//   { allowed:false, changeProposal:true }   → a change ask: ONE proposal message
+//                                              (not a refusal), the card is the answer.
 // Only two things are ever refused: an unambiguous request to perform an
 // ability that is not built, and an ask with nothing to do with this NOC.
 // Everything else passes through — when in doubt, real reasoning answers it.
@@ -271,7 +299,13 @@ function checkAsk(text) {
   //    A question wins over a verb ("why did sw1 reload") unless the question
   //    form is wrapped around a real request ("can you reload sw1?").
   const unbuilt = requestedUnbuiltAbility(t);
-  if (unbuilt) return { allowed: false, ability: publicShape(unbuilt), text: refusalFor(unbuilt) };
+  if (unbuilt) {
+    // A change ask is answered by the proposal flow, not a contradicting refusal.
+    if (unbuilt.key === 'change') {
+      return { allowed: false, changeProposal: true, ability: publicShape(unbuilt), text: changeProposalText() };
+    }
+    return { allowed: false, ability: publicShape(unbuilt), text: refusalFor(unbuilt) };
+  }
 
   if (question) return { allowed: true, ability: matchAsk(t) };
 
