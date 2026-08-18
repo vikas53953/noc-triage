@@ -11,6 +11,11 @@ __pycache__/
 .env.*
 !.env.example
 
+# CW-8: the real MCP server registry may carry per-server env/creds — never
+# commit it. The connector reads config/mcp-servers.json by default; ship only
+# the safe config/mcp-servers.example.json.
+config/mcp-servers.json
+
 # Local working files
 scratchpad/
 # Default workspace, created on first run

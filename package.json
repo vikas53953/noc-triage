@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "node sources/guardrails.cw2.test.js && node sources/triage.intake.test.js && node sources/live-agents.refusal.test.js && node sources/live-agents.transport.test.js && node sources/incident-read.class9.test.js && node sources/live-agents.session.class9.test.js && node sources/capabilities.class9.test.js && node sources/approvals.gate.test.js && node sources/jarvis.class6.test.js && node sources/server.errors.test.js && node sources/tickets.test.js && node sources/teams.test.js && node sources/servicenow.test.js && node sources/investigation.test.js && node sources/catalyst-center.catalogue.test.js && node sources/live-feeds.test.js"
+    "test": "node sources/guardrails.cw2.test.js && node sources/triage.intake.test.js && node sources/live-agents.refusal.test.js && node sources/live-agents.transport.test.js && node sources/incident-read.class9.test.js && node sources/live-agents.session.class9.test.js && node sources/capabilities.class9.test.js && node sources/approvals.gate.test.js && node sources/jarvis.class6.test.js && node sources/server.errors.test.js && node sources/tickets.test.js && node sources/teams.test.js && node sources/servicenow.test.js && node sources/investigation.test.js && node sources/catalyst-center.catalogue.test.js && node sources/live-feeds.test.js && node sources/mcp.test.js"
   },
   "engines": {
     "node": ">=18"

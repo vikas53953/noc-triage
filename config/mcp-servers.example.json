@@ -1,0 +1,10 @@
+[
+  {
+    "name": "example-stdio",
+    "transport": "stdio",
+    "command": "node",
+    "args": ["/absolute/path/to/some-mcp-server.js"],
+    "env": { "SOME_API_KEY": "set-in-env-not-here" },
+    "enabled": false
+  }
+]

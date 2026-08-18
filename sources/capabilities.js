@@ -148,6 +148,26 @@ const ABILITIES = [
     available: true,
   },
   {
+    // CW-8 REALITY: the generic MCP connector is BUILT — it connects to declared
+    // MCP servers over stdio, lists their tools, and exposes each as a gated,
+    // read-only-by-default delegation target for Jarvis. What gates `available` is
+    // whether ANY server is actually connected with tools right now (resolved
+    // dynamically in publicShape, so a late-configured/reconnected server flips it
+    // without a restart). None connected → available:false with the honest reason
+    // and Jarvis has NO MCP tools (nothing fabricated). `engineBuilt:true` always,
+    // like CW-2/4/6 — the wiring is done; the only missing piece is a configured,
+    // security-vetted server. Server creds live in config/env only, never here.
+    key: 'external-tools',
+    label: 'Call external MCP tools',
+    plain: 'Connect to external MCP tool servers and let Jarvis call their read-only tools — through the same permission gate and audit as a device read. Write-looking tools are approve-first, never auto-run.',
+    example: 'pull the device list from the NetClaw MCP server',
+    dynamic: 'mcp',
+    available: false,
+    engineBuilt: true,
+    reason: 'No MCP tools connected — configure a server. The connector is built (stdio transport, tool discovery, the permission gate, read-only posture and audit all run); '
+      + 'until a server is declared and connects, Jarvis has no MCP tools and invents none. Server credentials live in config/env only, never logged.',
+  },
+  {
     key: 'bridge',
     label: 'Run the incident bridge',
     plain: 'Keep the bridge: roles (commander, scribe, joiners), SLA clocks, the running timeline and the handover write-up.',
@@ -294,6 +314,13 @@ function resolveAvailable(a) {
     // env — only the boolean they imply reaches the browser shape.
     const set = (v) => !!(v && String(v).trim());
     return set(process.env.SNOW_INSTANCE) && set(process.env.SNOW_USER) && set(process.env.SNOW_PASS);
+  }
+  if (a.dynamic === 'mcp') {
+    // Available exactly when ≥1 MCP server is connected with tools. Lazy require
+    // so capabilities.js has no load-order dependency on the connector, and the
+    // connector never has to require capabilities back (no cycle).
+    try { return require('./mcp-connector').anyToolsConnected(); }
+    catch (e) { return false; }
   }
   return !!a.available;
 }
