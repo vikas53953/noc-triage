@@ -83,3 +83,12 @@ sources/notifier.js (on-call) · sources/chat-store.js (persistence) · sources/
 ServiceNow) · baseline-store.js, config-store.js, incident-store.js. public/index.html (entire UI).
 Specs: docs/roadmap-build-spec.md, triage-intelligence-spec.md, qa-bugs-spec.md, chat-ux-spec.md,
 transparency-contract.md, triage-contract.md.
+
+## Copilot waves (2026-08-18)
+- CW-1 (desk + identity + capability honesty): MERGED + live.
+- CW-2 (change engine five-step wrap + drift): MERGED 2026-08-18 (#45+#44, 2 review rounds).
+  Sandbox account is observer-role → apply honestly freezes "no-write-path" on a real 403; every other
+  step real; per-device change lock enforced. change=available:false/engineBuilt:true, drift=available:true.
+  A real APPLY needs write-capable creds or CW-5 SSH path.
+- Ambiguity fix (#46) MERGED + live: "show version on sw" → lists sw1-sw4 and asks, runs nothing.
+- NEXT: QA fix-classes (docs/qa-findings-spec.md). Class 1 (kill keyword shell) now unblocked.
