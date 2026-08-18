@@ -26,6 +26,10 @@ const http = require('http');
 const https = require('https');
 const { URL } = require('url');
 const session = require('./session-log');
+// CW-4: Teams rides the SAME bridge-event seam as the on-call page, so a bridge
+// moment fans out to both from ONE place instead of being sprinkled per caller.
+// Teams is an HONEST no-op when TEAMS_WEBHOOK is unset and can never throw here.
+const teams = require('./teams');
 
 const DEFAULT_TIMEOUT = 8000;
 
@@ -107,6 +111,14 @@ function defaultSummary(event, i) {
 //   delivered:true     → the webhook accepted it (2xx).
 //   delivered:false + configured:true → we tried; reason carries the real error.
 function notify(event, info = {}) {
+  // CW-4: mirror this bridge event to Teams from the same seam. Fire-and-forget,
+  // honest no-op when no TEAMS_WEBHOOK is set — it NEVER blocks or throws onto the
+  // on-call path, and is independent of whether the on-call webhook is configured.
+  try {
+    const tp = teams.onBridgeEvent(event, info);
+    if (tp && typeof tp.catch === 'function') tp.catch(() => { /* audited inside teams */ });
+  } catch (e) { /* telemetry must never break the notifier */ }
+
   const u = parsed();
   if (!u) {
     // Honest no-op — never pretend to page when no webhook is set.

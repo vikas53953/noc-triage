@@ -28,6 +28,7 @@ const changeStore = require('./sources/change-store');
 const sshRunner = require('./sources/ssh-runner');   // CW-5: SSH transport status
 const tickets = require('./sources/tickets');
 const ticketStore = require('./sources/ticket-store');
+const teams = require('./sources/teams');            // CW-4: Teams bridge (one-way post)
 const guardrails = require('./sources/guardrails');
 const { checkIntent } = guardrails;
 
@@ -572,6 +573,60 @@ app.post('/api/copilot/tickets/:id/note', (req, res) => {
   res.json({ ticket: out.ticket });
 });
 // ── end CW-3 block ──────────────────────────────────────────────────────────
+
+// ── CW-4: the Teams bridge (honest one-way post + reply ingestion) ───────────
+// Thin routes ON PURPOSE. Every rule — the honest not-connected no-op, the real
+// POST, the secret handling (the webhook URL never leaves sources/teams.js), the
+// audit — lives in sources/teams.js, and auto-posts ride the notifier seam
+// (sources/notifier.js → teams.onBridgeEvent) so no future route can post by a
+// different path. The 428 name gate above covers the POST routes (all /api/copilot/).
+//
+// HONEST ONE-WAY LIMIT: Incoming Webhooks are POST-only. GET/POST test are the
+// real path; /inbound is the reply-ingestion seam a FUTURE Teams bot/Power-Automate
+// flow calls to feed a REAL reply into the bridge — never a fabricated reply.
+
+// GET /api/copilot/teams/status → { connected, lastPost } + any injected inbound
+// replies. NEVER the webhook URL/host — only the boolean + the last-post summary.
+app.get('/api/copilot/teams/status', (req, res) => {
+  const s = teams.status();
+  res.json({ ...s, inbound: teams.inboundReplies({ limit: 50 }) });
+});
+
+// POST /api/copilot/teams/test → operator-named test card, honest result. On no
+// webhook it posts NOTHING and returns { ok:false, connected:false } — never a
+// fake "sent ✓". The webhook URL never appears in the response.
+app.post('/api/copilot/teams/test', async (req, res) => {
+  const who = req.operator || 'unknown';
+  const body = req.body || {};
+  const note = typeof body.text === 'string' && body.text.trim()
+    ? body.text.trim().slice(0, 500)
+    : 'Test card from the noc-triage desk — confirming the Teams bridge is wired.';
+  const out = await teams.postMessage(
+    {
+      title: '🧪 noc-triage — Teams bridge test',
+      text: note,
+      facts: [{ name: 'Sent by', value: who }],
+    },
+    { event: 'test', who }
+  );
+  res.json({ ...out, lastPost: teams.status().lastPost });
+});
+
+// POST /api/copilot/teams/inbound → inject a REAL reply fed by a future Teams
+// bot/Power-Automate flow. { from, text, incidentId? }. Broadcasts it so the desk
+// can surface it. We do NOT fabricate replies — this only records what a bot sends.
+app.post('/api/copilot/teams/inbound', (req, res) => {
+  const body = req.body || {};
+  const out = teams.injectInbound({
+    from: body.from,
+    text: body.text,
+    incidentId: body.incidentId,
+  });
+  if (!out.ok) return res.status(400).json({ error: out.error });
+  broadcast('teams_inbound', out.reply);
+  res.status(201).json({ reply: out.reply });
+});
+// ── end CW-4 block ──────────────────────────────────────────────────────────
 
 // Create HTTP server
 const server = http.createServer(app);
