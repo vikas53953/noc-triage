@@ -237,12 +237,17 @@ async function docWriter(agentId) {
   });
 }
 
-// ── Router-Expert — ACI fabric (Nexus) or SD-WAN overlay ────────────────────
-const ACI_WORDS = /\b(aci|apic|fabric|tenant|epg|bridge[\s-]?domain|bd\b|vrf|contract|leaf|spine|nexus|n9k)\b/i;
-
+// ── Router-Expert — ACI fabric (Nexus) AND SD-WAN overlay ───────────────────
+// Class 1 (2026-08-18): the ACI_WORDS keyword fork is GONE. It used to route the
+// WHOLE answer to EITHER the APIC or vManage based on a keyword — so a request
+// that spanned both ("the vManage overlay and the ACI fabric") came back
+// APIC-only, one source silently dropped. Router-Expert owns BOTH sources, so it
+// now reads BOTH and reports BOTH; nothing keyword-decides which one the operator
+// "meant". The tenant audit still keys off an explicit "tenant <name>" token in
+// the command, inside routerExpertAci.
 async function routerExpert(agentId, command) {
-  if (ACI_WORDS.test(command || '')) return routerExpertAci(agentId, command);
-  return routerExpertSdwan(agentId);
+  await routerExpertAci(agentId, command);
+  await routerExpertSdwan(agentId);
 }
 
 async function routerExpertAci(agentId, command) {
@@ -302,7 +307,7 @@ async function routerExpertSdwan(agentId) {
       `🛰  vEdges in inventory: ${vedges.length}\n` +
       `🚨 Active alarms: ${alarms.active}\n\n` +
       `Source: ${sdwan.label} — ${sdwan.host}. Read-only.\n` +
-      `(Ask about ACI, fabric, leaf/spine or a tenant and I will switch to the APIC.)`);
+      `(For a tenant walk on the ACI fabric, name it — "audit tenant <name>".)`);
   });
 }
 
@@ -344,8 +349,13 @@ async function routerExpertSdwan(agentId) {
 //   { denied: true, command }          — the operator denied it; zero wire calls
 //   { ok, command, target, body, note} — it ran; body is the REAL device output
 //   { ok, multi: true, runs: [...] }   — the operator said "all"; one real run per box
-async function executeDeviceCli({ agentId, request, purpose, announce, device, all }) {
+async function executeDeviceCli({ agentId, request, purpose, announce, device, all, planDevice }) {
   const raw = String(request || '');
+  // CLASS 2: a structured target from the planner ("device" field). Trusted the
+  // same way a name typed in the request is — it IS the operator's named device,
+  // just carried as a field instead of buried in reworded prose. A blank/whitespace
+  // value is treated as "not provided" so it falls back to the text parse below.
+  const planTarget = (typeof planDevice === 'string' && planDevice.trim()) ? planDevice.trim() : null;
   const agentName = (ctx.agents[agentId] && ctx.agents[agentId].name) || agentId;
 
   // 1. Write intent, on the whole raw request.
@@ -404,7 +414,10 @@ async function executeDeviceCli({ agentId, request, purpose, announce, device, a
         `the whole picture. Ask me for each box in turn ("${verdict.command} on ${namedAll[0]}", then ` +
         `"${verdict.command} on ${namedAll[1]}") and I will read both for real.` };
   }
-  const named = namedAll[0] || null;
+  // The structured plan target wins over the text parse (that is the whole point
+  // of CLASS 2), but only AFTER the multi-device guard above — if the operator
+  // named two boxes in the text we still refuse rather than quietly run one.
+  const named = planTarget || namedAll[0] || null;
 
   // 3a. What the operator pointed at, in the three shapes it can arrive in:
   //     a resolved choice handed back by resumeClarification (`device`), a
@@ -994,22 +1007,16 @@ async function configKeeper(agentId, command, opts) {
 //
 // Returns { command, note } — `note` explains, in plain words, why a request
 // that looked like a read produced no runnable command.
-const NO_STORE = /\b(backup|backed[\s-]?up|compliance|drift|baseline|snapshot|golden|archive[sd]?)\b/i;
-
+// Class 1 (2026-08-18): the NO_STORE keyword table is GONE. It used to trip on
+// words like "snapshot"/"backup"/"baseline" ANYWHERE in the text and refuse to
+// run — so "run show running-config on sw2 to snapshot it" returned an inventory
+// blurb instead of the config the operator literally asked for. That was a
+// deterministic substitution answering a different question than the one asked,
+// exactly what the no-static-bindings law forbids. The command path now decides:
+// if there is a real read verb in the text we run it; if there is not, we still
+// say so honestly (the `!m` branch below), which is the only honest refusal here.
 function readCommandFrom(text) {
   const raw = String(text || '');
-
-  // Config-Keeper holds no backup archive or compliance baseline. Saying that
-  // out loud beats running a live read and letting it pass as an answer.
-  if (NO_STORE.test(raw)) {
-    return {
-      command: null,
-      note:
-        'I hold no backup archive, compliance baseline or change history — there is no such source wired up, ' +
-        'so I cannot tell you when anything was last backed up or whether it has drifted.\n' +
-        'What I can do is read the device as it is right now (for example "show running-config").',
-    };
-  }
 
   const m = /\b((?:show|ping|traceroute|dir|more)\b[\w\s|:/.\-]*)/i.exec(raw);
   // No read verb in the text means there is no command in the text. This
@@ -1046,17 +1053,19 @@ function readCommandFrom(text) {
     return { command: null, note: `"${frag}" on its own is not a command — it needs something to read.` };
   }
 
-  // Map the handful of plain-English phrasings people actually type onto the
-  // real CLI command. The reply always states which command was run, so the
-  // mapping is visible rather than silent.
-  if (/^show\b/.test(t)) {
-    if (/running[\s-]?conf(ig)?/.test(t)) return { rawFragment, command: 'show running-config' };
-    if (/start(up)?[\s-]?conf(ig)?/.test(t)) return { rawFragment, command: 'show startup-config' };
-    if (/\b(version|software|ios|firmware)\b/.test(t)) return { rawFragment, command: 'show version' };
-    if (/\binterface/.test(t)) return { rawFragment, command: 'show ip interface brief' };
-    if (/\binventor(y|ies)\b/.test(t)) return { rawFragment, command: 'show inventory' };
-  }
-
+  // Class fix (Finding 3, 2026-08-18): NO show-command substitution. This block
+  // used to COLLAPSE the operator's command onto a different one — any
+  // "show …interface…" became "show ip interface brief", "software/ios/firmware"
+  // became "show version", and a qualifier like "show running-config interface
+  // Gi1/0/3" was silently dropped down to the whole "show running-config". That
+  // is the exact keyword-substitutes-a-different-read binding this PR exists to
+  // kill: it ran the status-only brief when an operator asked "show interfaces"
+  // for drop/CRC counters, and blocked a packet-drop diagnosis in review.
+  //
+  // We now run the command the operator ACTUALLY asked for. Expanding a shorthand
+  // or fixing a malformed command is the planner/intent's job upstream, not a
+  // hardcoded collapse here. If a device rejects a malformed command, the real
+  // rejection is shown (honest) — never a stand-in command's output.
   return { rawFragment, command: frag };
 }
 
@@ -1095,9 +1104,10 @@ const DIR_MORE = /\b(?:dir|more)\s+(?:flash|bootflash|disk\d|nvram|\/|[\w-]+:)/i
 function isDeviceCliRequest(command) {
   const raw = String(command || '');
   const t = raw.toLowerCase();
-  // Backup / compliance / baseline asks are NOT a live run — Config-Keeper says
-  // out loud it holds no such store (readCommandFrom handles that honestly).
-  if (NO_STORE.test(raw)) return false;
+  // Class 1: no NO_STORE keyword veto here. A request that names an actual read
+  // command ("run show running-config on sw2 to snapshot it") IS a device-CLI
+  // run and reaches the runner; a request that names no command still returns
+  // false below and is answered honestly. The verb decides, not a noun.
   if (PING_TRACE.test(t)) return true;
   if (CANON_SHOW.test(t)) return true;
   if (DIR_MORE.test(t)) return true;
@@ -1354,39 +1364,45 @@ const DEBATE_BUILDERS = {
   'router-expert': {
     source: () => `${aci.label} / ${sdwan.label}`,
     async build(topic) {
-      if (ACI_WORDS.test(topic || '')) {
+      // Class 1 (2026-08-18): no ACI_WORDS fork. Router-Expert reads BOTH the ACI
+      // fabric AND the SD-WAN overlay and reports both, so a delegated ask that
+      // spans them ("the vManage overlay and the ACI fabric") never comes back
+      // with one source silently dropped. Each source is read independently in
+      // its own try/catch — one unreachable source is reported as such and does
+      // NOT take the other down. Jarvis's synthesis decides which part answers.
+      const parts = [];
+      try {
         const nodes = await aci.getFabricNodes();
         const health = await aci.getFabricHealth().catch(() => ({ score: null }));
         const tenants = await aci.getTenants().catch(() => []);
-        // Enumerate the actual EPGs from the live APIC (fvAEPg via getEpgs), not
-        // just the tenant list. The old builder stopped at tenants, so "what
-        // EPGs do we have?" could never be answered from this finding. Left
-        // uncaught on purpose: if the APIC genuinely can't be read the whole
-        // contribution becomes an honest "source unreachable", same as the
-        // fabric-node read above — it never silently reports zero EPGs.
         const epgs = await aci.getEpgs();
-        return `Live from the APIC (${aci.host}): ${nodes.length} fabric node(s) — ` +
+        parts.push(`Live from the APIC (${aci.host}): ${nodes.length} fabric node(s) — ` +
           `${nodes.map((n) => `${n.name} ${n.role} ${n.state}`).join('; ')}` +
           (health.score != null ? `. Fabric health ${health.score}` : '') +
           (tenants.length ? `. ${tenants.length} tenant(s): ${tenants.map((t) => t.name).join(', ')}` : '') +
-          `.\nEPGs (endpoint groups) live on the fabric now — ${summariseEpgs(epgs)}` +
-          `\nThat is the fabric ${shortTopic(topic)} would land on. I have not measured convergence or ` +
-          `traffic, so I am not making a claim about either.`;
+          `.\nEPGs (endpoint groups) live on the fabric now — ${summariseEpgs(epgs)}`);
+      } catch (e) {
+        parts.push(`ACI fabric (APIC ${aci.host}) unreachable — ${e.message}. No fabric readings to add.`);
       }
-      const devices = await sdwan.getDevices();
-      const controllers = await sdwan.getControllers().catch(() => []);
-      const alarms = await sdwan.getAlarmCount().catch(() => ({ active: 'n/a' }));
-      return `Live from vManage (${sdwan.host}): ${devices.length} overlay device(s) — ` +
-        `${devices.map((d) => `${d.hostname} ${d.type} ${d.state}`).join('; ')}` +
-        (controllers.length ? `. Controllers: ${controllers.map((c) => c.hostname).join(', ')}` : '') +
-        `. Active alarms: ${alarms.active}.\nThat is the WAN state behind ${shortTopic(topic)}. ` +
-        `Routing-protocol behaviour beyond these device states is not something I can read, so I am not asserting it.`;
+      try {
+        const devices = await sdwan.getDevices();
+        const controllers = await sdwan.getControllers().catch(() => []);
+        const alarms = await sdwan.getAlarmCount().catch(() => ({ active: 'n/a' }));
+        parts.push(`Live from vManage (${sdwan.host}): ${devices.length} overlay device(s) — ` +
+          `${devices.map((d) => `${d.hostname} ${d.type} ${d.state}`).join('; ')}` +
+          (controllers.length ? `. Controllers: ${controllers.map((c) => c.hostname).join(', ')}` : '') +
+          `. Active alarms: ${alarms.active}.`);
+      } catch (e) {
+        parts.push(`SD-WAN overlay (vManage ${sdwan.host}) unreachable — ${e.message}. No overlay readings to add.`);
+      }
+      return `${parts.join('\n\n')}\nThat is the fabric + overlay state behind ${shortTopic(topic)}. ` +
+        `I have not measured convergence or traffic, so I am not asserting either.`;
     },
   },
 
   'config-keeper': {
     source: () => `${catalyst.label} (${catalyst.host})`,
-    async build(topic) {
+    async build(topic, planDevice) {
       // A device CLI command ("run show version on sw1", "show running-config",
       // "ping <ip>") goes through executeDeviceCli — the SAME choke point the
       // direct chat path uses, which owns the write refusal, the read-only
@@ -1396,6 +1412,10 @@ const DEBATE_BUILDERS = {
       if (isDeviceCliRequest(topic)) {
         const res = await executeDeviceCli({
           agentId: 'config-keeper', request: topic,
+          // CLASS 2: the planner's STRUCTURED device targets the box — not a
+          // regex over the reworded sub-question. null falls back to the text
+          // parse + ambiguity net inside executeDeviceCli.
+          planDevice: planDevice || null,
           purpose: `run the command asked for in: "${String(topic || '').slice(0, 80)}"`,
         });
         // Whatever happened — ran, refused, denied — say THAT. Never quietly
@@ -1489,7 +1509,7 @@ const DEBATE_BUILDERS = {
 //
 // Returns { agentId, name, connected, stance, text }:
 //   stance ∈ 'evidence' | 'not-connected' | 'denied' | 'unreachable'
-async function gatherForJarvis(agentId, question) {
+async function gatherForJarvis(agentId, question, planDevice) {
   // CLASS FIX (CLI routing): a "run <show/ping/traceroute/dir/more> on <device>"
   // sub-question is a DEVICE CLI job. Only Config-Keeper holds the Command Runner
   // path, so whoever the planner picked, the execution seam re-points it there
@@ -1561,7 +1581,9 @@ async function gatherForJarvis(agentId, question) {
             purpose: `answer Jarvis's sub-question: "${String(question || '').slice(0, 120)}"`,
             reasoning: 'Jarvis (Principal Engineer) delegated this read to answer its sub-question.',
           },
-          () => builder.build(question),
+          // planDevice (CLASS 2): the config-keeper builder uses it as the
+          // STRUCTURED CLI target; other builders ignore the extra arg.
+          () => builder.build(question, planDevice),
         ));
 
       if (g.denied) {

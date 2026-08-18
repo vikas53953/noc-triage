@@ -97,6 +97,16 @@ sub-question ("run show version on sw1"), NOT to an inventory-only engineer. Onl
 show / ping / traceroute / dir / more can ever be run; anything that changes a device is
 refused downstream, so never ask for one.
 
+DEVICE FIELD — structured, never buried in prose. For a device-CLI delegation, put the
+target device the operator named in the delegation's "device" field as its bare name or
+management IP (e.g. "sw2", "10.10.20.176"). The executor targets the box from THIS field,
+not from the wording of "question", so you may reword the sub-question freely without
+losing the target. Fill "device" ONLY when the operator unambiguously named exactly one
+device. If they gave a prefix/partial ("sw", "the switches"), named several, or named
+none, set "device" to null — do NOT invent or infer one; the executor resolves it against
+the live inventory and asks the operator when more than one could serve the ask. For any
+non-CLI delegation, set "device" to null.
+
 AMBIGUOUS TARGET RULE — never instruct a guess. If the operator does not name exactly one
 device ("show version on sw", "run show version" with no device at all, "on the switches"),
 you STILL delegate the command to config-keeper, worded exactly as the operator asked it.
@@ -179,10 +189,17 @@ async function ask(question) {
             items: {
               type: 'object',
               additionalProperties: false,
-              required: ['agentId', 'question'],
+              required: ['agentId', 'question', 'device'],
               properties: {
                 agentId: { type: 'string', enum: ids },
                 question: { type: 'string' },
+                // CLASS 2 durable fix: the device a CLI command targets travels
+                // as a STRUCTURED field, not buried in reworded prose. The
+                // executor reads THIS, not a regex over `question`, so a plan
+                // that says "on the switch named sw2" still targets sw2. null
+                // for a partial/several/none target — the executor then resolves
+                // against the live inventory and asks (the ambiguity net).
+                device: { type: ['string', 'null'] },
               },
             },
           },
@@ -259,7 +276,9 @@ async function ask(question) {
       interpretation: `Routed this piece to ${ctx.nameOf(d.agentId)} because it is the owner that can actually see what the sub-question needs.`,
     });
     ctx.say('jarvis', `📨 @${ctx.nameOf(d.agentId)} — ${d.question}`);
-    const f = await ctx.gather(d.agentId, d.question);
+    // Pass the STRUCTURED device (CLASS 2) alongside the sub-question so the
+    // executor targets the box the planner resolved, not a regex over its prose.
+    const f = await ctx.gather(d.agentId, d.question, d.device || null);
     findings.push(f);
     // Surface each agent's real result under that agent, so the delegation is visible.
     const tag = f.stance === 'evidence' ? '📡'
@@ -287,10 +306,17 @@ async function ask(question) {
       maxTokens: 4000,
       effort: 'high',
     });
-    if (res.refused) return refusedToReason(q);
+    // Class fix (Finding 1, 2026-08-18): the reads ALREADY ran and their real
+    // output is already on screen under each engineer. Writes are judged at the
+    // WIRE (the command choke point), never here — so a SYNTHESIS-step refusal or
+    // error must NEVER cap a successful read with a false "🚫 declined / rephrase
+    // it". That flagship dent showed the real running-config for "copy the running
+    // config off sw1" and then told the operator it was declined. When findings
+    // were gathered, we relay them verbatim instead — honest, nothing invented.
+    if (res.refused) return relayFindings(q, findings, 'the write-up step was declined by the model');
     answer = res.text;
   } catch (err) {
-    return reasoningError(q, err);
+    return relayFindings(q, findings, `the write-up step could not run (${err && err.message ? err.message : 'error'})`);
   }
 
   session.recordReasoning({
@@ -301,6 +327,34 @@ async function ask(question) {
   ctx.say('jarvis', `🎖️ ${answer}`);
   ctx.status('jarvis', 'idle', 'Answered from live findings');
   ctx.log(`[Jarvis] Answered from ${findings.length} finding(s) — "${q.slice(0, 50)}"`);
+}
+
+// Class fix (Finding 1): relay the REAL gathered findings as Jarvis's answer when
+// the optional synthesis/write-up step could not run (model declined it, or the
+// call errored). The reads already happened at the wire — safely, through the
+// gate + guardrail — and are shown per engineer; this gives one coherent answer
+// WITHOUT a false "declined", and invents nothing: it echoes only what the squad
+// actually returned, tagged by stance.
+function relayFindings(q, findings, why) {
+  const list = Array.isArray(findings) ? findings : [];
+  const evidence = list.filter((f) => f.stance === 'evidence').length;
+  const body = list.map((f) => {
+    const tag = f.stance === 'evidence' ? '📡'
+      : f.stance === 'not-connected' ? '🔌'
+      : f.stance === 'denied' ? '🛑' : '⚠️';
+    return `${tag} ${f.name}:\n${String(f.text || '').trim()}`;
+  }).join('\n\n');
+  ctx.say('jarvis',
+    `🎖️ Here are the live readings I gathered — ${why}, so I'm relaying them straight from each ` +
+    `engineer rather than composing a summary on top. Nothing was invented, and nothing failed at the device:\n` +
+    `${RULE}\n${body}`);
+  session.recordReasoning({
+    command: 'SYNTHESIS',
+    raw: `Relayed ${list.length} finding(s) verbatim (${evidence} live reading(s)); the write-up step did not run — ${why}.`,
+    interpretation: 'The reads succeeded and ARE the answer; the optional composition step was skipped, so the real findings were relayed without a false refusal.',
+  });
+  ctx.status('jarvis', 'idle', 'Relayed live findings (write-up step skipped)');
+  ctx.log(`[Jarvis] Relayed ${list.length} finding(s) without synthesis — ${why} — "${String(q).slice(0, 50)}"`);
 }
 
 // The safety classifier declined — say so, invent nothing.
