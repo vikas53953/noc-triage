@@ -262,4 +262,4 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
   death). Now absolute path (proven starts, 348 bytes real output) + fail-loud HEAD-before/after check so a
   sandboxed/hallucinated session logs "NOT resumed" instead of faking success. RESIDUAL (not fixable here):
   account session-quota wall blocks ALL sessions until reset — needs account capacity/credits (Vikas's lever).
-- MERGED QA classes: 1, 3+4, 8, 10. Remaining: 9 (review), 5 (building), 6 (queued).
+- MERGED QA classes: 1, 3+4, 8, 9, 10. Class 5 (#54) in review. Class 6 (error handler + dropped turns) BUILDING (fix/errors-and-dropped-turns). Pending server.js wirings after #54 merges: gate route (3 lines).
