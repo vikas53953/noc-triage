@@ -70,6 +70,14 @@ const ABILITIES = [
       + 'and the SSH path stays read-only until CW-5. I will run the whole wrap and freeze honestly at the apply step rather than pretend a change landed.',
   },
   {
+    key: 'packet-analysis',
+    label: 'Analyze a packet capture',
+    plain: 'Hand me a packet capture (.pcap) and I read the real packets — top talkers, protocol mix, TCP resets/retransmit hints and obvious errors. Metadata only; I never dump payloads.',
+    example: 'analyze this capture — who are the top talkers and are there resets?',
+    available: true,
+    engineBuilt: true,
+  },
+  {
     key: 'batfish-validation',
     label: 'Validate a change offline (Batfish)',
     plain: 'Before any device is touched, check a proposed config change against a network model — parse health, undefined references, and whether it breaks who-can-reach-what — and report clean / issues honestly.',
