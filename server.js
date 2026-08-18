@@ -765,6 +765,50 @@ app.post('/api/copilot/mcp/reconnect', async (req, res) => {
 });
 // ── end CW-8 block ──────────────────────────────────────────────────────────
 
+// ── A5: Batfish offline change-validation (netclaw pull) ─────────────────────
+// Self-contained, contiguous block (A8 edits server.js in parallel — keep this
+// separable). All logic lives in sources/batfish.js; these routes are thin
+// surfaces that leak NO secrets (the Batfish host stays inside the module). This
+// is an OFFLINE what-if check that never touches a device and never blocks a
+// change — it pairs with the change engine as an optional pre-apply read.
+// Require inside the block so the top-of-file requires stay conflict-free.
+const batfish = require('./sources/batfish');
+
+// GET /api/copilot/batfish/status → { connected, configured, lastRun, note }.
+// No host, no secret — honest not-available when BATFISH_HOST is unset.
+app.get('/api/copilot/batfish/status', (req, res) => {
+  res.json(batfish.status());
+});
+
+// POST /api/copilot/batfish/validate { device, commands? | config?, baseline? }
+// → the honest verdict { ok, connected, verdict:'clean'|'issues'|'unknown',
+// findings, note }. Read-only offline analysis; verdict is clean/issues ONLY from
+// a real Batfish answer, never fabricated. The 428 name gate above covers this
+// POST (it is under /api/copilot/).
+app.post('/api/copilot/batfish/validate', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const device = body.device;
+    if (!device || !String(device).trim()) {
+      return res.status(400).json({ error: 'Name the device to validate the change against (device).' });
+    }
+    const change = {
+      commands: Array.isArray(body.commands) ? body.commands : undefined,
+      config: typeof body.config === 'string' ? body.config : undefined,
+      baseline: typeof body.baseline === 'string' ? body.baseline : undefined,
+    };
+    if (!change.commands && !change.config) {
+      return res.status(400).json({ error: 'Provide the change commands (commands: []) or the full post-change config (config).' });
+    }
+    const verdict = await batfish.validateChange(device, change, { who: req.operator });
+    res.json(verdict);
+  } catch (err) {
+    reportSystemError('the Batfish validation could not run', err);
+    res.status(500).json({ error: 'Batfish validation failed — check the server window for detail.' });
+  }
+});
+// ── end A5 block ─────────────────────────────────────────────────────────────
+
 // Create HTTP server
 const server = http.createServer(app);
 
