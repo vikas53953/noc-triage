@@ -89,12 +89,25 @@ const ABILITIES = [
     available: true,
   },
   {
+    // CW-4 REALITY: the Teams bridge is BUILT and every POST is real. What gates
+    // `available` is whether a webhook exists to post THROUGH: `TEAMS_WEBHOOK`.
+    // Unset → available:false with the honest "add a webhook" reason and NOTHING
+    // is posted; set → available:true and posts are real. `engineBuilt:true`
+    // always (like CW-2's change) so the desk can show the wiring is done and the
+    // only missing piece is Vikas's webhook. `available` is resolved dynamically
+    // from the env in publicShape — a late-set webhook flips it without a restart.
+    // HONEST ONE-WAY LIMIT: Incoming Webhooks are post-only; reading replies needs
+    // a Teams bot/flow to feed POST /api/copilot/teams/inbound.
     key: 'teams',
     label: 'Post updates to Teams',
-    plain: 'Post bridge updates into a Microsoft Teams channel and surface the replies back here.',
+    plain: 'Post bridge updates into a Microsoft Teams channel. One-way for now (Incoming Webhooks are post-only); replies need a Teams bot/flow to feed them back.',
     example: 'post this bridge update to the Teams channel',
+    dynamic: 'teams',
     available: false,
-    reason: 'Teams is not connected — it needs a webhook, and the wiring arrives in CW-4.',
+    engineBuilt: true,
+    reason: 'Teams not connected — add a webhook (set TEAMS_WEBHOOK to a Microsoft Teams Incoming Webhook URL). '
+      + 'The bridge is built and every post is real once the webhook is set; until then nothing is posted (never a fake "sent ✓"). '
+      + 'Note: Incoming Webhooks are one-way (post only) — reading replies back needs a Teams bot/Power-Automate flow to feed them into the bridge.',
   },
   {
     key: 'investigate',
@@ -227,10 +240,24 @@ function isQuestionAboutState(text) {
   return QUESTION_LEAD.test(normalize(text)) || /\?\s*$/.test(normalize(text));
 }
 
+// Some abilities are gated on a live env fact, not a static flag — Teams is
+// available exactly when TEAMS_WEBHOOK is set (resolved fresh so a late-set
+// webhook flips the map without a restart). Deciding this here, in the one place
+// that builds the browser shape, keeps the honesty rule in a single seam. The
+// webhook VALUE never enters the shape — only the boolean it implies.
+function resolveAvailable(a) {
+  if (a.dynamic === 'teams') {
+    const raw = process.env.TEAMS_WEBHOOK;
+    return !!(raw && String(raw).trim());
+  }
+  return !!a.available;
+}
+
 // The browser-facing shape. Routing internals never leave this module.
 function publicShape(a) {
-  const out = { key: a.key, label: a.label, plain: a.plain, example: a.example, available: !!a.available };
-  if (!a.available) out.reason = a.reason;
+  const available = resolveAvailable(a);
+  const out = { key: a.key, label: a.label, plain: a.plain, example: a.example, available };
+  if (!available) out.reason = a.reason;
   // Half-built is a real state and the map must be able to say it: the change
   // engine exists and runs, but there is no write path to reach a device with.
   // Hiding that would make the desk unable to show a wrap it can genuinely run.
@@ -239,7 +266,7 @@ function publicShape(a) {
 }
 
 function list() { return ABILITIES.map(publicShape); }
-function availableAbilities() { return ABILITIES.filter((a) => a.available).map(publicShape); }
+function availableAbilities() { return ABILITIES.filter(resolveAvailable).map(publicShape); }
 function get(key) {
   const a = ABILITIES.find((x) => x.key === key);
   return a ? publicShape(a) : null;
@@ -254,7 +281,7 @@ function requestedUnbuiltAbility(text) {
   const t = normalize(text);
   for (const key of ['change', 'drift', 'tickets', 'teams']) {
     const a = byKey(key);
-    if (!a || a.available) continue;
+    if (!a || resolveAvailable(a)) continue;
     if (!ACT_OBJECTS[key].test(t)) continue;
     if (!isImperativeRequest(t, ACT_VERBS[key])) continue;
     // "check sw1 against its baseline" is drift; "check sw1" alone is not.
