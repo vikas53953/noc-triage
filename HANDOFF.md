@@ -92,3 +92,12 @@ transparency-contract.md, triage-contract.md.
   A real APPLY needs write-capable creds or CW-5 SSH path.
 - Ambiguity fix (#46) MERGED + live: "show version on sw" → lists sw1-sw4 and asks, runs nothing.
 - NEXT: QA fix-classes (docs/qa-findings-spec.md). Class 1 (kill keyword shell) now unblocked.
+
+## ALL COPILOT WAVES COMPLETE (2026-08-18)
+CW-1 desk+identity, CW-2 change engine+drift, CW-3 tickets, CW-4 Teams, CW-5 SSH-live, CW-6 ServiceNow —
+ALL built, adversarially reviewed (operator-experience pass each), merged, deterministically verified. 474
+tests green. Honest capability map: ask/run-command/drift/tickets/investigate/bridge available; change/teams/
+servicenow honest "not connected" until Vikas provides (write-path/webhook/SNOW creds). Plus all 7 QA
+fix-classes merged (intent-first shell removal, ambiguity-ask, intake, guardrail, gate-fail-closed, errors,
+chat-sees-incidents, docs, UI). ONLY REMAINING: one end-to-end LIVE-LLM test pass, gated on Anthropic credit
+top-up (+ optionally TEAMS_WEBHOOK, SNOW_INSTANCE/USER/PASS, DevNet SSH creds to exercise the live externals).
