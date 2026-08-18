@@ -1303,11 +1303,33 @@ function capOf(key){
   }
   return null;
 }
+/* "Built" and "available" are two different truths. The change engine can be
+   fully BUILT — every safety step runs for real — yet report available:false
+   because there is no write path to any connected device, so a change freezes
+   honestly at the apply step. A half-built engine still has real records to
+   show, so the history view is gated on BUILT, not on available. */
+function abilityBuilt(key){
+  var a = capOf(key);
+  return !!(a && (a.available === true || a.engineBuilt === true));
+}
 function notBuiltBox(key, whatFor){
   var a = capOf(key);
-  if(a && a.available === false){
+  /* Only a genuinely un-built ability gets the blanket "not available" box.
+     A built-but-frozen engine does not — its honesty lives per-change on the
+     rail (the apply step says exactly why) and in the capability note. */
+  if(a && a.available === false && a.engineBuilt !== true){
     return '<div class="soon"><b>' + esc(a.label || whatFor) + ' is not available yet.</b>' +
       esc(a.reason || 'The server did not say why.') + '</div>';
+  }
+  return '';
+}
+/* The honest line for a change engine that is built but cannot write today. */
+function frozenEngineNote(){
+  var a = capOf('change');
+  if(a && a.available === false && a.engineBuilt === true){
+    return '<div class="soon" style="margin-top:.6rem"><b>The wrap is real; the apply step will freeze.</b>' +
+      esc(a.reason || 'The change engine is built, but there is no write path to any connected device yet, so a change runs every safety step and freezes honestly at apply rather than pretending it landed.') +
+      '</div>';
   }
   return '';
 }
@@ -1355,6 +1377,9 @@ function diffRows(diff){
     return rows;
   }
   if(typeof diff === 'object'){
+    /* the real change/drift diff: { changed, added, removed, unified,
+       lines:[{change,line}] } — the structured lines render cleanest. */
+    if(Array.isArray(diff.lines)) return diffRows(diff.lines);
     if(typeof diff.text === 'string' || typeof diff.unified === 'string'){
       fromString(diff.text || diff.unified); return rows;
     }
@@ -1364,7 +1389,6 @@ function diffRows(diff){
     (Array.isArray(diff.added) ? diff.added : []).forEach(function(l){
       rows.push({ c:'plus', t:'+ ' + String(l && l.line != null ? l.line : l) });
     });
-    if(Array.isArray(diff.lines)) return diffRows(diff.lines);
   }
   return rows;
 }
@@ -1376,6 +1400,10 @@ function diffHtml(diff){
   }).join('') + '</div>';
 }
 function diffCount(diff){
+  /* prefer the record's own authoritative counts when present (numbers) */
+  if(diff && typeof diff === 'object' && typeof diff.added === 'number' && typeof diff.removed === 'number'){
+    return { added:diff.added, removed:diff.removed, total:diff.added + diff.removed };
+  }
   var rows = diffRows(diff), a = 0, r = 0;
   rows.forEach(function(x){ if(x.c === 'plus') a++; else if(x.c === 'minus') r++; });
   return { added:a, removed:r, total:a + r };
@@ -1392,10 +1420,12 @@ var STEPS = [
 ];
 function normState(s){
   s = String(s == null ? '' : s).toLowerCase();
-  if(/^(done|ok|pass|passed|complete|completed|success|succeeded|applied)/.test(s)) return 'done';
+  /* the backend's honest freeze states first, before the generic buckets */
+  if(/no.?write.?path|denied|frozen|blocked|skip/.test(s)) return 'blocked';
+  if(/^(done|ok|pass|passed|complete|completed|success|succeeded|applied|unverified)/.test(s)) return 'done';
   if(/^(running|active|in.?progress|started|working)/.test(s)) return 'active';
   if(/^(fail|error|refused)/.test(s)) return 'failed';
-  if(/^(block|skip|unavailable|not.?possible|no.?path|denied|frozen|impossible)/.test(s)) return 'blocked';
+  if(/^(unavailable|not.?possible|no.?path|impossible)/.test(s)) return 'blocked';
   return '';
 }
 function filled(v){
@@ -1407,28 +1437,62 @@ function filled(v){
 }
 /* "no write path to this device yet" is a TRUTH, not an error — it gets its own
    amber state and its own plain sentence, never dressed up as a failure to hide. */
+function stepArray(rec){ return Array.isArray(rec.steps) ? rec.steps : []; }
+function findStep(rec, name){
+  var a = stepArray(rec);
+  for(var i=0;i<a.length;i++){ if(a[i] && String(a[i].name||'').toLowerCase() === name) return a[i]; }
+  return null;
+}
 function blockedNote(rec){
-  var bits = [ rec.error, rec.failure, rec.statusReason, rec.reason_blocked, rec.note,
+  /* The backend's real freeze reason lives in the apply step's detail, in
+     frozenReason, or in applyAttempt.reason — plus older/looser shapes. */
+  var apply = findStep(rec, 'apply');
+  var bits = [ rec.frozenReason, apply && apply.detail,
+    rec.applyAttempt && rec.applyAttempt.reason,
+    rec.error, rec.failure, rec.statusReason, rec.note,
     rec.apply && (rec.apply.reason || rec.apply.error || rec.apply.message || rec.apply.note) ];
-  var t = bits.filter(function(x){ return typeof x === 'string' && x.trim(); }).join(' · ');
-  return t;
+  var t = bits.filter(function(x){ return typeof x === 'string' && x.trim(); });
+  var seen = {}, uniq = [];
+  t.forEach(function(x){ if(!seen[x]){ seen[x]=1; uniq.push(x); } });
+  return uniq.join(' · ');
 }
 function isNoWritePath(rec){
+  /* The real backend records this as the apply step's state 'no-write-path'
+     and a frozenAt==='apply'; keep the text sniff for looser shapes too. */
+  var apply = findStep(rec, 'apply');
+  if(apply && /no.?write.?path/.test(String(apply.state||'').toLowerCase())) return true;
+  if(rec.applyAttempt && rec.applyAttempt.noWritePath === true) return true;
+  if(rec.noWritePath === true) return true;
   return /no write path|no way to write|write transport|cannot write to this device/i.test(blockedNote(rec));
 }
+/* backend step name → the UI's five-step key. gate + resolve are not rail rows
+   (the gate has its own row above the rail; resolve is plumbing). diff and
+   validation both feed the one "What moved" row. */
+var STEP_ALIAS = {
+  'pre-capture':'pre', 'precapture':'pre', 'pre':'pre',
+  'apply':'apply',
+  'post-capture':'post', 'postcapture':'post', 'post':'post',
+  'diff':'validate', 'validation':'validate', 'validate':'validate',
+  'rollback-artifact':'rollback', 'rollbackartifact':'rollback', 'rollback':'rollback'
+};
+var SEV = { failed:4, blocked:3, active:2, done:1, pending:0, '':0 };
 function stepStates(rec){
-  /* If the backend records its own per-step states, they win — verbatim. */
+  /* The backend's own per-step records win. Two backend steps (diff, validation)
+     map to one UI row — the more severe state and the validation detail lead. */
   var given = {};
-  var raw = rec.steps || rec.wrap || rec.stages;
-  if(Array.isArray(raw)){
-    raw.forEach(function(s){
-      if(!s) return;
-      var k = String(s.key || s.step || s.name || '').toLowerCase();
-      STEPS.forEach(function(d){ if(k.indexOf(d.key) === 0 || k === d.key) given[d.key] = s; });
-    });
-  } else if(raw && typeof raw === 'object'){
-    STEPS.forEach(function(d){ if(raw[d.key]) given[d.key] = raw[d.key]; });
-  }
+  stepArray(rec).forEach(function(s){
+    if(!s) return;
+    var key = STEP_ALIAS[String(s.name||s.key||s.step||'').toLowerCase()];
+    if(!key) return;
+    var norm = { state: normState(s.state || s.status || (s.ok===true?'done':(s.ok===false?'failed':''))),
+                 note: s.detail || s.note || s.reason || s.message || '', name: String(s.name||'').toLowerCase() };
+    var prev = given[key];
+    if(!prev){ given[key] = norm; return; }
+    /* keep the worse state; prefer the validation step's note on the merged row */
+    var worse = (SEV[norm.state]||0) >= (SEV[prev.state]||0) ? norm.state : prev.state;
+    var note = norm.name === 'validation' ? (norm.note || prev.note) : (prev.note || norm.note);
+    given[key] = { state: worse, note: note, name: 'merged' };
+  });
 
   var st = String(rec.status || '').toLowerCase();
   var frozen = st === 'failed' || st === 'denied';
@@ -1443,10 +1507,7 @@ function stepStates(rec){
   var out = [], stopped = false;
   for(var i=0;i<STEPS.length;i++){
     var d = STEPS[i], g = given[d.key], state = '', note = '';
-    if(g){
-      state = normState(g.state || g.status || (g.ok === true ? 'done' : (g.ok === false ? 'failed' : '')));
-      note = (typeof g === 'object' && (g.note || g.detail || g.reason || g.message)) || '';
-    }
+    if(g){ state = g.state; note = g.note || ''; }
     if(!state){
       if(has[d.key]) state = 'done';
       else if(stopped) state = 'pending';
@@ -1601,9 +1662,10 @@ function changeCard(rec){
   var rb = rec.rollback;
   if(filled(rb)){
     var rbCmds = Array.isArray(rb) ? rb : (Array.isArray(rb.commands) ? rb.commands : (typeof rb === 'string' ? [rb] : []));
+    var rbBasis = (rb && typeof rb === 'object' && rb.basis) ? String(rb.basis) : '';
     h += '<div style="margin-top:.7rem"><span class="r-lbl">The undo, ready</span>' +
       (rbCmds.length ? '<pre class="term">' + rbCmds.map(function(c){ return esc(String(c)); }).join('\n') + '</pre>'
-                     : '<div class="footnote">A rollback is stored but its commands are not in this record.</div>');
+                     : '<div class="footnote">' + esc(rbBasis || 'Nothing to undo — nothing changed on the device, so there is nothing to roll back.') + '</div>');
     if(st === 'applied'){
       h += '<div style="margin-top:.55rem"><button class="btn btn-danger btn-sm" id="rbBtn" data-id="' + esc(id) + '">' +
         '↩ Roll it back</button></div>';
@@ -1623,8 +1685,9 @@ function renderChange(){
       pick.hidden = false;
       pick.innerHTML = CHG.order.map(function(id){
         var r = CHG.recs[id] || {};
+        var label = (String(r.status||'').toLowerCase() === 'failed' && isNoWritePath(r)) ? 'no write path' : (r.status || '—');
         return '<option value="' + esc(id) + '"' + (id === CHG.sel ? ' selected' : '') + '>' +
-          esc(id) + ' · ' + esc(r.device || '—') + ' · ' + esc(r.status || '—') + '</option>';
+          esc(id) + ' · ' + esc(r.device || '—') + ' · ' + esc(label) + '</option>';
       }).join('');
     } else pick.hidden = true;
   }
@@ -1633,9 +1696,9 @@ function renderChange(){
   if(!rec){
     var nb = notBuiltBox('change', 'The change engine');
     w.innerHTML = nb || ('<div class="empty"><span class="big">🧰</span>' +
-      'No change has been wrapped from this desk yet.<br>' +
+      'No change record to show yet.<br>' +
       'Ask Jarvis for one in plain words, or press <b>Draft a change</b> — either way you see the exact ' +
-      'commands and press go yourself before anything reaches a device.</div>');
+      'commands and press go yourself before anything reaches a device.</div>' + frozenEngineNote());
     return;
   }
   w.innerHTML = changeCard(rec);
@@ -1727,10 +1790,12 @@ function doRollback(id, btn){
 var histTried = false;
 function loadChangeHistory(){
   if(histTried) return;
-  var cap = capOf('change');
-  if(CAPS.state !== 'ok' || !cap || cap.available !== true) return;
+  /* Gate on the engine being BUILT, not "available". The change engine is
+     available:false today (no write path) yet engineBuilt:true, and it holds
+     real, honestly-frozen records — those must show. */
+  if(CAPS.state !== 'ok' || !abilityBuilt('change')) return;
   histTried = true;
-  api('/api/copilot/change')
+  api('/api/copilot/changes')
     .then(function(r){ if(!r.ok) throw new Error(httpWhy(r.status)); return r.json(); })
     .then(function(d){
       var list = Array.isArray(d) ? d : (d && Array.isArray(d.changes) ? d.changes : null);
@@ -1880,16 +1945,23 @@ function looksLikeChange(t){
 /* ============================================================
    DRIFT — real GET /api/copilot/drift/:device
    ============================================================ */
+/* the real driftLine sign lives in l.change ('added'|'removed'); keep the looser
+   fallbacks for other shapes. */
+function driftAdded(l){ return l && (l.change === 'added' || l.added === true || /^add/i.test(String(l.type || l.op || ''))); }
+function driftRemoved(l){ return l && (l.change === 'removed' || l.removed === true || /^rem|^del/i.test(String(l.type || l.op || ''))); }
 function driftVerdictLine(d){
   var dev = esc(d.device || DRIFT.device);
   var v = String(d.verdict || '').toLowerCase();
   var lines = Array.isArray(d.driftLines) ? d.driftLines : [];
+  /* the result carries authoritative added/removed counts — use them */
   var c = { added:0, removed:0 };
-  lines.forEach(function(l){
-    if(!l) return;
-    if(l.added || /^add/i.test(String(l.type || l.op || ''))) c.added++;
-    else if(l.removed || /^rem|^del/i.test(String(l.type || l.op || ''))) c.removed++;
-  });
+  if(typeof d.added === 'number' && typeof d.removed === 'number'){ c.added = d.added; c.removed = d.removed; }
+  else lines.forEach(function(l){ if(driftAdded(l)) c.added++; else if(driftRemoved(l)) c.removed++; });
+  if(v === 'unreadable'){
+    return '<div class="verdictline" style="color:var(--warn)">📵 ' + dev +
+      ' could not be read right now, so no drift verdict is being claimed.</div>' +
+      '<div class="footnote">The baseline is untouched. Try again once the device is reachable.</div>';
+  }
   if(v === 'clean'){
     return '<div class="verdictline" style="color:var(--ok)">✅ ' + dev +
       ' matches its saved baseline. Nothing has drifted.</div>';
@@ -1924,8 +1996,8 @@ function driftLinesHtml(lines){
   return '<div class="diff" style="margin-top:.5rem">' + lines.map(function(l){
     if(l == null) return '';
     if(typeof l === 'string') return '<div class="same">' + esc(l) + '</div>';
-    var add = l.added === true || /^add/i.test(String(l.type || l.op || ''));
-    var rem = l.removed === true || /^rem|^del/i.test(String(l.type || l.op || ''));
+    var add = driftAdded(l);
+    var rem = driftRemoved(l);
     var cls = add ? 'plus' : (rem ? 'minus' : 'same');
     var pre = add ? '+ ' : (rem ? '- ' : '  ');
     var txt = (l.line != null) ? l.line : (l.text != null ? l.text : '');
