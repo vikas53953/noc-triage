@@ -251,3 +251,15 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
   clone) — judged at guardrail/refusal layer only. Re-run planner adversarial set when credits return.
 - Now on master: 3a1f999. QA classes DONE: 1, 3+4, 8, 10 + guardrail follow-up. Remaining: 9, 5+6.
 - NEXT: Class 9 builder launching (fix/chat-sees-incidents, own clone, fresh master).
+
+## 2026-08-18 — Class 9 built + launcher fixed
+- Class 9 (chat sees own incidents + per-operator session isolation) BUILT — PR #53 (10 files, 251 tests pass).
+  IN REVIEW with special focus: must NOT regress Class 1's shell removal (shared files) + new id/handover
+  vocab must be pass-through not keyword-answer. LLM-path awaits credits.
+- Class 5 (permission gate fail-open → fail-closed + real deny mode) BUILDING (fix/gate-fail-closed, approvals.js).
+- Class 6 (global error handler + silent dropped turns, server.js) QUEUED behind Class 9+5 (server.js).
+- AUTO-RESUME LAUNCHER FIXED: root cause was bare `claude` (PATH-stripped in scheduled task → 6-byte silent
+  death). Now absolute path (proven starts, 348 bytes real output) + fail-loud HEAD-before/after check so a
+  sandboxed/hallucinated session logs "NOT resumed" instead of faking success. RESIDUAL (not fixable here):
+  account session-quota wall blocks ALL sessions until reset — needs account capacity/credits (Vikas's lever).
+- MERGED QA classes: 1, 3+4, 8, 10. Remaining: 9 (review), 5 (building), 6 (queued).
