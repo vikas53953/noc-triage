@@ -211,3 +211,14 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
 - Residual (deliberate): next-steps / could-not-see sections pass engine strings verbatim (DNAC_*, FMC).
 - Honest limits: populated what-broke path unit-tested only (clone had no source creds); LLM hypothesis
   path pending credits (regression guard in place).
+
+## 2026-08-18 — PR #52 BUILT (guardrail fail-closed), independent review IN FLIGHT
+- Branch fix/guardrail-fail-closed, PR #52 open (NOT merged). Delivered all 5 scope items:
+  whole-clause fail-closed scan + INNOCENT_OBJECTS allowlist; carrier-verb shielding (run/execute/perform
+  write ⇒ refuse, "run show boot system" stays read); intake asks on unrecognizable subject (422, no INC);
+  honest "that is a change… I am read-only" at the no-command sink; single audit record at the refusal
+  SINK (writeRefusal/auditRefusedWrite, per-branch log removed). Tests 67→166 green; npm test script added.
+- Builder-flagged follow-up: Jarvis conversational surface only gets the deterministic screen when
+  isDeviceCliRequest — conversational change asks route to the change-proposal path (pre-existing; verify in review).
+- Reviewer (own clone noc-rev52, port 3106) running adversarial sweep with FRESH attack strings; merges if it holds.
+- LLM-path verification still pending credits (deterministic-only evidence).
