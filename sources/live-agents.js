@@ -14,7 +14,8 @@ const aci = require('./aci');
 const sdwan = require('./sdwan');
 const session = require('./session-log');
 const approvals = require('./approvals');
-const { checkCommand, checkIntent, splitIntent, commandWord, READ_VERBS } = require('./guardrails');
+const guardrails = require('./guardrails');
+const { checkCommand, checkIntent, splitIntent, commandWord, READ_VERBS } = guardrails;
 
 // The host app injects its broadcast/status/task-board plumbing here so this
 // module stays free of server internals.
@@ -349,6 +350,18 @@ async function routerExpertSdwan(agentId) {
 //   { denied: true, command }          — the operator denied it; zero wire calls
 //   { ok, command, target, body, note} — it ran; body is the REAL device output
 //   { ok, multi: true, runs: [...] }   — the operator said "all"; one real run per box
+// A refused write, built in ONE place. The audit record is written here — at
+// the DECISION — rather than in whichever renderer happens to run next, because
+// the renderers differ (direct chat calls refuseWrite, a debate contribution
+// only prints text) and a refusal that reaches the quieter renderer used to
+// leave no trace at all. `intent.audited` tells refuseWrite this one is already
+// on the record, so a refusal is logged exactly once, never twice.
+function writeRefusal(agentId, raw, change, refusedChange) {
+  const intent = { ...(change || {}), audited: true };
+  auditRefusedWrite(agentId, raw, intent);
+  return { refused: true, kind: 'write', intent, command: null, refusedChange: refusedChange || null };
+}
+
 async function executeDeviceCli({ agentId, request, purpose, announce, device, all, planDevice }) {
   const raw = String(request || '');
   // CLASS 2: a structured target from the planner ("device" field). Trusted the
@@ -369,7 +382,7 @@ async function executeDeviceCli({ agentId, request, purpose, announce, device, a
   // parser or the wire. The reply says both things happened.
   const split = splitIntent(raw);
   if (split.destructive && !split.compound) {
-    return { refused: true, kind: 'write', intent: split.change, command: null };
+    return writeRefusal(agentId, raw, split.change, null);
   }
   const refusedChange = split.compound ? split.change : null;
   // From here on the ONLY text considered is the read half.
@@ -377,7 +390,17 @@ async function executeDeviceCli({ agentId, request, purpose, announce, device, a
 
   // 2. Parse a read command out of the plain English.
   const read = readCommandFrom(readOnlyText);
-  if (!read.command) return { refused: true, kind: 'no-command', note: read.note || null, refusedChange };
+  if (!read.command) {
+    // THE REFUSAL SINK. No read command came out of the text — but the reply
+    // "I could not find a read command in that" is the WRONG thing to say to an
+    // operator who asked for a CHANGE. They did not fail to name a read; they
+    // named a change, and the honest answer is that this path is read-only.
+    // Asked here, at the one place the no-command reply is produced, so every
+    // caller gets the right message instead of each one guessing.
+    const changeAsk = guardrails.looksLikeChangeAsk(readOnlyText);
+    if (changeAsk.destructive) return writeRefusal(agentId, raw, changeAsk, refusedChange);
+    return { refused: true, kind: 'no-command', note: read.note || null, refusedChange };
+  }
 
   // 2a. Guardrail on the RAW fragment first — chaining/redirection characters
   //     ("; & | > < ` $" and newlines) are still present at this point. The
@@ -579,9 +602,11 @@ function cliResultText(res, raw) {
   }
   if (res.refused) {
     if (res.kind === 'write') {
-      return `Refused — that is a change, and I am read-only. What I refused: "${res.intent.keyword}"` +
+      return `That is a change to the device, and I am read-only — so I did not do it. ` +
+        `What I refused: "${res.intent.keyword}"` +
         (res.intent.clause ? ` — in "${String(res.intent.clause).slice(0, 80)}"` : '') +
-        `. Nothing was sent to any device, and I did NOT run something else in its place.`;
+        `. Nothing was sent to any device, and I did NOT run something else in its place. ` +
+        `I can show you the device as it is now instead.`;
     }
     if (res.kind === 'guardrail') return `${res.reason} Nothing was sent to any device.`;
     // The ambiguity question travels VERBATIM into a Jarvis finding, so the
@@ -1194,19 +1219,50 @@ async function jarvisNetwork(agentId) {
 }
 
 // ── Read-only refusal for any change request ────────────────────────────────
+// THE SINGLE REFUSAL SINK for a write. Every path that decides "this is a
+// change" ends here — the deterministic screen in server.js, the CLI choke
+// point, the configure_device intent — so the message and the AUDIT RECORD are
+// written in exactly one place. They used to be written per-branch, which is
+// how a refused write on the no-command path left no trace at all: the operator
+// was told nothing ran, and the audit log agreed by staying silent.
 function refuseWrite(agentId, command, intent) {
   const named = intent && intent.keyword
     ? `What I refused: "${intent.keyword}"${intent.clause && intent.clause.toLowerCase() !== intent.keyword ? ` — in "${String(intent.clause).slice(0, 80)}"` : ''}. ` +
       `That changes device state.\n\n`
     : '';
   say(agentId,
-    `🚫 Refused — that is a change, and I am read-only.\n${RULE}\n` +
+    `🚫 That is a change to the device, and I am read-only — so I did not do it.\n${RULE}\n` +
     `You asked: "${String(command).slice(0, 140)}"\n\n` +
     named +
     `Nothing was sent to any device, and I did NOT run something else in its place.\n` +
+    `I can show you the device AS IT IS NOW instead — ask me for "show running-config", ` +
+    `"show version" or "show ip interface brief" on that box.\n` +
+    `To actually make the change, use the change engine (POST /api/copilot/change): it wraps every ` +
+    `change in an approval, a before/after capture, a diff, a validation and a rollback plan.\n` +
     `This squad is wired to real Cisco DevNet sandboxes with read-only access enforced in code ` +
     `(sources/guardrails.js) — only ${READ_VERBS.join(' / ')} reads get through.`);
+  if (!(intent && intent.audited)) auditRefusedWrite(agentId, command, intent);
   ctx.updateAgentStatus(agentId, 'idle', 'Refused a write — read-only mode');
+}
+
+// One audit record per refused write, written HERE so no branch can forget it.
+// Guarded end-to-end: an audit failure must never turn a clean refusal into a
+// crash, but it must also never be the reason nothing was logged.
+function auditRefusedWrite(agentId, command, intent) {
+  const agentName = (ctx && ctx.agents && ctx.agents[agentId] && ctx.agents[agentId].name) || agentId;
+  const what = String(command || '').slice(0, 60);
+  const word = (intent && intent.keyword) ? intent.keyword : 'a state-changing request';
+  try {
+    ctx.appendToActivityLog(
+      `[${new Date().toISOString()}] [${agentName}] Refused a state-changing request ("${word}") — ` +
+      `"${what}" — nothing sent to any device\n`);
+  } catch (e) { /* activity log must never break the refusal */ }
+  try {
+    session.audit({
+      what: `ask: ${String(command || '').slice(0, 200)}`,
+      result: `refused — change request ("${word}") on a read-only path (zero device calls)`,
+    });
+  } catch (e) { /* audit store must never break the refusal */ }
 }
 
 // ── Debate contributions — live reads only ──────────────────────────────────

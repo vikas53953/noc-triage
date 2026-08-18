@@ -182,6 +182,40 @@ function isWordish(w) {
   if (/[^aeiouy]{5,}/.test(s)) return false;    // 5+ consonants in a row → keysmash
   return true;
 }
+// ── Is the intake subject network-shaped at all? (fail-closed intake) ────────
+// The garbage test below only catches keysmash and empty input. Anything with a
+// vowel in it sailed through — "lunch is cold today" opened a real INC, ran a
+// full estate sweep and paged L3/L4. That is the console inventing a network
+// problem out of small talk.
+//
+// The old NETWORK_SUBJECT gate was too NARROW (it bounced "voice calls breaking
+// up"), so the fix is not to bring it back — it is to widen what counts as
+// network-shaped and to ASK instead of hard-rejecting. A subject qualifies when
+// it names any ONE of: a device or IP, a network noun (NETWORK_SUBJECT), a site
+// or the people at one, a service people use, or a symptom. Only when NOTHING in
+// the sentence is recognisable do we ask which site, device or service it is
+// about — we never answer, and we never open a bridge on a guess.
+const SITE_WORDS = /\b(site|sites|branch|branches|office|offices|building|buildings|floor|floors|campus|region|regional|datacent(?:re|er)|data\s?cent(?:re|er)|dc|hq|headquarters|plant|factory|warehouse|store|stores|lab|remote|home\s?worker|user|users|staff|employee|employees|customer|customers|department|finance|payroll|hr|sales|support|reception|desk|floorwalker|tenant)\b/i;
+const SERVICE_WORDS = /\b(internet|intranet|wifi|wi-?fi|wireless|voice|voip|telephony|phone|phones|call|calls|calling|video|conference|conferencing|teams|zoom|webex|email|e-?mail|mail|exchange|outlook|vpn|server|servers|fileshare|file\s?share|share|drive|printer|printers|printing|app|apps|application|applications|portal|website|web\s?site|web|sharepoint|erp|sap|crm|database|db|citrix|rdp|sso|login|log\s?in|sign\s?in|authentication|auth|backup|backups|storage|nas|cloud|saas|o365|office\s?365|salesforce|streaming|browsing|download|downloads|upload|uploads|service|services)\b/i;
+const SYMPTOM_WORDS = /\b(slow|slowness|slowly|sluggish|lag|laggy|lagging|delay|delayed|delays|drop|drops|dropping|dropped|dropout|dropouts|down|outage|offline|off-?line|unreachable|unreachhable|unavailable|inaccessible|timeout|timeouts|timing\s?out|time\s?out|disconnect|disconnects|disconnected|disconnecting|flap|flaps|flapping|error|errors|erroring|fail|fails|failing|failed|failure|failures|broken|break|breaks|breaking|freeze|freezes|freezing|frozen|stuck|hang|hangs|hanging|degraded|degradation|intermittent|intermittently|choppy|garbled|robotic|buffering|spinning|crash|crashes|crashing|unstable|unusable|glitch|glitches|complain|complaining|complaints|blackhole|black\s?hole|loss|lossy|no\s?access|cannot\s?(?:reach|connect|access|get|log)|can'?t\s?(?:reach|connect|access|get|log)|cant\s?(?:reach|connect|access|get|log)|unable\s?to|not\s?working|doesn'?t\s?work|does\s?not\s?work|won'?t\s?(?:connect|load|open)|reset\s?itself|rebooted|restarted)\b/i;
+
+// A bare device id ("sw3", "core-rtr1") or an IPv4 address is a real subject on
+// its own — the same rule the garbage test already uses, named once here.
+function namesDeviceOrIp(text) {
+  const t = String(text || '');
+  if (/\b\d{1,3}(?:\.\d{1,3}){3}\b/.test(t)) return true;
+  return t.split(/\s+/).some((w) => /\d/.test(w) && /[a-z]/i.test(w) && /^[a-z][a-z0-9._-]*$/i.test(w));
+}
+
+function namesNetworkSubject(text) {
+  const t = String(text || '');
+  return isNetworkSubject(t)
+    || namesDeviceOrIp(t)
+    || SITE_WORDS.test(t)
+    || SERVICE_WORDS.test(t)
+    || SYMPTOM_WORDS.test(t);
+}
+
 function looksLikeGarbage(text) {
   const t = String(text || '').trim();
   if (!t) return true;
@@ -1653,7 +1687,9 @@ function startTriage(severity, description, operatorTz) {
   // The normal operator path — the triage is stamped source:'operator' so the
   // record + UI can tell an operator-opened triage from an alert-opened one.
   const triage = buildTriage(severity, description, { operatorTz, source: 'operator' });
-  if (triage.refused) return { refused: true, reason: triage.reason };
+  // `ask` marks the "I need to know which site/device/service" case, so the
+  // caller can render a question rather than a rejection.
+  if (triage.refused) return { refused: true, ask: Boolean(triage.ask), reason: triage.reason };
 
   emitOpened(triage);
 
@@ -1739,6 +1775,21 @@ function buildTriage(severity, description, opts = {}) {
         `happening — the site or users affected, the service, and the symptom (e.g. ` +
         `"branch 3 users report slow internet since 2pm", "voice calls breaking up", ` +
         `"sw2 packet loss since 2pm"). I have opened no bridge and read nothing.`,
+    };
+  }
+  if (!namesNetworkSubject(desc)) {
+    // AMBIGUITY → ASK. The words are real English but nothing in them names a
+    // site, a device, a service or a symptom, so there is no network problem
+    // here to work on. Asking is the only honest move: opening a triage would
+    // page people and sweep the estate over a sentence nobody meant as a fault.
+    return {
+      refused: true,
+      ask: true,
+      reason:
+        `Which site, device, or service is this about? I could not find one in ` +
+        `"${desc.slice(0, 80)}", so I have opened nothing and read nothing. ` +
+        `Tell me the place and what is going wrong — for example "branch 3 users ` +
+        `report slow internet since 2pm" or "sw2 dropping packets".`,
     };
   }
 
@@ -2090,6 +2141,9 @@ module.exports = {
   retryFront,
   retriage,
   isNetworkSubject,
+  // The intake gate, exported so it can be tested WITHOUT opening a triage (a
+  // real startTriage runs a live bridge against real kit).
+  namesNetworkSubject, looksLikeGarbage,
   FRONTS,
   BLIND_SPOTS,
 };

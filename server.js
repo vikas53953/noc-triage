@@ -1073,7 +1073,10 @@ function runAgentAction(agentId, command) {
     && live.isDeviceCliRequest(command)
     && guardrails.splitIntent(command).compound;
   if (writeIntent.destructive && !compoundGoesToChokePoint) {
-    appendToActivityLog(`[${new Date().toISOString()}] [${agent.name}] Refused a state-changing request ("${writeIntent.keyword}") — "${command.slice(0, 60)}"\n`);
+    // The audit + activity record is written inside live.refuseWrite — the ONE
+    // sink every refused write passes through. Logging it here as well would
+    // double-count this branch while the other refusal paths still logged
+    // nothing, which is exactly the hole this move closes.
     return live.refuseWrite(agentId, command, writeIntent);
   }
 
@@ -2177,7 +2180,10 @@ app.post('/api/triage', (req, res) => {
   const { severity, description, operatorTz } = req.body || {};
   const result = triage.startTriage(severity, description, operatorTz);
   if (result.refused) {
-    return res.status(422).json({ error: result.reason });
+    // `ask: true` means the subject named no site/device/service — the console is
+    // ASKING which one, not rejecting the operator. Same 422 (no triage opened),
+    // but the client can word it as a question.
+    return res.status(422).json({ error: result.reason, ask: Boolean(result.ask) });
   }
   // relatedTo (Wave 3): OPEN incidents this new triage may overlap with — surfaced
   // for the operator, never auto-merged. [] when there is no real shared scope.
