@@ -382,6 +382,80 @@ pre.term{
 .pname{font-size:.77rem;font-weight:650;color:var(--ink)}
 .prole{font-size:.64rem;color:var(--ink3)}
 
+/* ============================================================
+   CW-7: live investigation thread — one growing card in the chat.
+   Rounds, shrinking hypotheses, a climbing confidence bar, an
+   inline clarifying-question prompt, and the final root cause + fix.
+   Every value comes from a REAL agent report over the WS / GET :id.
+   ============================================================ */
+.inv{border:1px solid var(--purple);border-radius:11px;background:var(--purple-bg);
+  padding:.65rem .75rem;margin-top:.55rem}
+.inv-head{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.4rem}
+.inv-head .ttl{font-size:.82rem;font-weight:800;color:var(--purple);display:flex;gap:.35rem;align-items:center}
+.inv-status{font-size:.57rem;font-weight:800;letter-spacing:.05em;padding:.12rem .4rem;border-radius:4px;
+  text-transform:uppercase;margin-left:auto;white-space:nowrap}
+.inv-status.run{background:var(--info-bg);color:var(--info)}
+.inv-status.grill{background:var(--warn-bg);color:var(--warn)}
+.inv-status.done{background:var(--ok-bg);color:var(--ok)}
+.inv-status.stuck{background:var(--bad-bg);color:var(--bad)}
+.inv-status.cap{background:var(--warn-bg);color:var(--warn)}
+.inv-problem{font-size:.79rem;line-height:1.55;background:var(--card);border:1px solid var(--line-soft);
+  border-radius:8px;padding:.45rem .55rem;margin-bottom:.5rem;overflow-wrap:anywhere}
+.inv-problem .r-lbl{color:var(--purple)}
+.confwrap{margin:.15rem 0 .55rem}
+.confwrap .cl{display:flex;justify-content:space-between;align-items:baseline;font-size:.62rem;
+  font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--ink3);margin-bottom:.22rem}
+.confwrap .cl b{font-size:.74rem;color:var(--ink);letter-spacing:0}
+.confbar{height:8px;border-radius:99px;background:var(--hover);overflow:hidden}
+.confbar-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--info),var(--ok));
+  width:0;transition:width .55s cubic-bezier(.4,0,.2,1)}
+.round{border:1px solid var(--line);border-radius:9px;background:var(--card);padding:.5rem .6rem;margin-bottom:.45rem}
+.round.latest{border-color:var(--accent);animation:flash .9s ease-out}
+.round-head{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;margin-bottom:.35rem}
+.round-n{font-size:.58rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
+  padding:.1rem .4rem;border-radius:4px;background:var(--hover);color:var(--ink2)}
+.round-agent{font-size:.63rem;font-weight:800;padding:.1rem .4rem;border-radius:4px;
+  background:var(--info-bg);color:var(--info)}
+.round-conf{font-size:.6rem;font-weight:800;color:var(--ink3);margin-left:auto}
+.probe{font-size:.77rem;line-height:1.5;margin-bottom:.3rem;overflow-wrap:anywhere}
+.probe .r-lbl{color:var(--accent);margin-bottom:.1rem}
+.probe-why{font-size:.68rem;color:var(--ink3);line-height:1.45;margin-top:.15rem;font-style:italic}
+.report .stance{display:inline-block;font-size:.56rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
+  padding:.06rem .32rem;border-radius:4px;background:rgba(148,163,184,.22);color:var(--ink2);margin-right:.4rem;vertical-align:middle}
+.inv-q .qlist{list-style:disc;margin:.1rem 0 .5rem 1.1rem;padding:0}
+.inv-q .qlist li{font-size:.8rem;line-height:1.5;font-weight:600;margin-bottom:.25rem;overflow-wrap:anywhere}
+.report{font-family:var(--mono);font-size:.72rem;line-height:1.55;background:var(--term-bg);
+  color:var(--term-ink);border-radius:7px;padding:.4rem .55rem;overflow:auto;max-height:220px;
+  white-space:pre-wrap;overflow-wrap:anywhere}
+.hypos{list-style:none;padding:0;margin:.4rem 0 0}
+.hypos li{display:flex;gap:.4rem;align-items:baseline;font-size:.75rem;line-height:1.45;
+  padding:.16rem 0;overflow-wrap:anywhere}
+.hypos .mk{flex-shrink:0;font-size:.66rem;font-weight:800}
+.hypos li.hy-elim{color:var(--ink3);text-decoration:line-through;text-decoration-color:var(--bad)}
+.hypos li.hy-elim .mk{color:var(--bad)}
+.hypos li.hy-conf{color:var(--ok);font-weight:650}
+.hypos li.hy-conf .mk{color:var(--ok)}
+.hypos li.hy-stand .mk{color:var(--ink3)}
+.hypos .hc{font-size:.58rem;font-weight:800;color:var(--ink3);margin-left:auto;white-space:nowrap}
+.inv-q{border:1px solid var(--warn);background:var(--warn-bg);border-radius:9px;padding:.55rem .6rem;margin-top:.5rem}
+.inv-q .r-lbl{color:var(--warn)}
+.inv-q .qtext{font-size:.8rem;line-height:1.55;font-weight:600;margin-bottom:.4rem;overflow-wrap:anywhere}
+.inv-q textarea{width:100%;background:var(--card);border:1px solid var(--line);border-radius:7px;
+  color:var(--ink);padding:.4rem .55rem;font-size:.78rem;resize:vertical;min-height:46px}
+.inv-q textarea:focus{outline:none;border-color:var(--accent)}
+.inv-q .acts{display:flex;gap:.4rem;margin-top:.45rem;flex-wrap:wrap}
+.rootcause{border:1px solid var(--ok);background:var(--ok-bg);border-radius:9px;padding:.55rem .6rem;margin-top:.5rem}
+.rootcause .r-lbl{color:var(--ok)}
+.rootcause .rc-txt{font-size:.82rem;font-weight:700;line-height:1.5;margin-bottom:.35rem;overflow-wrap:anywhere}
+.fixplan{border:1px dashed var(--accent);border-radius:9px;padding:.5rem .6rem;margin-top:.45rem;font-size:.78rem;line-height:1.55}
+.fixplan .r-lbl{color:var(--accent)}
+.needs{border:1px solid var(--bad);background:var(--bad-bg);border-radius:9px;padding:.55rem .6rem;margin-top:.5rem;
+  font-size:.79rem;line-height:1.55;overflow-wrap:anywhere}
+.needs .r-lbl{color:var(--bad)}
+.inv-btn{background:transparent;border:1px solid var(--purple);color:var(--purple);border-radius:7px;
+  padding:.34rem .7rem;font-size:.74rem;font-weight:700;cursor:pointer}
+.inv-btn:hover{background:var(--purple-bg)}
+
 /* ---------- name gate ---------- */
 .gate{
   position:fixed;inset:0;z-index:400;background:rgba(6,10,18,.86);backdrop-filter:blur(6px);
@@ -648,6 +722,7 @@ pre.term{
     <div class="askbar">
       <input id="ask" placeholder="Ask Jarvis anything about the network…" autocomplete="off">
       <button class="btn btn-primary" id="askBtn">Ask Jarvis</button>
+      <button class="btn btn-ghost" id="investBtn" title="Jarvis grills the problem, probes agents round by round, and narrows to a root cause">🔬 Investigate</button>
       <button class="btn btn-ghost" id="postBtn" disabled title="Post a note into the selected open bridge">Post to bridge</button>
       <span class="stamp">acting as <b id="stampName">—</b></span>
     </div>
@@ -2329,6 +2404,397 @@ function looksLikeChange(t){
 }
 
 /* ============================================================
+   CW-7 — LIVE INVESTIGATION THREAD
+   Jarvis grills the problem, then runs a probe→report→narrow loop
+   with the right agents until a root cause is isolated, then plans
+   the fix. This UI is a live thread: the understood problem, each
+   round as a card (probe · agent · real report · standing/eliminated
+   hypotheses · a climbing confidence bar), an inline clarifying-
+   question prompt when Jarvis grills (answer → POST /:id/answer
+   resumes), and the final ROOT CAUSE + FIX PLAN (a config fix reuses
+   the CW-2 change-proposal approve card). Honest stuck / round-cap
+   states. Nothing here is invented — every value comes from a real
+   agent report streamed over the WS or read from GET /:id. When the
+   loop route is missing (404) the thread says so plainly.
+
+   Routes (pinned contract):
+     POST /api/copilot/investigate            { problem, operatorTz? } → { id, ... }
+     POST /api/copilot/investigate/:id/answer { text }                → resumes the loop
+     GET  /api/copilot/investigate/:id                                → full record
+     WS   investigation_round { round, probe, agent, report,
+                                hypotheses[], confidence, status }
+   ============================================================ */
+var INV = {};   /* id -> { el, problem, understood, status, confidence,
+                           rounds:{}, order:[], question, rootCause,
+                           fixPlan, proposal, needs, cap } */
+
+/* Map any backend status word onto the four visible states. */
+function invStatusClass(s){
+  s = String(s || '').toLowerCase();
+  if(/grill|clarif|question|ask|await|waiting/.test(s)) return 'grill';
+  if(/resolv|root|isolat|done|complete|confident/.test(s)) return 'done';
+  if(/stuck|blocked|dead|unavailable|needs/.test(s)) return 'stuck';
+  if(/cap|capped|max|exhaust/.test(s)) return 'cap';
+  return 'run';
+}
+function invStatusLabel(cls, st){
+  if(cls === 'grill') return 'needs your answer';
+  if(cls === 'done') return 'root cause isolated';
+  if(cls === 'stuck') return 'stuck — needs input';
+  if(cls === 'cap') return 'hit the round cap';
+  return 'investigating…';
+}
+
+/* A hypothesis row: standing / eliminated / confirmed, honest + escaped. */
+function invHypoLi(h){
+  if(h == null) return '';
+  if(typeof h === 'string') h = { hypothesis: h };
+  var text = h.hypothesis || h.text || h.name || h.label || '—';
+  var st = String(h.status || (h.eliminated ? 'eliminated' : (h.confirmed ? 'confirmed' : 'standing'))).toLowerCase();
+  var cls = /elim|ruled|reject|drop/.test(st) ? 'hy-elim'
+          : /confirm|proven|root/.test(st) ? 'hy-conf' : 'hy-stand';
+  var mk = cls === 'hy-elim' ? '✕' : cls === 'hy-conf' ? '✓' : '•';
+  var conf = (h.confidence != null && h.confidence !== '')
+    ? '<span class="hc">' + esc(typeof h.confidence === 'number' ? Math.round(h.confidence*100 <= 100 && h.confidence <= 1 ? h.confidence*100 : h.confidence) + '%' : h.confidence) + '</span>'
+    : '';
+  return '<li class="' + cls + '"><span class="mk">' + mk + '</span><span>' + md(text) + '</span>' + conf + '</li>';
+}
+
+/* Normalise a confidence value (0-1 or 0-100) to a whole percent, or null. */
+function invPct(c){
+  if(c == null || c === '') return null;
+  var n = Number(c);
+  if(isNaN(n)) return null;
+  if(n <= 1) n = n * 100;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+/* Build the whole card body from the current record — re-render in place. */
+function invRender(id){
+  var v = INV[id]; if(!v || !v.el) return;
+  var cls = invStatusClass(v.status);
+  var pct = invPct(v.confidence);
+  var h = '';
+
+  h += '<div class="inv-head"><span class="ttl">🔬 Investigation</span>' +
+       '<span class="inv-status ' + cls + '">' + esc(invStatusLabel(cls, v.status)) + '</span></div>';
+
+  h += '<div class="inv-problem"><span class="r-lbl">Understood problem</span>' +
+       md(v.understood || v.problem || '—') + '</div>';
+
+  /* confidence bar climbs with the loop */
+  h += '<div class="confwrap"><div class="cl"><span>Confidence in the leading cause</span>' +
+       '<b>' + (pct == null ? '—' : pct + '%') + '</b></div>' +
+       '<div class="confbar"><div class="confbar-fill" style="width:' + (pct == null ? 0 : pct) + '%"></div></div></div>';
+
+  /* rounds, in order */
+  var latest = v.order.length ? v.order[v.order.length - 1] : null;
+  v.order.forEach(function(rn){
+    var r = v.rounds[rn]; if(!r) return;
+    var rpct = invPct(r.confidence);
+    /* probe is an OBJECT {agentId,agentName,question,device,rationale} — render
+       its question + agentName, never the object. report is an OBJECT
+       {agentName,stance,text} — render report.text. (Handles a plain string too,
+       so a restored/legacy shape still reads.) */
+    var probeObj = r.probe && typeof r.probe === 'object' ? r.probe : null;
+    var probeQ   = probeObj ? probeObj.question : r.probe;
+    var probeWhy = probeObj ? probeObj.rationale : '';
+    var agentNm  = r.agent || (probeObj && probeObj.agentName) || '';
+    var repObj   = r.report && typeof r.report === 'object' ? r.report : null;
+    var repTxt   = repObj ? repObj.text : r.report;
+    var repStance= repObj ? repObj.stance : '';
+    h += '<div class="round' + (rn === latest ? ' latest' : '') + '">' +
+         '<div class="round-head"><span class="round-n">Round ' + esc(rn) + '</span>' +
+           (agentNm ? '<span class="round-agent">' + esc(agentNm) + '</span>' : '') +
+           (rpct != null ? '<span class="round-conf">' + rpct + '%</span>' : '') + '</div>';
+    if(probeQ) h += '<div class="probe"><span class="r-lbl">Probe asked</span>' + md(probeQ) +
+      (probeWhy ? '<div class="probe-why">' + md(probeWhy) + '</div>' : '') + '</div>';
+    if(repTxt != null && String(repTxt).trim())
+      h += '<div class="report">' +
+           (repStance ? '<span class="stance">' + esc(repStance) + '</span>' : '') +
+           esc(repTxt) + '</div>';
+    var hy = Array.isArray(r.hypotheses) ? r.hypotheses : [];
+    if(hy.length)
+      h += '<ul class="hypos">' + hy.map(invHypoLi).join('') + '</ul>';
+    h += '</div>';
+  });
+  if(!v.order.length && cls === 'run')
+    h += '<div class="footnote">Probing the highest-value unknown first — rounds land here as each agent reports back.</div>';
+
+  /* clarifying-question prompt — questions[] is PLURAL (array of strings).
+     Render every question; one answer resumes the loop (POST /:id/answer). */
+  var qs = Array.isArray(v.questions) ? v.questions.filter(function(q){ return q != null && String(q).trim(); }) : [];
+  if(cls === 'grill' && qs.length){
+    h += '<div class="inv-q"><span class="r-lbl">Jarvis needs you to narrow it</span>' +
+         (qs.length === 1
+           ? '<div class="qtext">' + md(qs[0]) + '</div>'
+           : '<ul class="qlist">' + qs.map(function(q){ return '<li>' + md(q) + '</li>'; }).join('') + '</ul>') +
+         '<textarea class="inv-ans" placeholder="Answer in plain words — e.g. the site is branch-3, it started at 2pm, only voice traffic"></textarea>' +
+         '<div class="acts"><button class="inv-btn inv-ans-go" data-inv="' + esc(id) + '">Answer &amp; resume</button></div>' +
+         '<div class="footnote">Nothing is probed until you answer — Jarvis will not investigate a guess.</div></div>';
+  }
+
+  /* fixPlan is an OBJECT {summary (string), proposal?}. Render summary as text;
+     a proposal (config fix) gets the CW-2 approve button. */
+  var fp = v.fixPlan && typeof v.fixPlan === 'object' ? v.fixPlan : null;
+  var fpSummary = fp ? fp.summary : (typeof v.fixPlan === 'string' ? v.fixPlan : '');
+  var fpProposal = fp && fp.proposal && typeof fp.proposal === 'object' ? fp.proposal : null;
+
+  /* terminal: root cause + fix plan (resolved) */
+  if(v.rootCause){
+    h += '<div class="rootcause"><span class="r-lbl">Root cause</span>' +
+         '<div class="rc-txt">' + md(v.rootCause) + '</div>';
+    if(fpSummary) h += '<div class="fixplan"><span class="r-lbl">Fix plan</span>' + md(fpSummary) + '</div>';
+    if(fpProposal){
+      h += '<div class="footnote">The fix is a config change — it never applies itself. Review the exact ' +
+           'commands and press go; it walks the CW-2 change wrap (gate, before/after, diff, undo).</div>' +
+           '<button class="inv-btn inv-fix" data-inv="' + esc(id) + '" style="margin-top:.45rem">Review &amp; approve the fix →</button>';
+    }
+    h += '</div>';
+  }
+
+  /* honest non-resolved terminal states — the summary/reason is the real text. */
+  if(cls === 'stuck' && !v.rootCause){
+    h += '<div class="needs"><span class="r-lbl">Stuck — needs input</span>' +
+         md(v.stuckReason || fpSummary || 'The loop cannot narrow further with what it can reach. ' +
+           'It stopped rather than invent a conclusion.') + '</div>';
+  }
+  if(cls === 'cap' && !v.rootCause){
+    h += '<div class="needs" style="border-color:var(--warn);background:var(--warn-bg)">' +
+         '<span class="r-lbl" style="color:var(--warn)">Hit the round cap</span>' +
+         md(fpSummary || v.stuckReason || 'The investigation reached its safety cap on rounds. ' +
+           'The best-supported hypothesis stands above with the confidence reached — the rest is still unknown, ' +
+           'stated honestly rather than as a false certainty.') + '</div>';
+  }
+
+  v.el.querySelector('.inv').innerHTML = h;
+}
+
+/* How far along a status is — used to stop a stale snapshot regressing live
+   state (LATEST-WINS, not last-caller-wins). The POST seed is always 'starting';
+   any WS update is further along, so a late seed must never pull the card back. */
+function invStatusRank(s){
+  switch(String(s || '').toLowerCase()){
+    case 'starting': return 0;
+    case 'awaiting-operator': return 1;
+    case 'investigating': return 2;
+    /* terminal states */
+    case 'resolved': case 'capped': case 'stuck':
+    case 'blocked': case 'reasoning-unavailable': return 3;
+    default: return 2;   /* unknown → treat as in-flight, never as earliest */
+  }
+}
+
+/* Fold a WS event (round OR full snapshot) or a GET :id record into the local
+   record. Two shapes arrive:
+   • a single ROUND event {id,round,probe,agent,report,hypotheses,confidence,status}
+     — additive, only ever adds/updates its own round; never regressive.
+   • a full SNAPSHOT (investigation_update / GET) — carries the record-level
+     status/questions/rootCause/fixPlan and an updatedAt stamp.
+   A stale snapshot (older updatedAt, or an earlier-stage 'starting' seed landing
+   after a live update) is IGNORED so it can never blank the questions or drag the
+   status backwards — the race the reviewer found. */
+function invApply(id, d){
+  var v = INV[id]; if(!v) return;
+
+  /* Snapshot vs round event: snapshots carry cap/threshold/updatedAt/rounds[];
+     a round event carries a single `round` and none of those record-level keys. */
+  var isSnapshot = d.cap != null || d.threshold != null || d.updatedAt != null || Array.isArray(d.rounds);
+
+  if(isSnapshot){
+    /* LATEST-WINS guard 1 — monotonic on the engine's own updatedAt stamp. */
+    var t = d.updatedAt ? Date.parse(d.updatedAt) : NaN;
+    if(!isNaN(t)){
+      if(v._snapAt != null && t < v._snapAt) return;   // strictly older → drop it whole
+      v._snapAt = t;
+    }
+    /* LATEST-WINS guard 2 — a regressive status never overwrites a further-along
+       one (kills the 'starting' seed landing after 'awaiting-operator'). */
+    if(d.status != null && invStatusRank(d.status) >= invStatusRank(v.status)) v.status = d.status;
+    /* LATEST-WINS guard 3 — an empty questions:[] never clears populated ones;
+       a populated list always applies. */
+    if(Array.isArray(d.questions) && (d.questions.length || !(v.questions && v.questions.length)))
+      v.questions = d.questions.slice();
+
+    if(d.problem != null) v.problem = d.problem;
+    if(d.understood != null) v.understood = d.understood;
+    if(d.confidence != null) v.confidence = d.confidence;
+    if(d.rootCause != null) v.rootCause = d.rootCause;
+    if(d.fixPlan != null) v.fixPlan = d.fixPlan;          /* {summary, proposal?} */
+    if(d.stuckReason != null) v.stuckReason = d.stuckReason;
+
+    /* a full record may carry a rounds[] array — merge each (additive) */
+    if(Array.isArray(d.rounds)){
+      d.rounds.forEach(function(r){
+        if(r == null || r.round == null) return;
+        var rn = r.round;
+        if(!v.rounds[rn]){ v.rounds[rn] = {}; v.order.push(rn); }
+        Object.assign(v.rounds[rn], r);
+      });
+      v.order.sort(function(a,b){ return a-b; });
+    }
+    /* leading hypotheses (before any probe) → a "round 0" starting read */
+    if(Array.isArray(d.hypotheses) && d.hypotheses.length && !v.order.length){
+      v.rounds[0] = { probe:'Initial read of the problem', hypotheses:d.hypotheses };
+      v.order.unshift(0);
+    }
+  } else if(d.round != null){
+    /* a single ROUND event — additive. The event's top-level `status` is the
+       ROUND's status ('ok'/'blocked'/…), NOT the record status, so it is stored
+       on the round and never applied to v.status. Confidence is the live record
+       confidence at that round → it climbs, so apply it. */
+    if(d.confidence != null) v.confidence = d.confidence;
+    var rn = d.round;
+    if(!v.rounds[rn]){ v.rounds[rn] = {}; v.order.push(rn); v.order.sort(function(a,b){ return a-b; }); }
+    var r = v.rounds[rn];
+    if(d.probe != null) r.probe = d.probe;
+    if(d.agent != null) r.agent = d.agent;
+    if(d.report != null) r.report = d.report;
+    if(d.hypotheses != null) r.hypotheses = d.hypotheses;
+    if(d.confidence != null) r.confidence = d.confidence;
+    if(d.status != null) r.status = d.status;
+  }
+
+  invRender(id);
+}
+
+/* Create the thread card in the chat for a new investigation id. The seed is
+   applied ONLY on genuine creation — never re-applied to a card that already
+   exists (the WS may have already advanced it past the seed's 'starting' stage;
+   re-applying the stale seed here was the grill-card race). */
+function invCard(id, seed){
+  if(INV[id] && INV[id].el && INV[id].el.parentNode){ return INV[id]; }
+  var el = bubble('jv', 'Jarvis · ' + nowClock(),
+    'Starting an investigation — I will grill the problem, probe the right agents round by round, and narrow to a root cause. Watch it below.' +
+    '<div class="inv"></div>', true);
+  INV[id] = { el:el, problem:'', understood:'', status:'starting', confidence:null,
+              rounds:{}, order:[], questions:[], rootCause:'', fixPlan:null, stuckReason:'' };
+  if(seed) invApply(id, seed); else invRender(id);
+  return INV[id];
+}
+
+/* Kick off an investigation (REAL POST; rounds arrive on the WS). */
+function startInvestigation(problem){
+  problem = String(problem || '').trim();
+  if(!problem){
+    if(SEL && SEL.title){ problem = String(SEL.title); }
+    else { toast('Type the problem to investigate, or pick an incident first', true); return; }
+  }
+  if(!OP){ $('whoTag').click(); return; }
+  meMsg('🔬 Investigate: ' + problem);
+  api('/api/copilot/investigate', { method:'POST',
+      body: JSON.stringify({ problem:problem, operatorTz:TZ }) })
+    .then(function(r){
+      return r.json().catch(function(){ return {}; }).then(function(b){ return { ok:r.ok, status:r.status, body:b }; });
+    })
+    .then(function(res){
+      if(res.status === 404){
+        sysMsg('<b>The investigation loop is not available yet.</b> This build has no ' +
+          '<code>/api/copilot/investigate</code> route (404), so I will not fake a probe or a root cause. ' +
+          'Nothing was run. When the loop backend lands, the live thread will render here.');
+        return;
+      }
+      if(res.status === 428){ sysMsg('The desk needs your name before an investigation — set it top right.'); return; }
+      if(!res.ok){
+        sysMsg('Jarvis could not start the investigation — ' +
+          esc((res.body && res.body.error) || ('HTTP ' + res.status)) + '. Nothing was run.');
+        return;
+      }
+      /* The POST returns 202 { investigation: rec, watch } — the record is under
+         `investigation`, NOT a top-level id. Read res.investigation.id. */
+      var rec = (res.body && res.body.investigation) || {};
+      var id = rec.id;
+      if(!id){ sysMsg('The server started something but returned no investigation id, so nothing can be tracked. Nothing is invented.'); return; }
+      invCard(id, rec);   // seed with the snapshot the POST already returned (problem/understood/questions)
+    })
+    .catch(function(err){
+      sysMsg('Could not reach the server: ' + esc(err.message || err) + '. Nothing was run.');
+    });
+}
+
+/* WS: a streamed round (or any investigation_* update). */
+function onInvRound(d){
+  if(!d) return;
+  var id = d.id || d.investigationId || d.invId;
+  if(!id) return;
+  if(!INV[id]){ invCard(id, d); return; }   // arrived before our POST resolved — still show it
+  invApply(id, d);
+}
+function onInvUpdate(type, d){
+  if(!d) return;
+  var id = d.id || d.investigationId || d.invId;
+  if(!id) return;
+  if(!INV[id]){ invCard(id, d); return; }
+  invApply(id, d);
+  /* On a terminal signal, re-read the authoritative record so root cause +
+     fix plan/proposal are exactly what the engine recorded — never painted
+     from the event alone. */
+  if(/done|complete|resolv|stuck|cap|final/.test(String(type).toLowerCase()) ||
+     /resolv|stuck|cap|root/.test(String(d.status || '').toLowerCase())){
+    invRefetch(id);
+  }
+}
+
+/* GET the full record — used on terminal states and to hydrate. The route
+   returns { investigation: rec }; unwrap it. */
+function invRefetch(id){
+  api('/api/copilot/investigate/' + encodeURIComponent(id))
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(body){
+      var rec = body && (body.investigation || body);
+      if(rec && rec.id && INV[id]) invApply(id, rec);
+    })
+    .catch(function(){ /* keep what is on screen; nothing invented */ });
+}
+
+/* The clarifying-answer submit + the fix-approve press — delegated so a
+   restored thread still responds. */
+$('chat').addEventListener('click', function(e){
+  var go = e.target.closest && e.target.closest('.inv-ans-go');
+  if(go){
+    var id = go.getAttribute('data-inv');
+    var qbox = go.closest('.inv-q');
+    var ta = qbox && qbox.querySelector('.inv-ans');
+    var text = ta ? ta.value.trim() : '';
+    if(!text){ if(ta) ta.focus(); return; }
+    go.disabled = true; go.textContent = 'Sending…';
+    meMsg(text);
+    api('/api/copilot/investigate/' + encodeURIComponent(id) + '/answer',
+        { method:'POST', body: JSON.stringify({ text:text }) })
+      .then(function(r){
+        if(r.status === 404){
+          sysMsg('That investigation is no longer available on the server (404). Nothing was resumed.'); return;
+        }
+        if(!r.ok) return r.json().catch(function(){ return {}; }).then(function(b){
+          sysMsg('The answer was not accepted — ' + esc((b && b.error) || ('HTTP ' + r.status)) + '. The loop did not resume.');
+        });
+        toast('Answer sent — investigation resuming');
+        if(qbox) qbox.innerHTML = '<span class="r-lbl" style="color:var(--warn)">Answered</span>' +
+          '<div style="font-size:.78rem;line-height:1.5">Sent — Jarvis is narrowing the problem and resuming the probe loop.</div>';
+      })
+      .catch(function(err){
+        go.disabled = false; go.textContent = 'Answer & resume';
+        sysMsg('Could not send the answer: ' + esc(err.message || err));
+      });
+    return;
+  }
+  var fix = e.target.closest && e.target.closest('.inv-fix');
+  if(fix){
+    var fid = fix.getAttribute('data-inv');
+    var rec = INV[fid];
+    var prop = rec && rec.fixPlan && rec.fixPlan.proposal;
+    if(prop){ proposalCard(prop, 'jarvis'); evTab('ev-chg'); if(window.innerWidth <= 760) mobPane(1); }
+    return;
+  }
+});
+
+$('investBtn').addEventListener('click', function(){
+  var box = $('ask'), t = box.value.trim();
+  if(t){ box.value = ''; }
+  startInvestigation(t);
+});
+
+/* ============================================================
    DRIFT — real GET /api/copilot/drift/:device
    ============================================================ */
 /* the real driftLine sign lives in l.change ('added'|'removed'); keep the looser
@@ -3189,6 +3655,11 @@ function connectWS(){
       if(TKT.selId && m.data && (m.data.id === TKT.selId || m.data.ticketId === TKT.selId)) selectTicket(TKT.selId);
       return;
     }
+    /* CW-7: a streamed investigation round — the live thread's heartbeat. */
+    if(m.type === 'investigation_round' && m.data){ onInvRound(m.data); return; }
+    /* CW-7: any other investigation_* signal (started / question / done / stuck /
+       capped) → fold it in, and on a terminal one re-read the real record. */
+    if(m.type.indexOf('investigation_') === 0 && m.data){ onInvUpdate(m.type, m.data); return; }
     if(m.type.indexOf('triage_') === 0){ onTriage(m.type, m.data); return; }
   };
 }
