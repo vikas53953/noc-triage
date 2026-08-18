@@ -116,3 +116,15 @@ top-up (+ optionally TEAMS_WEBHOOK, SNOW_INSTANCE/USER/PASS, DevNet SSH creds to
   Needs Vikas to point real devices' logging/traps at host:port + set *_BIND=0.0.0.0 for real events.
 - All 17 test suites green. Assessment: docs/netclaw-assessment.md. Not yet done from the assessment: A5
   (batfish), A6 (packet/Nautobot), the MCP client's SSE/HTTP transport, wiring a REAL external MCP server.
+
+## NetClaw pull COMPLETE (2026-08-19) — A1/A2/A4/A5/A6/A8 all merged
+- A5 Batfish offline change-validation (batfish.js): advisory pre-apply check in the change engine (never
+  blocks), honest not-available without BATFISH_HOST. capability batfish-validation.
+- A6 packet-capture analysis (pcap.js): native zero-dep .pcap parser, bounded/safe on hostile input, payloads
+  never dumped, path-traversal blocked; POST /api/copilot/pcap/analyze (base64 or a filename in squad/shared/
+  pcaps). capability packet-analysis (available:true, local).
+- A8 Nautobot source-of-truth (nautobot.js): reconcile live vs intended, single-stem interface canonicalization
+  (no phantom drift), honest not-connected without NAUTOBOT_URL/TOKEN, token never leaks. capability nautobot-sot.
+- 20 test suites green. Capability map verified honest live. Remaining netclaw ideas NOT done (need Vikas):
+  wire a REAL external MCP server through the connector (security vetting), MCP SSE/HTTP transport, a real
+  Batfish coordinator shim, a real Nautobot instance. All new features ship honest-if-absent.
