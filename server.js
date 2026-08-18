@@ -2562,9 +2562,23 @@ app.post('/api/triage/:id/retry/:front', async (req, res) => {
 });
 
 app.post('/api/command', (req, res) => {
-  const { agent, command, conversationId } = req.body;
-  if (!agent || !command) {
-    return res.status(400).json({ error: 'Agent and command required' });
+  // TYPE-GUARD THE INPUT (QA CLASS 5). A truthy-but-wrong-typed field used to sail
+  // past a plain `if (!agent || !command)` and blow up downstream — a number command
+  // hit `command.match(...)` and threw a 500 with a full stack trace and absolute
+  // file paths. The shape is validated HERE, at the boundary, so a bad type/shape is
+  // a clean 400 with a helpful message and nothing ever reaches the router that
+  // assumes a string. (The global error handler at the end of this file is the
+  // second net for anything a route still throws.)
+  const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
+  const { agent, command, conversationId } = body;
+  if (typeof agent !== 'string' || !agent.trim()) {
+    return res.status(400).json({ error: 'A text "agent" is required (the agent id to talk to).' });
+  }
+  if (typeof command !== 'string' || !command.trim()) {
+    return res.status(400).json({ error: 'A text "command" is required (what you want to say or ask).' });
+  }
+  if (conversationId != null && typeof conversationId !== 'string') {
+    return res.status(400).json({ error: 'If you send a "conversationId" it must be text.' });
   }
   handleCommand({ agent, command, conversationId });
   res.json({ success: true, message: 'Command queued' });
@@ -2798,6 +2812,48 @@ function initActivityTracker() {
     lastActivitySize = 0;
   }
 }
+
+// ── ONE global error handler (QA CLASS 5) ───────────────────────────────────
+// The LAST app.use, so it catches everything the routes and the JSON body-parser
+// throw. Two leaks lived here before it existed: a malformed JSON body reached
+// body-parser's SyntaxError and Express's default handler answered with the FULL
+// stack trace and absolute node_modules paths; a bad-typed field that slipped a
+// route's guard threw a TypeError and leaked server.js line numbers the same way.
+// Now the detail is logged SERVER-SIDE only, and the client always gets a clean,
+// generic, path-free message. A malformed/oversized body is the client's fault
+// (400/413); anything else is treated as a server fault (500). Four args — this
+// signature is what marks it an Express ERROR handler; do not drop `next`.
+app.use((err, req, res, next) => {
+  // A body-parser parse/size failure carries a `type` and/or an HTTP `status`.
+  const badBody =
+    err && (err.type === 'entity.parse.failed' || err.type === 'entity.too.large'
+      || err.type === 'request.aborted' || err.type === 'encoding.unsupported'
+      || err instanceof SyntaxError);
+  const status = badBody ? (err.status || err.statusCode || 400)
+    : (err && (err.status || err.statusCode)) || 500;
+
+  // Server-side detail only — never the client's business. Keep the stack in the
+  // server window (and the dashboard's system_error banner) where operators look.
+  const detail = (err && (err.stack || err.message)) || String(err);
+  console.error(`[HTTP ${req.method} ${req.originalUrl}] ${status} — ${detail}`);
+  try {
+    broadcast('system_error', { message: 'A request could not be processed — check the server window for detail.' });
+  } catch (e) { /* the console.error above already recorded it */ }
+
+  // If the response has already started streaming, we cannot change the status —
+  // hand off to Express's finalizer, which will close the socket without a body.
+  if (res.headersSent) return next(err);
+
+  const clientMessage = status === 413
+    ? 'That request body is too large.'
+    : badBody
+      ? 'That request body was not valid JSON.'
+      : status >= 400 && status < 500
+        ? 'That request could not be processed.'
+        : 'Something went wrong handling that request.';
+  res.status(status).json({ error: clientMessage });
+});
+// ── end global error handler ────────────────────────────────────────────────
 
 // Start server
 // Make sure the workspace exists before anything tries to write into it, so a
