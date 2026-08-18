@@ -99,3 +99,20 @@ Last updated: 2026-08-18 · driver: fresh Fable session (autonomous resume)
 - RULE for every driver: before ANY merge, `git fetch` + `gh pr view <n>` — if already merged, skip and
   move on. Merge order stays #47 → #48/#49 → then build #7/#9 on the fresh master. Duplicate reviews are
   acceptable waste; duplicate MERGES are not.
+
+## POST-MERGE AUDIT of #48 (Class 10) — second reviewer, live evidence, 2026-08-18 ~10:00 IST
+Other driver merged #48/#49 at 09:55/09:57 (out of order; tolerated — files mostly disjoint from #47).
+An independent live review of #48 found REAL gaps now on master (verbatim doc evidence in squad/triages):
+1. BLOCKER No-hypothesis fallback still prints the raw alarm scrape as the leadership headline
+   (artifacts.js "What we found" falls back to v.verdict). Hit on 1 of 2 live triages.
+2. BLOCKER "What broke" (driven off v.activeInWindow) can contradict the headline in the same doc —
+   chronic license alarms shown as "a live problem that started during this incident"; the preExisting
+   guard misses chronic items living inside activeInWindow front strings.
+3. /doc/leadership still 400s — allow-list half deliberately left for post-#47 (already a logged hook);
+   PR #48's "404 fixed" claim was wrong.
+4. CI scope: implicatedFronts() unions scope+activeInWindow+suspect → True_Test/fabric CIs still on a WAN
+   ticket; filter was a no-op on the reported case. Also: empty fronts ⇒ FULL CI list (widest, not narrowest).
+5. MEDIUM tsDoc() prefixes the UTC date to a local time — wrong date for IST readers 18:30–24:00 UTC.
+6. MEDIUM alert-opened incidents have no operatorTz → UTC-only docs (dual-clock never applies to alert path).
+7. Wording: leadership doc mixes raw front keys/verdict jargon (license-not-synced, BFD, FMC) with plain labels.
+→ FIX IN FLIGHT: fix/doc-accuracy-2 builder (artifacts.js only, disjoint from #47), then independent review.
