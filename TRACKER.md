@@ -172,3 +172,12 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
 - Queued behind Class 1: Class 9 (chat→own incidents + session isolation), Class 5+6 (error/gate + dropped turns).
 - ⚠️ VIKAS ACTION: Anthropic API credits appear EXHAUSTED again (reviewer hit it). Live LLM verification of
   Class 1 is blocked until topped up (console.anthropic.com → Billing). Deterministic work + non-LLM merges continue.
+
+## 2026-08-18 — Class 1 MERGED
+- Class 1 (intent-first, PR #47) MERGED to master + deterministically verified (shell gone, findings 1&3
+  fixed: substitution block deleted, synthesis false-refusal removed). LIVE LLM re-verify PENDING credits.
+- Class 10 server.js follow-up applied: /doc/leadership now aliases to slt.
+- Class 9 (chat sees own incidents + per-operator session isolation) BUILDING (fix/chat-sees-incidents).
+- Class 5+6 QUEUED behind Class 9 (both touch server.js — sequential).
+- Class 8 UI (PR #50) review running.
+- MERGED QA classes so far: 10, 3+4, 1. Remaining: 9 (building), 5+6 (queued), 8 (review).
