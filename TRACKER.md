@@ -180,4 +180,21 @@ Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT
 - Class 9 (chat sees own incidents + per-operator session isolation) BUILDING (fix/chat-sees-incidents).
 - Class 5+6 QUEUED behind Class 9 (both touch server.js — sequential).
 - Class 8 UI (PR #50) MERGED + review-verified live (reload persistence, XSS-on-restore safe, mobile, contrast). 2 non-blocking minors logged.
-- MERGED QA classes so far: 10, 3+4, 1. Remaining: 9 (building), 5+6 (queued), 8 (review).
+- MERGED QA classes so far: 10, 3+4, 1, 8. Remaining: 9 (queued), 5+6 (queued).
+
+## 2026-08-18 — autonomous resume (fresh session): loose ends from dead builders picked up
+- FOUND: two in-flight builders from earlier sessions died without pushing — fix/guardrail-fail-closed
+  (never pushed) and fix/chat-sees-incidents (Class 9, never pushed). fix/doc-accuracy-2 WAS pushed
+  (59e6b22, artifacts.js + 271 test lines) but has NO PR and NO review.
+- VERIFIED ON MASTER: the #49-audit BLOCKER is live and now UNMASKED (guardrails.js:361 clauseGovernsDevice
+  still steps past one determiner only; #47's merge removed the shell that hid it). Wire gate still blocks
+  real writes; intent-layer refusal fails open on adjectives. → TOP PRIORITY.
+- IN FLIGHT NOW (2 agents, disjoint files, own clones):
+  1. Builder: fix/guardrail-fail-closed — fail-closed clause scan + verb shielding + intake asks on
+     unrecognizable subject + honest "that's a change" refusal message + audit-log at refusal SINK
+     (post-#47 hook folded in). Clone noc-guardfix. Will open PR, not merge.
+  2. Reviewer: fix/doc-accuracy-2 — adversarial review vs the 7-item #48 audit, live check on :3105 via
+     deterministic alert path (LLM credits still exhausted), merge if it holds. Clone noc-docrev2.
+- AFTER those: guardrail PR gets independent review + merge → THEN Class 9 rebuild (fix/chat-sees-incidents,
+  shares server.js) → THEN Class 5+6. resumeClarification replay bug + polite-imperative regex gap stay
+  queued (ambiguity-law adjacent, log in Class 9/5+6 scope if cheap).
