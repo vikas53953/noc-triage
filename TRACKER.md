@@ -45,6 +45,9 @@ Last updated: 2026-08-18 · driver: fresh Fable session (autonomous resume)
 #38 CLI routing · #39+#37 Wave 4 correlation · #40 SSH engine · #41 repo polish · #42+#43 CW-1
 
 ## Needs Vikas (non-blocking, honest-if-absent until supplied)
+- **ANTHROPIC API CREDITS EXHAUSTED (2026-08-18 ~10:20 IST)** — every Jarvis planner call now returns
+  "credit balance too low" (400). Deterministic safety paths still work; anything through the LLM planner
+  is down and CANNOT be live-verified until topped up. Top up at console.anthropic.com → Plans & Billing.
 - DevNet sandbox reservation creds (real SSH show output) · Teams webhook (CW-4) · ServiceNow creds (CW-6)
 
 ## In flight right now (agents)
@@ -135,6 +138,30 @@ Wire-level gate HELD on all 100+ attack strings (zero device writes ever). But:
 Pre-existing (not regressions, logged): unicode/zero-width obfuscation passes checkIntent (blocked at
 checkCommand, messaging only); Class 5 gate fail-open on bad mode value (already queued as task #9).
 → FIX IN FLIGHT: fix/guardrail-fail-closed builder (guardrails.js + triage.js + tests, disjoint from #47).
+
+## PR #47 REVIEW VERDICT (Class 1) — FIX-FIRST, 2026-08-18 ~10:20 IST
+Core claims verified live BEFORE the API credits died: phrase table gone, NO_STORE/ACI_WORDS gone,
+ambiguity-ask works on the normal path (sw → lists sw1-sw4, runs nothing, remembers choice), real sw2
+read, write refusals with zero wire calls, deny = zero calls (9 records before/after), scrubbing + XSS held.
+Findings → fix on the PR branch (fix/intent-first-no-shell), builder IN FLIGHT:
+- B1 BLOCKER live-agents.js ~420: planTarget (planner's structured device field) trusted unconditionally —
+  bypasses ambiguity ask; plan "sw3" + text "sw2" → ran sw3 captioned "the device you named"; audit record
+  false too. Class fix: planTarget is a hint to RECONCILE with the text, never a target to trust; never
+  caption a plan-supplied device as operator-named.
+- B2 server.js: standup/roll-call/weekly-report/help now dead code (~200 lines, zero callers). "what can
+  you do?" costs an LLM call (and dies without credits). Re-land help as explicit app-fact surface;
+  wire or delete the other three.
+- B3 capabilities.js:126: 'update' silently dropped from change verbs with NO net (not in STATE_CHANGING) —
+  "update the ios image on sw1" gets planner prose, not the change card. Restore or add to STATE_CHANGING.
+- B4 live-agents.js ~248: router-expert dual-source = two sequential permission prompts for one question;
+  deny #1 doesn't stop #2. Make it one gated unit.
+- Pre-existing logged: resumeClarification (server.js ~1043) replays the PARKED command even when the
+  operator sends a DIFFERENT fresh command ("show running-config on sw3" after park → runs show version).
+  Fix in same pass if cheap (it's ambiguity-law adjacent). Also polite-imperative regex gap ("just quickly").
+- Post-#47 hooks folded INTO this fix pass (branch owns server.js): /doc/leadership allow-list line;
+  audit-log at the refusal SINK (from #49 audit MAJOR 2).
+- LIMITATION: planner-path adversarial set NOT fully re-runnable until API credits topped up — logged in
+  Needs Vikas. Merge gate: deterministic evidence + tests + reconcile logic unit-proven; planner re-run when credits return.
 
 ## 2026-08-18 later — QA fixes landing + a Vikas action item
 - MERGED so far: Class 10 (docs), Class 3+4 (intake+guardrail). Both approved + verified in review.
