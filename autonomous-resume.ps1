@@ -50,13 +50,25 @@ fabricate; verify live before claiming done. Keep TRACKER.md + HANDOFF.md update
 If everything is genuinely done, update TRACKER and stop.
 '@
 
-Log "launch: starting fresh claude session via $claude"
+$headBefore = (git -C $repo rev-parse HEAD 2>$null)
+Log "launch: starting fresh claude session via $claude (HEAD $headBefore)"
 try {
   # Absolute path to the .cmd shim, called directly by PowerShell. The ORIGINAL
   # bug was the bare `claude` name (PATH-dependent, empty under the task's PATH);
   # an absolute path removes that dependency entirely.
   & $claude --dangerously-skip-permissions -p $prompt *> $out
-  Log "done: claude exited code $LASTEXITCODE, wrote $((Get-Item $out -ErrorAction SilentlyContinue).Length) bytes"
+  $code = $LASTEXITCODE
+  $bytes = (Get-Item $out -ErrorAction SilentlyContinue).Length
+  git -C $repo fetch -q origin 2>$null
+  $headAfter = (git -C $repo rev-parse HEAD 2>$null)
+  $remote = (git -C $repo rev-parse origin/master 2>$null)
+  # Fail-loud: a session that "finished" but moved nothing is suspect (sandboxed
+  # writes + a hallucinated "done"). Record the truth, never assume success.
+  if ($headBefore -eq $headAfter -and $remote -eq $headBefore) {
+    Log "WARN: claude exited $code ($bytes bytes) but NOTHING landed (HEAD unchanged, no push). Likely sandboxed/blocked or quota wall — treat as NOT resumed."
+  } else {
+    Log "OK: claude exited $code ($bytes bytes); HEAD $headBefore -> $headAfter (remote $remote)"
+  }
 } catch {
   Log "ERROR launching claude: $($_.Exception.Message)"
 }
