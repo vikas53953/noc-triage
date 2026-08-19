@@ -1153,6 +1153,13 @@ triage.init({
   broadcast,
   updateAgentStatus,
   appendToActivityLog,
+  // Understand-first triage: the SAME reasoning capability the investigation loop
+  // uses (jarvis.investigationPlanner.understand), injected as a thin wrapper so
+  // triage.js reasons about the problem before sweeping without importing jarvis's
+  // planner shape directly. Returns { specific, understood, hypotheses, questions,
+  // relevantFronts }. A thrown/absent call makes triage fall back to the full sweep.
+  understand: ({ problem, priorAnswers, operatorTz } = {}) =>
+    jarvis.investigationPlanner.understand({ problem, operatorTz, answers: priorAnswers || [] }),
 });
 
 // WebSocket connection handler
@@ -2815,8 +2822,21 @@ app.get('/api/triage/:id', (req, res) => {
 // Operator posts a message into an OPEN triage bridge (context / a nudge). It is
 // streamed on the bridge, recorded in the triage record, and marked as coming
 // from the operator — it never touches the evidence board. Write-rate-limited.
-app.post('/api/triage/:id/message', (req, res) => {
+app.post('/api/triage/:id/message', async (req, res) => {
   const { text } = req.body || {};
+  // Understand-first: when the triage is PAUSED awaiting clarifying info, the
+  // operator's message IS the answer — route it to resumeUnderstanding, which
+  // re-scopes and either sweeps, asks the next question, or (at the cap) proceeds
+  // best-effort. resumeUnderstanding returns { notAwaiting:true } for any triage
+  // that is NOT paused, so the normal operator-note path runs unchanged.
+  const resumed = await triage.resumeUnderstanding(req.params.id, text);
+  if (resumed && !resumed.notAwaiting) {
+    if (resumed.error) {
+      const code = resumed.error === 'not_found' ? 404 : 422;
+      return res.status(code).json({ error: resumed.reason || 'Could not post that.' });
+    }
+    return res.json({ ok: true, resumed: true, phase: resumed.phase, message: resumed.message });
+  }
   const result = triage.postOperatorMessage(req.params.id, text);
   if (result.error) {
     const code = result.error === 'not_found' ? 404 : 422;

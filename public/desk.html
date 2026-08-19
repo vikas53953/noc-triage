@@ -3778,6 +3778,14 @@ function onTriage(type, d){
       jvMsg('Jarvis · verdict', d.verdict || 'Verdict posted.', d.ts, jumpBtn('ev-find','See the findings behind it'));
       refetchSelected();
       break;
+    case 'triage_awaiting':
+      /* Understand-first: Jarvis paused to narrow the problem before sweeping. The
+         questions themselves arrive as triage_message (painted above); this just
+         nudges the operator to answer in the same box below. */
+      sysMsg('Jarvis needs a bit more to scope this — answer its question' +
+        ((d.questions && d.questions.length > 1) ? 's' : '') + ' in the message box below, and it will read only what matters.');
+      refetchSelected();
+      break;
     case 'triage_evidence':
     case 'triage_roles':
     case 'triage_ack':

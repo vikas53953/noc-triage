@@ -43,6 +43,22 @@ const newId = () => `trg-${Date.now().toString(36)}-${(++seq).toString(36)}`;
 // ── The fronts, in board order ──────────────────────────────────────────────
 const LIVE_FRONTS = ['campus', 'fabric', 'wan', 'incidents'];
 
+// ── Understand-first triage (additive, flagged) ─────────────────────────────
+// Before sweeping every front on every incident, Jarvis UNDERSTANDS the problem:
+// a vague symptom ("user can't reach www.google.com") gets 1-4 clarifying
+// questions FIRST and no sweep until it is scoped; a specific one is swept only
+// on the fronts that actually matter. Gated so the old behaviour is one env away.
+//   TRIAGE_UNDERSTAND_FIRST='1' (default ON) — understand before sweeping.
+//   TRIAGE_UNDERSTAND_FIRST='0'              — EXACTLY today's full sweep, no ask.
+//   TRIAGE_CLARIFY_MAX (default 2)           — max clarify rounds before a best-
+//                                              effort scoped sweep proceeds anyway.
+// The understand step is FAIL-SAFE: if the reasoning is unavailable (no key), it
+// throws, or it outruns its budget, the bridge falls back to the full sweep — a
+// triage never dead-ends.
+function understandFirstOn() { return process.env.TRIAGE_UNDERSTAND_FIRST !== '0'; }
+const CLARIFY_MAX = Number(process.env.TRIAGE_CLARIFY_MAX || 2);
+const UNDERSTAND_TIMEOUT_MS = Number(process.env.TRIAGE_UNDERSTAND_TIMEOUT_MS || 30000);
+
 // Not-connected fronts. Named, never invented. These are the agents with no
 // backend (Firewall-Pro, LoadBal-Pro, Sentinel) surfaced as blind spots — they
 // never post on the bridge, they only appear here.
@@ -716,7 +732,211 @@ function agentHeldByOpenBridge(agentId, exceptTriageId) {
 }
 
 // ── The bridge ──────────────────────────────────────────────────────────────
+// runBridge is the entry point. It runs the UNDERSTAND phase first (when the flag
+// is on and the capability is wired) and only then the sweep. When understanding
+// decides the problem is too vague, it posts clarifying questions and PAUSES the
+// bridge (phase 'awaiting-info') — the sweep runs later, from resumeUnderstanding,
+// once the operator answers (or the clarify cap is hit). With the flag off, or the
+// capability missing, or the reasoning unavailable, it falls straight through to
+// the full sweep — EXACTLY today's behaviour.
 async function runBridge(triage) {
+  if (understandFirstOn() && ctx && typeof ctx.understand === 'function') {
+    let decision;
+    try {
+      decision = await understandPhase(triage);
+    } catch (err) {
+      // FAIL-SAFE: understanding must never dead-end a triage. Log and full-sweep.
+      log(`[Triage ${triage.id}] understand phase error — ${err && err.message}; falling back to the full sweep`);
+      decision = 'sweep';
+    }
+    if (decision === 'awaiting') return; // paused — resumeUnderstanding will sweep
+    // decision === 'sweep' → fall through into the (possibly scoped) sweep below
+  }
+  return runSweep(triage);
+}
+
+// Map a model's relevant-front list onto the real LIVE_FRONTS keys. Anything not a
+// live front is dropped; an empty/absent list becomes null = "sweep every front"
+// (today's behaviour) — we NEVER silently read nothing.
+function mapRelevantFronts(list) {
+  if (!Array.isArray(list)) return null;
+  const clean = list.map((f) => String(f || '').trim().toLowerCase()).filter((f) => LIVE_FRONTS.includes(f));
+  return clean.length ? [...new Set(clean)] : null;
+}
+
+// Is this front in scope for the sweep? No relevantFronts set → every front is in
+// scope (the full sweep). Set → only the named fronts; the rest are skipped with
+// an honest one-liner, never silently.
+function frontInScope(triage, front) {
+  const rf = triage.relevantFronts;
+  if (!Array.isArray(rf) || !rf.length) return true;
+  return rf.includes(front);
+}
+
+// The UNDERSTAND phase. Returns 'awaiting' (paused, questions asked) or 'sweep'
+// (scoped or unscoped — proceed). Never throws to the caller for a reasoning
+// failure: a missing/failed understand resolves to 'sweep' (full fallback).
+async function understandPhase(triage) {
+  post(triage, { agent: 'jarvis', tier: 'L4', round: 1, text: '🧠 Understanding the problem first — reading the symptom before I sweep anything.' });
+  let u;
+  try {
+    const priorAnswers = (triage.clarify && triage.clarify.answers) || [];
+    const r = await withTimeout(
+      Promise.resolve().then(() => ctx.understand({
+        problem: triage.description,
+        severity: triage.severity,
+        priorAnswers,
+        operatorTz: triage.operatorTz || null,
+      })),
+      UNDERSTAND_TIMEOUT_MS);
+    if (r && r.__timeout) throw new Error(`understand exceeded ${UNDERSTAND_TIMEOUT_MS}ms`);
+    if (r && r.__error) throw (r.__error instanceof Error ? r.__error : new Error(String(r.__error)));
+    u = r;
+  } catch (err) {
+    // No key / declined / timeout → honest full sweep, said out loud once.
+    post(triage, { agent: 'jarvis', tier: 'L4', round: 1,
+      text: `(Reasoning unavailable — ${err && err.message ? err.message : 'no key'}. Falling back to a full sweep of every connected front.)` });
+    triage.understand = { available: false, note: err && err.message };
+    return 'sweep';
+  }
+  if (!u || typeof u !== 'object') return 'sweep';
+
+  const relevant = mapRelevantFronts(u.relevantFronts);
+  triage.understand = {
+    available: true,
+    understood: u.understood || triage.description,
+    hypotheses: Array.isArray(u.hypotheses) ? u.hypotheses : [],
+    relevantFronts: relevant,
+    specific: u.specific !== false,
+  };
+  triage.relevantFronts = relevant; // null = all (full sweep); else the scoped set
+
+  if (u.specific === false) {
+    // VAGUE — ask the operator, do NOT sweep. Post the restatement + numbered
+    // questions and pause the bridge.
+    const questions = (Array.isArray(u.questions) ? u.questions : []).map(String).filter(Boolean).slice(0, 4);
+    if (!questions.length) questions.push('Which site, device, user or service is affected, and since when did it start?');
+    if (!triage.clarify) triage.clarify = { answers: [], rounds: 0, questions: [] };
+    triage.clarify.rounds = (triage.clarify.rounds || 0) + 1;
+    triage.clarify.questions = questions;
+    triage.phase = 'awaiting-info';
+    postClarifyQuestions(triage, u.understood, questions);
+    emit('triage_awaiting', triage.id, {
+      phase: 'awaiting-info', understood: u.understood || triage.description,
+      questions, round: triage.clarify.rounds, max: CLARIFY_MAX,
+    });
+    log(`[Triage ${triage.id}] understand — vague, asked ${questions.length} clarifying question(s) (round ${triage.clarify.rounds}); no sweep yet`);
+    return 'awaiting';
+  }
+
+  // SPECIFIC — say what we understood + which fronts we'll read, then sweep scoped.
+  triage.phase = 'triaging';
+  post(triage, { agent: 'jarvis', tier: 'L4', round: 1,
+    text: `Understood: ${u.understood || triage.description}. ` +
+      (relevant ? `Relevant fronts for this symptom: ${relevant.join(', ')} — I'll read those first and skip the rest.` :
+        `No single front stands out — I'll sweep every connected front.`) });
+  log(`[Triage ${triage.id}] understand — specific; relevant fronts: ${relevant ? relevant.join(', ') : 'all'}`);
+  return 'sweep';
+}
+
+// Post the restatement + the clarifying questions as a clear numbered Jarvis line.
+function postClarifyQuestions(triage, understood, questions) {
+  const numbered = questions.map((q, i) => `${i + 1}. ${q}`).join('\n');
+  post(triage, {
+    agent: 'jarvis', tier: 'L4', round: 1,
+    text: `I need to narrow this before I sweep the estate — ${understood || triage.description}.\n` +
+      `Please answer so I read only what matters:\n${numbered}\n` +
+      `(Reply in the message box below — your answer scopes the triage.)`,
+  });
+}
+
+// RESUME on an operator answer. Called from the message endpoint when the triage
+// is in 'awaiting-info'. Records the answer, re-runs understand with the prior
+// answers, and either: scopes + sweeps, asks the next round (under the cap), or —
+// at the cap — proceeds with a best-effort scoped sweep. Never loops forever.
+// Returns { notAwaiting:true } when the triage is NOT awaiting info, so the caller
+// falls back to the normal operator-message behaviour.
+async function resumeUnderstanding(idOrIncident, answerText) {
+  const t = resolveTriage(idOrIncident);
+  if (!t) return { error: 'not_found', reason: 'No such triage.' };
+  if (t.phase !== 'awaiting-info') return { notAwaiting: true };
+  if (t.status === 'closed') return { error: 'closed', reason: 'That triage has already closed.' };
+  const clean = String(answerText || '').trim();
+  if (!clean) return { error: 'empty', reason: 'An answer needs some text.' };
+
+  // Show the operator's answer on the bridge, and record it for the re-run.
+  const msg = emitOperatorMessage(t, clean);
+  if (!t.clarify) t.clarify = { answers: [], rounds: 0, questions: [] };
+  t.clarify.answers.push({ text: clean, ts: now() });
+  log(`[Triage ${t.id}] operator answered clarifying question — "${clean.slice(0, 80)}"`);
+
+  // Re-run understand with the accumulated answers.
+  let u = null;
+  if (ctx && typeof ctx.understand === 'function') {
+    try {
+      const r = await withTimeout(
+        Promise.resolve().then(() => ctx.understand({
+          problem: t.description, severity: t.severity,
+          priorAnswers: t.clarify.answers, operatorTz: t.operatorTz || null,
+        })),
+        UNDERSTAND_TIMEOUT_MS);
+      if (r && (r.__timeout || r.__error)) throw new Error(r.__timeout ? 'understand timed out' : 'understand failed');
+      u = r;
+    } catch (err) {
+      // Reasoning failed on the re-run → proceed with a best-effort full sweep.
+      post(t, { agent: 'jarvis', tier: 'L4', round: 1,
+        text: `(Could not re-check the scope — ${err && err.message}. Proceeding with a full sweep of every connected front.)` });
+      return proceedToSweep(t, msg, null);
+    }
+  }
+
+  const scoped = u ? (u.specific !== false) : true;
+  if (u) {
+    const relevant = mapRelevantFronts(u.relevantFronts);
+    t.relevantFronts = relevant;
+    t.understand = { available: true, understood: u.understood || t.description,
+      hypotheses: Array.isArray(u.hypotheses) ? u.hypotheses : [], relevantFronts: relevant, specific: scoped };
+  }
+
+  if (scoped) {
+    post(t, { agent: 'jarvis', tier: 'L4', round: 1,
+      text: `Thanks — that scopes it. ${u ? (u.understood || t.description) : t.description}. ` +
+        (t.relevantFronts ? `Reading ${t.relevantFronts.join(', ')} now.` : `Sweeping every connected front now.`) });
+    return proceedToSweep(t, msg, u);
+  }
+
+  // Still vague. Ask the next round if we are under the cap; else best-effort sweep.
+  if ((t.clarify.rounds || 0) >= CLARIFY_MAX) {
+    post(t, { agent: 'jarvis', tier: 'L4', round: 1,
+      text: `Still not fully scoped after ${t.clarify.rounds} question round(s) — I won't keep asking. ` +
+        (t.relevantFronts ? `Proceeding with a best-effort read of ${t.relevantFronts.join(', ')}.` :
+          `Proceeding with a best-effort full sweep.`) });
+    log(`[Triage ${t.id}] clarify cap (${CLARIFY_MAX}) hit — best-effort sweep`);
+    return proceedToSweep(t, msg, u);
+  }
+  const questions = (Array.isArray(u.questions) ? u.questions : []).map(String).filter(Boolean).slice(0, 4);
+  if (!questions.length) questions.push('Which site, device, user or service is affected, and since when did it start?');
+  t.clarify.rounds = (t.clarify.rounds || 0) + 1;
+  t.clarify.questions = questions;
+  postClarifyQuestions(t, u.understood, questions);
+  emit('triage_awaiting', t.id, { phase: 'awaiting-info', understood: u.understood || t.description,
+    questions, round: t.clarify.rounds, max: CLARIFY_MAX });
+  return { ok: true, phase: 'awaiting-info', message: msg, questions };
+}
+
+// Clear the awaiting-info pause and run the (scoped) sweep in the background. The
+// sweep is long-running, so it is fire-and-forget exactly like startTriage's — the
+// caller returns immediately with the operator's message echoed.
+function proceedToSweep(t, msg, u) {
+  t.phase = 'triaging';
+  runSweep(t).catch((err) => log(`[Triage ${t.id}] unhandled bridge error after resume — ${err && err.message}`));
+  return { ok: true, phase: 'triaging', message: msg, relevantFronts: t.relevantFronts || null };
+}
+
+// The sweep + verdict half of the bridge (formerly the whole of runBridge). Runs
+// the symptom parse, the L1 sweep (scoped to triage.relevantFronts when set),
+// L2/L3 investigation, and the L4 correlation + verdict, then persists.
+async function runSweep(triage) {
   const staffedTiers = tiersFor(triage.severity);
   const cadence = cadenceFor(triage.severity);
   triage.cadence = cadence;
@@ -808,8 +1028,25 @@ async function runL1(triage, staffedTiers, sym, cadence) {
   });
   await wait(cadence.step);
 
-  // Order the sweep so the in-scope/impacted fronts go FIRST (gap 1 + gap 3).
-  const order = orderFronts(LIVE_FRONTS, sym);
+  // Understand-first scoping: read ONLY the fronts the understand phase judged
+  // relevant to this symptom (in-scope first via orderFronts); skip the rest with
+  // an honest one-liner instead of dumping a generic 4-front sweep. When no
+  // relevant set was derived (flag off, or "cannot tell"), sweep everything — the
+  // exact behaviour from before. Blind spots are still surfaced either way.
+  const inScopeFronts = LIVE_FRONTS.filter((f) => frontInScope(triage, f));
+  const skippedFronts = LIVE_FRONTS.filter((f) => !frontInScope(triage, f));
+  const order = orderFronts(inScopeFronts, sym);
+
+  // Surface the skipped fronts honestly — a short reason + a real 'skipped' card so
+  // the board never leaves them dangling on 'waiting', and nothing is read on them.
+  for (const front of skippedFronts) {
+    post(triage, { agent, tier: 'L1', round: 1,
+      text: `Sweep — ${front}: not relevant to this symptom — skipped (read-only; nothing hidden, nothing read).` });
+    const card = { front, state: 'skipped', detail: 'not relevant to this symptom — skipped', source: null, ts: now() };
+    emit('triage_evidence', triage.id, card);
+    triage.evidence[front] = card;
+    recordEvidenceHistory(triage, front, 'skipped', card.detail, null, card.ts);
+  }
 
   const runOne = async (front) => {
     const r = await gatedFrontRead(triage, {
@@ -860,7 +1097,7 @@ async function runL2(triage, sym, cadence) {
   progress(triage, 'L2', 'active');
 
   // NetOps -> campus, live inventory + health.
-  await withAgent('netops', triage, async (agent) => {
+  if (frontInScope(triage, 'campus')) await withAgent('netops', triage, async (agent) => {
     const r = await investigateFront(triage, 'campus', 'netops', sym, cadence);
     postEvidence(triage, 'campus', r);
     post(triage, {
@@ -873,7 +1110,7 @@ async function runL2(triage, sym, cadence) {
   });
 
   // Incident-Handler -> incidents, Catalyst issues + ACI faults combined.
-  await withAgent('incident-handler', triage, async (agent) => {
+  if (frontInScope(triage, 'incidents')) await withAgent('incident-handler', triage, async (agent) => {
     const r = await investigateFront(triage, 'incidents', 'incident-handler', sym, cadence);
     postEvidence(triage, 'incidents', r);
     let text;
@@ -898,26 +1135,34 @@ async function runL3(triage, sym, cadence) {
 
   // Router-Expert -> fabric (ACI) and wan (SD-WAN), the two SME fronts. WAN now
   // LEADS with the top-3 alarm groups (gap 4), fabric with the in-window split.
-  await withAgent('router-expert', triage, async (agent) => {
-    const f = await investigateFront(triage, 'fabric', 'router-expert', sym, cadence);
-    postEvidence(triage, 'fabric', f);
-    post(triage, {
-      agent, tier: 'L3', round: 1,
-      text: f.state === 'suspect'
-        ? `Fabric read failed — ${f.detail}. No fabric claim from me without a read.`
-        : `Fabric (ACI) device-deep: ${f.detail}. Live from ${f.source}` +
-          (f.nodes ? ` — ${f.nodes.map((n) => `${n.name}/${n.role}`).join(', ')}.` : '.'),
-    });
-    await wait(cadence.step);
+  // Each read runs only if its front is in scope (understand-first); an out-of-
+  // scope SME front is skipped honestly, never silently.
+  const fabricInScope = frontInScope(triage, 'fabric');
+  const wanInScope = frontInScope(triage, 'wan');
+  if (fabricInScope || wanInScope) await withAgent('router-expert', triage, async (agent) => {
+    if (fabricInScope) {
+      const f = await investigateFront(triage, 'fabric', 'router-expert', sym, cadence);
+      postEvidence(triage, 'fabric', f);
+      post(triage, {
+        agent, tier: 'L3', round: 1,
+        text: f.state === 'suspect'
+          ? `Fabric read failed — ${f.detail}. No fabric claim from me without a read.`
+          : `Fabric (ACI) device-deep: ${f.detail}. Live from ${f.source}` +
+            (f.nodes ? ` — ${f.nodes.map((n) => `${n.name}/${n.role}`).join(', ')}.` : '.'),
+      });
+      await wait(cadence.step);
+    }
 
-    const w = await investigateFront(triage, 'wan', 'router-expert', sym, cadence);
-    postEvidence(triage, 'wan', w);
-    post(triage, {
-      agent, tier: 'L3', round: 1,
-      text: w.state === 'suspect'
-        ? `WAN overlay read failed — ${w.detail}. Not vouching for the overlay blind.`
-        : `WAN (SD-WAN): ${w.detail}. Live from ${w.source}.`,
-    });
+    if (wanInScope) {
+      const w = await investigateFront(triage, 'wan', 'router-expert', sym, cadence);
+      postEvidence(triage, 'wan', w);
+      post(triage, {
+        agent, tier: 'L3', round: 1,
+        text: w.state === 'suspect'
+          ? `WAN overlay read failed — ${w.detail}. Not vouching for the overlay blind.`
+          : `WAN (SD-WAN): ${w.detail}. Live from ${w.source}.`,
+      });
+    }
   });
 
   // Config-Keeper -> the REAL change front (gap 5). For the in-scope reachable
@@ -925,7 +1170,8 @@ async function runL3(triage, sym, cadence) {
   // saving the new one, and emit a real change finding — "no config change on
   // sw1–sw4 in the window" (rules out a cause class) or "sw2 changed at <when> —
   // inside the window". Then snapshot. Never a drift claim without a real diff.
-  await withAgent('config-keeper', triage, async (agent) => {
+  // Config lives on the campus front, so it only runs when campus is in scope.
+  if (frontInScope(triage, 'campus')) await withAgent('config-keeper', triage, async (agent) => {
     const r = await readCampus(sym);
     if (r.state === 'suspect') {
       post(triage, {
@@ -1882,6 +2128,11 @@ function buildTriage(severity, description, opts = {}) {
     affectedCIs: [],           // real affected devices/tenants (ServiceNow)
     reTriageDelta: null,       // set on a re-run: the real delta vs the prior run
     relatedTo: [],             // Wave 3 — OPEN incidents this may overlap (never auto-merged)
+    // ── Understand-first triage (additive, flagged) ──
+    phase: 'triaging',         // 'triaging' | 'awaiting-info' (paused on clarifying Qs)
+    clarify: { answers: [], rounds: 0, questions: [] }, // operator answers + asked Qs
+    relevantFronts: null,      // fronts the understand phase scoped the sweep to (null = all)
+    understand: null,          // the understand-phase context (restatement, hypotheses, fronts)
   };
   triages.set(id, triage);
 
@@ -2011,6 +2262,12 @@ function getTriage(id) {
     // Wave 4 — the correlation pass, also at the top level so the UI's restore
     // fallback (verdict.correlation ?? record.correlation) is live, not dead code.
     correlation: t.correlation || null,
+    // Understand-first — so a refresh restores the pause + the asked questions and
+    // the desk can show "awaiting info" (FE ignores what it doesn't use).
+    phase: t.phase || 'triaging',
+    clarify: t.clarify || { answers: [], rounds: 0, questions: [] },
+    relevantFronts: t.relevantFronts || null,
+    understand: t.understand || null,
   };
 }
 
@@ -2031,6 +2288,15 @@ function postOperatorMessage(triageId, text) {
   const clean = String(text || '').trim();
   if (!clean) return { error: 'empty', reason: 'An operator note needs some text.' };
 
+  const msg = emitOperatorMessage(t, clean);
+  log(`[Triage ${t.id}] operator note on the bridge — "${clean.slice(0, 80)}"`);
+  return { ok: true, message: msg };
+}
+
+// Emit + record ONE operator message on the bridge. Shared by the operator-note
+// path and the clarify-answer path (resumeUnderstanding), so both render the same
+// way in the thread. Touches only the message stream — never the evidence board.
+function emitOperatorMessage(t, clean) {
   // Round follows where the bridge currently is, purely for display ordering.
   const round = t.progress && t.progress.L4 === 'done' ? 2 : 1;
   const msg = emit('triage_message', t.id, {
@@ -2044,8 +2310,7 @@ function postOperatorMessage(triageId, text) {
     operator: true,      // the UI marks this clearly as the operator, not an engineer
   });
   t.messages.push(msg);
-  log(`[Triage ${t.id}] operator note on the bridge — "${clean.slice(0, 80)}"`);
-  return { ok: true, message: msg };
+  return msg;
 }
 
 // ── Retry a down front inside an open triage ────────────────────────────────
@@ -2157,6 +2422,7 @@ module.exports = {
   listTriages,
   listIncidents,
   postOperatorMessage,
+  resumeUnderstanding,
   setRoles,
   acknowledge,
   retryFront,

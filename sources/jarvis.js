@@ -990,7 +990,20 @@ target you could probe — set specific=false and ask the OPERATOR 1-3 pointed c
 that would let you start (which sites/devices, since when, what exactly is failing). Do NOT guess a
 scope and investigate it. When it IS specific, set specific=true, state the understood problem in
 one plain sentence, and list your initial candidate hypotheses (unproven, to be tested by probes).
-State no network fact — you have no data yet; these are hypotheses to test, not findings.`;
+State no network fact — you have no data yet; these are hypotheses to test, not findings.
+
+ALSO decide which NOC fronts are actually worth reading for THIS problem, and return them in
+"relevantFronts" as a subset of exactly these four keys:
+  - campus    → Catalyst campus switches / access + distribution (user-edge reachability, LAN)
+  - fabric    → ACI data-center fabric (leaf/spine, tenants/EPGs — data-center apps)
+  - wan       → SD-WAN / vManage (branch↔hub overlay, circuits, tunnels)
+  - incidents → currently-open Catalyst issues + ACI faults (estate-wide fault backdrop)
+Pick ONLY the fronts a competent NOC engineer would actually look at for this symptom — e.g. a single
+user who cannot reach one website is a campus/edge + DNS/upstream question, NOT a data-center fabric
+or SD-WAN overlay question, so relevantFronts would be ["campus"] (add "incidents" only if a
+same-time estate fault could plausibly explain it). If you genuinely cannot tell which fronts matter,
+return an EMPTY relevantFronts array (all fronts will then be read). Never pad the list to look
+thorough — an irrelevant front swept is noise that buries the real signal.`;
 
 const INV_PROBE_SYSTEM =
 `You are Jarvis, L4 / Principal Engineer, mid-investigation on a live NOC. You have a set of standing
@@ -1030,13 +1043,16 @@ Compose a fix, grounded ONLY in the evidence gathered (the rounds/reports). Retu
 async function invUnderstand({ problem, operatorTz, answers }) {
   const format = { type: 'json_schema', schema: {
     type: 'object', additionalProperties: false,
-    required: ['specific', 'understood', 'hypotheses', 'questions'],
+    required: ['specific', 'understood', 'hypotheses', 'questions', 'relevantFronts'],
     properties: {
       specific: { type: 'boolean' },
       understood: { type: 'string' },
       hypotheses: { type: 'array', items: { type: 'object', additionalProperties: false,
         required: ['id', 'text'], properties: { id: { type: 'string' }, text: { type: 'string' } } } },
       questions: { type: 'array', items: { type: 'string' } },
+      // Which of the four live NOC fronts are worth reading for THIS problem.
+      // A subset of campus/fabric/wan/incidents; empty = "cannot tell, read all".
+      relevantFronts: { type: 'array', items: { type: 'string', enum: ['campus', 'fabric', 'wan', 'incidents'] } },
     },
   } };
   const answerBlock = (answers && answers.length)
@@ -1058,6 +1074,8 @@ async function invUnderstand({ problem, operatorTz, answers }) {
     understood: p.understood || String(problem || ''),
     hypotheses: Array.isArray(p.hypotheses) ? p.hypotheses : [],
     questions: Array.isArray(p.questions) ? p.questions : [],
+    // Additive (investigation.js ignores it; triage.js uses it to scope the sweep).
+    relevantFronts: Array.isArray(p.relevantFronts) ? p.relevantFronts : [],
   };
 }
 
