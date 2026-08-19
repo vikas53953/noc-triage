@@ -112,6 +112,33 @@ function textOf(resp) {
 //    callers pass headroom above the raw plan/answer size to avoid truncation.
 //  - Streaming is unnecessary here: both calls are small and well under any HTTP
 //    timeout at these max_tokens.
+// A transient failure is worth one more try; a real one (bad request, no key,
+// auth, a refusal) is not. Retrying a 429/529/500/timeout/network blip is what
+// keeps a multi-step flow (the investigation loop especially) from dying on a
+// single hiccup — WITHOUT ever fabricating: a genuine, repeated failure still
+// surfaces honestly to the caller.
+function isTransient(err) {
+  const m = (err && err.message) || '';
+  if (/no_api_key/.test(m)) return false;
+  if (/\((429|500|502|503|529)\)/.test(m)) return true;      // rate-limit / overloaded / gateway
+  if (/timed out|Could not reach|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up/i.test(m)) return true;
+  return false;                                              // 400/401/403 etc. — fail fast
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function postWithRetry(body, attempts = 3) {
+  let lastErr = null;
+  for (let i = 0; i < attempts; i++) {
+    try { return await post(body); }
+    catch (err) {
+      lastErr = err;
+      if (i === attempts - 1 || !isTransient(err)) throw err;
+      await sleep(800 * Math.pow(2, i));                     // 0.8s, 1.6s backoff
+    }
+  }
+  throw lastErr;
+}
+
 async function reason({ system, messages, maxTokens = 3000, effort = 'high', format = null }) {
   const outputConfig = { effort };
   if (format) outputConfig.format = format;
@@ -123,7 +150,7 @@ async function reason({ system, messages, maxTokens = 3000, effort = 'high', for
     thinking: { type: 'adaptive' },
     output_config: outputConfig,
   };
-  const resp = await post(body);
+  const resp = await postWithRetry(body);
   // Safety classifiers can decline (HTTP 200, stop_reason "refusal"). Honesty
   // rule at the LLM layer: report the decline, never fabricate around it.
   if (resp.stop_reason === 'refusal') {
