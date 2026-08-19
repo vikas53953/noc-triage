@@ -46,9 +46,9 @@ Last updated: 2026-08-19 · driver: Fable session · demo delivered
 #38 CLI routing · #39+#37 Wave 4 correlation · #40 SSH engine · #41 repo polish · #42+#43 CW-1
 
 ## Needs Vikas (non-blocking, honest-if-absent until supplied)
-- **ANTHROPIC API CREDITS EXHAUSTED (2026-08-18 ~10:20 IST)** — every Jarvis planner call now returns
-  "credit balance too low" (400). Deterministic safety paths still work; anything through the LLM planner
-  is down and CANNOT be live-verified until topped up. Top up at console.anthropic.com → Plans & Billing.
+- **CREDITS RELOADED — planner live again (verified 2026-08-19).** Ran real Sonnet planner flows during
+  demo capture (triage verdict, ambiguity-ask, live show-version, investigation loop) — all worked. Vikas's
+  guidance stands: use cheaper models (JARVIS_MODEL=claude-sonnet-5) for testing to spend wisely.
 - DevNet sandbox reservation creds (real SSH show output) · Teams webhook (CW-4) · ServiceNow creds (CW-6)
 
 ## In flight right now (agents)
