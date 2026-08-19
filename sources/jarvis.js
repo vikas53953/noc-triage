@@ -34,6 +34,41 @@ function init(hostCtx) { ctx = hostCtx; }
 
 const RULE = '──────────────────────────────────';
 
+// NEVER CUT AN OPERATOR-FACING LINE MID-WORD (junior-UX fix). A hard `.slice(0,N)`
+// on text Jarvis shows the operator chopped the capability answer and plan
+// rationales in the middle of a word ("…ask about an i"), which reads as a broken,
+// junior tool. softClip trims to a length WITHOUT splitting a word: it prefers the
+// last sentence boundary, falls back to the last whole word, and marks the cut with
+// an honest ellipsis so it never pretends to be complete. The final synthesised
+// answer is shown in full and never passes through here.
+function softClip(text, max) {
+  const s = String(text == null ? '' : text).trim();
+  if (s.length <= max) return s;
+  const slice = s.slice(0, max);
+  // A sentence boundary that is not too early keeps whole sentences.
+  const sentence = Math.max(
+    slice.lastIndexOf('. '), slice.lastIndexOf('! '), slice.lastIndexOf('? '), slice.lastIndexOf('\n'));
+  if (sentence >= max * 0.6) return slice.slice(0, sentence + 1).trim() + ' …';
+  const space = slice.lastIndexOf(' ');
+  return (space > 0 ? slice.slice(0, space) : slice).trim() + ' …';
+}
+
+// Jarvis's OWN capability list, rendered for the PLAN call so the planner can
+// answer a greeting or a "what can you do / help" meta-ask from the real, honest
+// ability map (what is built, what is only half-wired and why) instead of guessing
+// or listing just the network agents. Injected through ctx (like the roster) so
+// jarvis.js stays decoupled and testable; absent → an empty list, and the planner
+// simply has nothing extra to draw on.
+function abilitiesText(list) {
+  if (!Array.isArray(list) || !list.length) return '(capability list unavailable)';
+  return list.map((a) => {
+    const state = a.available ? 'AVAILABLE'
+      : (a.engineBuilt ? 'BUILT, NOT CONNECTED' : 'NOT YET');
+    const why = !a.available && a.reason ? `  (why not: ${a.reason})` : '';
+    return `- ${a.label} [${state}]: ${a.plain}${why}`;
+  }).join('\n');
+}
+
 // Presence only — never the value. Drives the UI banner + the refusal.
 function keyStatus() {
   const present = claude.hasKey();
@@ -137,6 +172,18 @@ request, task it, worded plainly. Reason about whether a tool FITS from what it 
 pick one by keyword. A tool marked read-only auto-runs through the permission gate like any
 read; a tool that looks like a write is proposed for approval and never runs on its own. If
 none of the external tools fits, ignore them — they are extra reach, not a requirement.
+
+YOU, JARVIS, ARE ALSO SOMEONE THE OPERATOR TALKS TO. If the operator only GREETS you
+("hi", "hey jarvis", "morning", "thanks") or asks a META question ABOUT YOU — what you can
+do, "help", "what are you", "who are you" — that is NOT a network task and there is no-one
+to delegate to. Do NOT force a delegation, and do NOT decline it as off-network. Instead
+write a warm, complete reply in "selfAnswer": greet back if you were greeted, then in plain
+words say what you CAN do right now and, honestly, what is built-but-not-connected and why —
+drawn ONLY from the "What you (Jarvis) can do" list given to you below. Lead with what you
+can do; keep it readable, not a raw dump. NEVER say "I can't do that yet" to a greeting or a
+help ask. For EVERY other request — anything that names or implies the network, a device, an
+incident, or a task — set "selfAnswer" to null and delegate as normal (or, if truly nothing
+on the squad can serve it, leave delegations empty and explain in "note").
 
 First, in "intent", state in one or two plain sentences what the operator is actually
 asking for (the parsed intent). Then, in "symptom", extract the incident shape from the
@@ -245,9 +292,13 @@ async function ask(question) {
       schema: {
         type: 'object',
         additionalProperties: false,
-        required: ['intent', 'symptom', 'delegations', 'note'],
+        required: ['intent', 'symptom', 'delegations', 'note', 'selfAnswer'],
         properties: {
           intent: { type: 'string' },
+          // A greeting or a meta/help ask about Jarvis itself is answered HERE, by
+          // the planner, from Jarvis's real capability list — no delegation. null
+          // for every network/task request (those delegate or decline as before).
+          selfAnswer: { type: ['string', 'null'] },
           symptom: {
             type: 'object',
             additionalProperties: false,
@@ -292,7 +343,7 @@ async function ask(question) {
       system: PLAN_SYSTEM,
       messages: [{
         role: 'user',
-        content: `Current time (UTC, for resolving "since 2pm" style anchors): ${new Date().toISOString()}\n\nSquad roster (the only things that can see the network):\n${rosterText()}\n\nOperator request:\n"${q}"`,
+        content: `Current time (UTC, for resolving "since 2pm" style anchors): ${new Date().toISOString()}\n\nSquad roster (the only things that can see the network):\n${rosterText()}\n\nWhat you (Jarvis) can do right now — YOUR OWN capability list, for answering a greeting or a "what can you do / help" meta-ask (use only for "selfAnswer"; it is not a network source):\n${abilitiesText((ctx.abilities && ctx.abilities()) || [])}\n\nOperator request:\n"${q}"`,
       }],
       // Headroom above the JSON plan itself: on the current tiers adaptive
       // thinking shares this budget, so a tight cap could truncate the plan.
@@ -310,11 +361,30 @@ async function ask(question) {
   // Belt-and-braces: keep only real agent ids (the enum should already ensure this).
   const valid = delegations.filter((d) => d && ids.includes(d.agentId) && d.question);
 
+  // A greeting or a meta/help ask about Jarvis itself: the planner composed a warm
+  // capability answer (from Jarvis's real ability list) instead of delegating.
+  // Render it IN FULL — never sliced, no "I can't"/"tasked no-one" junior footer.
+  // This IS the answer, so Jarvis never feels junior when simply greeted or asked
+  // what it can do.
+  const selfAnswer = plan.selfAnswer && String(plan.selfAnswer).trim() ? String(plan.selfAnswer).trim() : null;
+  if (!valid.length && selfAnswer) {
+    session.recordReasoning({
+      command: 'SELF',
+      raw: selfAnswer,
+      interpretation: 'A greeting or a meta/help ask — answered warmly from Jarvis’s own capability list; no delegation needed and nothing read from the network.',
+    });
+    ctx.say('jarvis', `🎖️ ${selfAnswer}`);
+    ctx.status('jarvis', 'idle', 'Answered — what I can do');
+    ctx.log(`[Jarvis] Greeting/meta — answered from capability list — "${q.slice(0, 50)}"`);
+    return;
+  }
+
   if (!valid.length) {
     ctx.say('jarvis',
       `🤔 I reasoned about this and I don't have anyone who can actually answer it.\n${RULE}\n` +
       `You asked: "${q.slice(0, 140)}"\n\n` +
-      (plan.note ? `${String(plan.note).slice(0, 400)}\n\n` : '') +
+      // softClip, not a hard slice: never chop the rationale mid-word.
+      (plan.note ? `${softClip(plan.note, 600)}\n\n` : '') +
       `This squad only sees the network it is wired to. I have tasked no-one and read nothing.`);
     ctx.status('jarvis', 'idle', 'Nothing to delegate — ran nothing');
     ctx.log(`[Jarvis] Reasoned: nothing to delegate — "${q.slice(0, 60)}"`);
@@ -344,7 +414,7 @@ async function ask(question) {
   ctx.say('jarvis',
     `🗺️ Plan — I'm pulling in ${valid.length} ${valid.length === 1 ? 'engineer' : 'engineers'}:\n${RULE}\n` +
     valid.map((d) => `• ${ctx.nameOf(d.agentId)} → ${d.question}`).join('\n') +
-    (plan.note ? `\n\n${String(plan.note).slice(0, 300)}` : ''));
+    (plan.note ? `\n\n${softClip(plan.note, 300)}` : ''));
   ctx.log(`[Jarvis] Plan: ${valid.map((d) => d.agentId).join(', ')} — "${q.slice(0, 50)}"`);
 
   // ── Execute the plan for REAL ──────────────────────────────────────────────
@@ -822,7 +892,7 @@ async function narrateCorrelation(input) {
     });
     if (res.refused) return null;
     const txt = (res.text || '').trim();
-    return txt ? txt.slice(0, 600) : null;
+    return txt ? softClip(txt, 600) : null;
   } catch (err) {
     return null;
   }
@@ -1050,5 +1120,5 @@ module.exports = {
   // Exposed for the QA CLASS 6 offline test only (the always-surfaces guarantee):
   // a delegated read that hangs / rejects / returns null-or-empty must resolve to
   // an explicit honest finding, never silence.
-  _test: { gatherGuarded, GATHER_TIMEOUT_MS },
+  _test: { gatherGuarded, GATHER_TIMEOUT_MS, softClip, abilitiesText },
 };

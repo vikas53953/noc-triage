@@ -1122,6 +1122,10 @@ jarvis.init({
   // The roster the planner reasons over: who exists + what each can actually see,
   // plus (CW-8) every connected external MCP tool as its own delegation target.
   roster: () => buildJarvisRoster(),
+  // Jarvis's OWN capability list (the single source of truth in capabilities.js),
+  // so a greeting or a "what can you do / help" meta-ask is answered warmly from
+  // the real, honest ability map — never a brusque refusal or an incomplete list.
+  abilities: () => capabilities.list(),
 });
 
 // CW-7 — hand the investigation LOOP engine its plumbing. The engine orchestrates
