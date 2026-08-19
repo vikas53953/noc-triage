@@ -330,6 +330,22 @@ function isQuestionAboutState(text) {
   return QUESTION_LEAD.test(normalize(text)) || /\?\s*$/.test(normalize(text));
 }
 
+// A greeting ("hi", "hey jarvis", "morning", "thanks") or a bare META ask about
+// Jarvis itself ("help", "what can you do", "who are you", "commands",
+// "capabilities") is NOT an out-of-scope request — it is the operator TALKING to
+// Jarvis, and it must reach the planner to get a warm capability answer, never the
+// flat "I can't do that yet" refusal. This ONLY recognises the shape so the gate
+// lets it through; it composes no answer (the planner does that, intent-first).
+// Both patterns are anchored to the end of the message, so a greeting word that
+// merely opens a real request ("morning, why is sw1 down?") does NOT match here —
+// that stays a normal ask.
+const GREETING = /^(?:hey|hi|hiya|heya|hello|hell?oo+|yo|howdy|greetings|sup|good\s*(?:morning|afternoon|evening|day)|mornin[g']?|afternoon|evening|thanks|thank\s+you|thx|ty|cheers)\b[\s,!.]*(?:jarvis|there|team|all|everyone|folks|mate|buddy)?[\s,!.]*$/i;
+const META_ASK = /^(?:(?:hey|hi|hello)\s+jarvis[,\s]+)?(?:help|commands?|capabilit(?:y|ies)|menu|options|what\s+can\s+you\s+(?:do|help\s+with)|what\s+do\s+you\s+do|what\s+are\s+you(?:\s+able\s+to\s+do|\s+capable\s+of)?|who\s+are\s+you|what\s+can\s+i\s+ask(?:\s+you)?)\b\s*[?.!]*\s*$/i;
+function isGreetingOrMeta(text) {
+  const t = normalize(text);
+  return !!t && (GREETING.test(t) || META_ASK.test(t));
+}
+
 // Some abilities are gated on a live env fact, not a static flag — Teams is
 // available exactly when TEAMS_WEBHOOK is set (resolved fresh so a late-set
 // webhook flips the map without a restart). Deciding this here, in the one place
@@ -493,6 +509,13 @@ function checkAsk(text) {
     return { allowed: false, ability: publicShape(unbuilt), text: refusalFor(unbuilt) };
   }
 
+  // 3b. A greeting or a bare meta/help ask about Jarvis itself is answered warmly
+  //     by the planner with a capability list — never the flat "I can't do that
+  //     yet". Placed AFTER the unbuilt-ability check so a genuine unbuilt ask
+  //     ("post this to teams") still gets its honest refusal, and BEFORE the
+  //     out-of-scope net below so "hi" / "help" are not bounced as off-topic.
+  if (isGreetingOrMeta(t)) return { allowed: true, ability: get('ask') };
+
   if (question) return { allowed: true, ability: matchAsk(t) };
 
   // 4. Nothing about this NOC at all → honest out-of-scope refusal. But only when
@@ -508,5 +531,5 @@ function checkAsk(text) {
 module.exports = {
   list, available: availableAbilities, get, matchAsk, refusalFor, checkAsk,
   // exposed for tests//review of the intent split
-  _internals: { isReadOnlyCommand, isQuestionAboutState, isImperativeRequest, requestedUnbuiltAbility },
+  _internals: { isReadOnlyCommand, isQuestionAboutState, isImperativeRequest, requestedUnbuiltAbility, isGreetingOrMeta },
 };
