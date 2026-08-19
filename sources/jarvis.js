@@ -948,7 +948,11 @@ async function invProbe({ problem, understood, hypotheses, rounds, roster }) {
     required: ['stuck', 'agentId', 'question', 'device', 'rationale'],
     properties: {
       stuck: { type: ['string', 'null'] },
-      agentId: { type: ['string', 'null'], enum: [...(roster || []).map((a) => a.id), null] },
+      // Nullable enum: a strict json_schema validator rejects `enum` combined with
+      // a `type` ARRAY (it flags each string enum value as "not matching type
+      // ['string','null']"). anyOf expresses "one of the agent ids, OR null"
+      // correctly — the agent to task, or null when the planner is stuck.
+      agentId: { anyOf: [{ type: 'string', enum: (roster || []).map((a) => a.id) }, { type: 'null' }] },
       question: { type: ['string', 'null'] },
       device: { type: ['string', 'null'] },
       rationale: { type: ['string', 'null'] },
