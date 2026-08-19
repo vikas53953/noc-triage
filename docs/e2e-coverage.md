@@ -42,3 +42,19 @@ NetClaw pulls:
 
 ## Result table (each agent fills its slice; PASS/FAIL/PARTIAL + real evidence + repro)
 (to be completed by the test agents)
+
+## RESULTS (2026-08-19) — 24/24 PASS live (4 fresh agents, Sonnet, operator + newcomer)
+Per-slice evidence in scratchpad e2e-intel.md / e2e-incidents.md / e2e-waves.md / e2e-netclaw.md.
+- Intelligence & safety (1-7): ALL PASS. Intent-first (no standups), ambiguity-ask, named targeting, plain
+  intake, write guardrail (chained/disguised/inflected), gate fail-closed, clean errors. Newcomer probes all honest.
+- Incidents/docs/correlation (8-10): ALL PASS. Honest verdict, leadership doc quotes hypothesis verbatim,
+  chat sees own incidents, no fabricated INC, per-operator memory isolated.
+- Copilot waves (11-17): ALL PASS. Change engine honest 403-freeze (never "applied"), tickets raw+XSS-inert+
+  close-needs-note, Teams/SSH/ServiceNow honest not-connected, sw1-4 real Command Runner.
+- Investigation + NetClaw (18-24): ALL PASS. Loop probes round-by-round, caps honestly (no fabricated cause),
+  grills ambiguous; MCP/Batfish/Nautobot honest-off; Catalyst real reads; feeds honest; pcap parses real.
+Non-blocking notes: (a) FIXING NOW — "what can you do" truncated + brusque "hi/help" preamble (fix/greeting-
+and-truncation). (b) LOOK — concurrent same-instant commands once mangled sw1→sw1null, dropped a valid read
+(fails safe). (c) VIKAS'S CALL — chat feed + incident list are shared across the box (per-operator reasoning
+memory IS isolated). (d) KNOWN — investigation probe sometimes pipes a command → safely refused, self-recovers.
+Coverage page: https://claude.ai/code/artifact/d77a14ea-4c77-48b1-acef-fcec0f574707
