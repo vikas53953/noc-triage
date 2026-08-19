@@ -139,11 +139,13 @@ async function postWithRetry(body, attempts = 3) {
   throw lastErr;
 }
 
-async function reason({ system, messages, maxTokens = 3000, effort = 'high', format = null }) {
+async function reason({ system, messages, maxTokens = 3000, effort = 'high', format = null, model: modelOverride = null }) {
   const outputConfig = { effort };
   if (format) outputConfig.format = format;
   const body = {
-    model: MODEL,
+    // Per-call model override lets a caller run ONE call on a different tier (used
+    // by the synthesis-refusal retry) without changing the app-wide default MODEL.
+    model: modelOverride || MODEL,
     max_tokens: maxTokens,
     system,
     messages,
@@ -154,9 +156,9 @@ async function reason({ system, messages, maxTokens = 3000, effort = 'high', for
   // Safety classifiers can decline (HTTP 200, stop_reason "refusal"). Honesty
   // rule at the LLM layer: report the decline, never fabricate around it.
   if (resp.stop_reason === 'refusal') {
-    return { text: '', stopReason: 'refusal', model: resp.model || MODEL, refused: true };
+    return { text: '', stopReason: 'refusal', model: resp.model || modelOverride || MODEL, refused: true };
   }
-  return { text: textOf(resp), stopReason: resp.stop_reason || 'end_turn', model: resp.model || MODEL, refused: false };
+  return { text: textOf(resp), stopReason: resp.stop_reason || 'end_turn', model: resp.model || modelOverride || MODEL, refused: false };
 }
 
 module.exports = { hasKey, model, reason };

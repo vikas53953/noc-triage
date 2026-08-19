@@ -445,35 +445,16 @@ async function ask(question) {
 
   // ── Call 2: SYNTHESIS — strictly from the real findings ────────────────────
   ctx.status('jarvis', 'active', 'Composing the answer from findings…');
-  const findingsBlock = findings.map((f) =>
-    `[${f.name}] (${f.stance})\n${f.text}`).join(`\n\n`);
-  let answer;
+  let result;
   try {
-    const res = await claude.reason({
-      system: SYNTH_SYSTEM,
-      messages: [{
-        role: 'user',
-        content:
-          `Operator asked:\n"${q}"\n\n` +
-          `Findings gathered from the squad (this is your ONLY source of network truth):\n${RULE}\n${findingsBlock}\n${RULE}\n\n` +
-          `Give the operator your answer, using only the findings above.`,
-      }],
-      // Headroom for adaptive thinking + the composed answer (see plan call).
-      maxTokens: 4000,
-      effort: 'high',
-    });
-    // Class fix (Finding 1, 2026-08-18): the reads ALREADY ran and their real
-    // output is already on screen under each engineer. Writes are judged at the
-    // WIRE (the command choke point), never here — so a SYNTHESIS-step refusal or
-    // error must NEVER cap a successful read with a false "🚫 declined / rephrase
-    // it". That flagship dent showed the real running-config for "copy the running
-    // config off sw1" and then told the operator it was declined. When findings
-    // were gathered, we relay them verbatim instead — honest, nothing invented.
-    if (res.refused) return relayFindings(q, findings, 'the write-up step was declined by the model');
-    answer = res.text;
+    result = await synthesizeAnswer(q, findings);
   } catch (err) {
     return relayFindings(q, findings, `the write-up step could not run (${err && err.message ? err.message : 'error'})`);
   }
+  // The optional summary was declined even after the one neutral retry — the reads
+  // are already on screen, so relay honestly with the SHORT, calm message.
+  if (result.relayed) return relayFindings(q, findings, result.why);
+  const answer = result.answer;
 
   session.recordReasoning({
     command: 'SYNTHESIS',
@@ -485,32 +466,100 @@ async function ask(question) {
   ctx.log(`[Jarvis] Answered from ${findings.length} finding(s) — "${q.slice(0, 50)}"`);
 }
 
-// Class fix (Finding 1): relay the REAL gathered findings as Jarvis's answer when
-// the optional synthesis/write-up step could not run (model declined it, or the
-// call errored). The reads already happened at the wire — safely, through the
-// gate + guardrail — and are shown per engineer; this gives one coherent answer
-// WITHOUT a false "declined", and invents nothing: it echoes only what the squad
-// actually returned, tagged by stance.
+// ── SYNTHESIS with a one-shot neutral retry (class fix, 2026-08-19) ──────────
+// The optional write-up/summary (Call 2) is sometimes DECLINED HTTP-200 by the
+// safety classifier when the findings it must summarise contain device config,
+// credential-looking strings, or HTML/script literals in a ticket title — all of
+// which are legitimate DATA a read returned. We do ONE retry, on the SAME model,
+// with those sensitive/hostile literals REDACTED/neutralised — secrets become
+// [redacted], markup becomes an inert note — so the summariser never has to
+// reproduce a credential or raw markup (this is data hygiene, and matches the
+// secrets-never-persist rule). We deliberately do NOT switch to a more permissive
+// model to get around a refusal — that would be defeating a safety guard, not a
+// data fix. If the neutralised retry ALSO refuses, we relay the already-on-screen
+// readings with a short, calm note. Touches the optional summary only; the reads
+// ran at the wire and are unchanged.
+//
+// Returns { answer } | { answer, retried:true } | { relayed:true, why }. Throws
+// only if the API call itself errors (network/timeout) — ask() relays on that too.
+async function synthesizeAnswer(q, findings) {
+  const list = Array.isArray(findings) ? findings : [];
+  const block = list.map((f) => `[${f.name}] (${f.stance})\n${f.text}`).join('\n\n');
+  const primary = await runSynthesis(q, block);
+  if (!primary.refused) return { answer: primary.text };
+
+  // One neutral retry on the SAME model: the sensitive/hostile literals are
+  // redacted/neutralised (secrets → [redacted], markup → inert note) so the
+  // summariser no longer has to reproduce a credential or raw <script>. If it
+  // STILL refuses, we do NOT switch to a more permissive model to defeat the
+  // refusal — we fall through to the honest short relay. The reads are on screen.
+  const safeBlock = list.map((f) =>
+    `[${f.name}] (${f.stance})\n${neutralizeFindingText(f.text)}`).join('\n\n');
+  const retry = await runSynthesis(q, safeBlock);
+  if (!retry.refused) return { answer: retry.text, retried: true };
+  return { relayed: true, why: 'the write-up step was declined by the model' };
+}
+
+// One synthesis call. `model` null → the app default tier; a value → that tier
+// (used for the fallback retry). Kept tiny so ask() and the test share one path.
+function runSynthesis(q, findingsBlock, model = null) {
+  return claude.reason({
+    system: SYNTH_SYSTEM,
+    messages: [{
+      role: 'user',
+      content:
+        `Operator asked:\n"${q}"\n\n` +
+        `Findings gathered from the squad (this is your ONLY source of network truth):\n${RULE}\n${findingsBlock}\n${RULE}\n\n` +
+        `Give the operator your answer, using only the findings above.`,
+    }],
+    // Headroom for adaptive thinking + the composed answer (see plan call).
+    maxTokens: 4000,
+    effort: 'high',
+    model,
+  });
+}
+
+// Neutralise the hostile-LOOKING literals in ONE finding's text before it goes
+// into the synthesis-retry prompt. These are DATA a read returned (a ticket title,
+// a running-config, a leaked-cred banner) that the operator ALREADY saw verbatim
+// per engineer — the summary does not need the live literals, only a faithful,
+// inert description. HTML/script markup becomes an inert bracketed note; raw angle
+// brackets become words; secret values and hash blobs become [redacted]. It never
+// changes what was read; it only stops the summariser choking on device-config /
+// credential / markup shapes it treats as unsafe to reproduce.
+function neutralizeFindingText(text) {
+  let s = String(text == null ? '' : text);
+  // HTML/script-like markup → an inert note that keeps the tag name for the summary.
+  s = s.replace(/<\s*\/?\s*([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>/g, (m, tag) => `[markup:${tag}]`);
+  // Any remaining raw angle brackets → words, so nothing else reads as a tag.
+  s = s.replace(/</g, '(lt)').replace(/>/g, '(gt)');
+  // Hash/secret blobs ($1$…, $9$…, long hex) → [redacted] (the value, not the key).
+  s = s.replace(/\$\d[\w$./]{6,}/g, '[redacted]').replace(/\b[0-9A-Fa-f]{16,}\b/g, '[redacted]');
+  // Secret/credential-bearing values → [redacted]; the KEY word stays so the
+  // summary can still say "a secret is set", just never the secret itself.
+  s = s.replace(/\b(secret|password|passwd|community|tacacs-server key|key\s+\d+|md5)\b([^\n,;]*)/gi,
+    (m, key) => `${key} [redacted]`);
+  return s;
+}
+
+// Relay the already-on-screen readings when the optional write-up could not run
+// even after the one neutral retry (declined both times, or the call errored). The
+// reads already happened at the wire — safely, through the gate + guardrail — and
+// each engineer's real output is ALREADY shown above, so this is deliberately a
+// SHORT, calm one-liner, not a second big paragraph re-dumping every reading. It
+// stays honest (nothing invented, nothing failed at the device) while being small
+// and non-alarming — the fix for "it keeps on showing" a large scary block.
 function relayFindings(q, findings, why) {
   const list = Array.isArray(findings) ? findings : [];
   const evidence = list.filter((f) => f.stance === 'evidence').length;
-  const body = list.map((f) => {
-    const tag = f.stance === 'evidence' ? '📡'
-      : f.stance === 'not-connected' ? '🔌'
-      : f.stance === 'denied' ? '🛑' : '⚠️';
-    return `${tag} ${f.name}:\n${String(f.text || '').trim()}`;
-  }).join('\n\n');
-  ctx.say('jarvis',
-    `🎖️ Here are the live readings I gathered — ${why}, so I'm relaying them straight from each ` +
-    `engineer rather than composing a summary on top. Nothing was invented, and nothing failed at the device:\n` +
-    `${RULE}\n${body}`);
+  ctx.say('jarvis', `🎖️ Summary skipped on this one — the raw readings from each engineer are above, all real.`);
   session.recordReasoning({
     command: 'SYNTHESIS',
-    raw: `Relayed ${list.length} finding(s) verbatim (${evidence} live reading(s)); the write-up step did not run — ${why}.`,
-    interpretation: 'The reads succeeded and ARE the answer; the optional composition step was skipped, so the real findings were relayed without a false refusal.',
+    raw: `Relayed to the on-screen readings (${list.length} finding(s), ${evidence} live reading(s)); the write-up step did not run — ${why}.`,
+    interpretation: 'The reads succeeded and ARE the answer; the optional composition step was skipped after a neutral retry, so Jarvis pointed to the real findings already on screen without a false refusal.',
   });
-  ctx.status('jarvis', 'idle', 'Relayed live findings (write-up step skipped)');
-  ctx.log(`[Jarvis] Relayed ${list.length} finding(s) without synthesis — ${why} — "${String(q).slice(0, 50)}"`);
+  ctx.status('jarvis', 'idle', 'Relayed to live findings (write-up step skipped)');
+  ctx.log(`[Jarvis] Relayed to ${list.length} on-screen finding(s) without synthesis — ${why} — "${String(q).slice(0, 50)}"`);
 }
 
 // The safety classifier declined — say so, invent nothing.
@@ -1120,5 +1169,8 @@ module.exports = {
   // Exposed for the QA CLASS 6 offline test only (the always-surfaces guarantee):
   // a delegated read that hangs / rejects / returns null-or-empty must resolve to
   // an explicit honest finding, never silence.
-  _test: { gatherGuarded, GATHER_TIMEOUT_MS, softClip, abilitiesText },
+  _test: { gatherGuarded, GATHER_TIMEOUT_MS, softClip, abilitiesText,
+    // 2026-08-19 synthesis-refusal class fix: the one-shot neutral retry + the
+    // short honest fallback, exercised offline with a mocked claude.reason.
+    synthesizeAnswer, relayFindings, neutralizeFindingText },
 };
