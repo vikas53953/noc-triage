@@ -229,6 +229,8 @@ button,input,select,textarea{font-family:inherit}
 .capbar{padding:.5rem .7rem 0}
 .capnote{font-size:.72rem;color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn);
   border-radius:8px;padding:.4rem .6rem;line-height:1.5}
+.capnote-more{font:inherit;font-weight:700;color:var(--warn);background:transparent;border:0;
+  cursor:pointer;text-decoration:underline;padding:0 0 0 .15rem}
 .suggest{display:flex;gap:.4rem;flex-wrap:wrap;padding:.5rem .7rem 0}
 .suggest button{
   background:var(--panel);border:1px solid var(--line);border-radius:999px;
@@ -630,6 +632,68 @@ pre.term{
   .top-right .chip{max-width:92px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .whotag span{max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 }
+
+/* ============================================================
+   Capabilities panel — always-discoverable slide-over from the right.
+   Lists every desk feature with a live/off state light. Group 1 is the
+   always-on desk (green). Group 2 integrations poll their REAL status
+   endpoint every 10s while open — green only when the API says connected,
+   amber otherwise. Every dynamic string is routed through esc().
+   ============================================================ */
+.capbtn{
+  background:transparent;border:1px solid var(--line);color:var(--ink2);
+  height:28px;padding:0 .62rem;border-radius:7px;cursor:pointer;font-size:.73rem;font-weight:700;
+  display:inline-flex;align-items:center;gap:.35rem;transition:.15s;white-space:nowrap;flex-shrink:0
+}
+.capbtn:hover{background:var(--hover);color:var(--ink);border-color:var(--accent)}
+.cap-scrim{
+  position:fixed;inset:0;z-index:300;background:rgba(6,10,18,.6);backdrop-filter:blur(3px);
+  opacity:0;pointer-events:none;transition:opacity .2s ease
+}
+.cap-scrim.on{opacity:1;pointer-events:auto}
+.cap-drawer{
+  position:fixed;top:0;right:0;bottom:0;width:min(440px,96vw);z-index:301;
+  background:var(--card);border-left:1px solid var(--line);box-shadow:var(--shadow);
+  display:flex;flex-direction:column;transform:translateX(102%);
+  transition:transform .24s cubic-bezier(.4,0,.2,1)
+}
+.cap-drawer.on{transform:translateX(0)}
+.cap-drawer .cap-head{
+  padding:.7rem .9rem;border-bottom:1px solid var(--line);background:var(--panel);
+  display:flex;align-items:flex-start;justify-content:space-between;gap:.6rem;flex-shrink:0
+}
+.cap-drawer .cap-head h2{font-size:.92rem;font-weight:800;display:flex;align-items:center;gap:.45rem}
+.cap-drawer .cap-head .sub{font-size:.66rem;color:var(--ink3);font-weight:600;margin-top:.2rem}
+.cap-body{flex:1;min-height:0;overflow-y:auto;padding:.8rem .9rem}
+.cap-group{margin-bottom:1.15rem}
+.cap-group:last-child{margin-bottom:0}
+.cap-group>.gh{
+  font-size:.6rem;font-weight:800;letter-spacing:.11em;text-transform:uppercase;color:var(--ink3);
+  margin-bottom:.4rem;display:flex;align-items:center;gap:.4rem
+}
+.cap-row{display:flex;gap:.6rem;align-items:flex-start;padding:.55rem .1rem;
+  border-bottom:1px dashed var(--line-soft)}
+.cap-row:last-child{border-bottom:none}
+.cap-light{width:9px;height:9px;border-radius:50%;flex-shrink:0;margin-top:.3rem;background:var(--ink3)}
+.cap-light.green{background:var(--ok);box-shadow:0 0 0 3px var(--ok-bg)}
+.cap-light.amber{background:var(--warn);box-shadow:0 0 0 3px var(--warn-bg)}
+.cap-light.grey{background:var(--ink3);box-shadow:0 0 0 3px rgba(148,163,184,.16)}
+.cap-main{min-width:0;flex:1}
+.cap-name{font-size:.8rem;font-weight:700;line-height:1.35;display:flex;gap:.4rem;
+  align-items:baseline;flex-wrap:wrap}
+.cap-state{font-size:.55rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;
+  padding:.08rem .34rem;border-radius:4px;white-space:nowrap}
+.cap-state.green{background:var(--ok-bg);color:var(--ok)}
+.cap-state.amber{background:var(--warn-bg);color:var(--warn)}
+.cap-state.grey{background:rgba(148,163,184,.16);color:var(--ink3)}
+.cap-where{font-size:.67rem;color:var(--ink3);line-height:1.45;margin-top:.18rem;overflow-wrap:anywhere}
+.cap-hint{font-size:.67rem;color:var(--warn);line-height:1.45;margin-top:.18rem;overflow-wrap:anywhere}
+.cap-hint b{color:var(--ink2);font-weight:800;letter-spacing:.02em}
+.cap-foot{
+  border-top:1px solid var(--line);background:var(--panel);padding:.7rem .9rem;flex-shrink:0;
+  font-size:.68rem;color:var(--ink3);line-height:1.55
+}
+@media (max-width:760px){ .cap-drawer{width:100vw} }
 </style>
 </head>
 <body>
@@ -657,6 +721,7 @@ pre.term{
     <span class="chip wait" id="connChip"><span class="dot"></span>Connecting…</span>
     <span class="clock" id="clock">--:--:--</span>
     <a class="iconbtn" href="/" title="Back to the classic Evidence Split Console">🖥</a>
+    <button class="capbtn" id="capBtn" title="See every feature and what's connected right now">⚙ Capabilities</button>
     <button class="iconbtn" id="themeBtn" title="Switch light / dark">🌗</button>
     <div class="whotag" id="whoTag" title="Change who's at the desk">
       <div class="avatar" id="avi">?</div><span id="whoName">—</span>
@@ -812,6 +877,20 @@ pre.term{
     </div>
   </section>
 </div>
+
+<!-- ============ CAPABILITIES PANEL (discoverability) ============ -->
+<div class="cap-scrim" id="capScrim"></div>
+<aside class="cap-drawer" id="capDrawer" role="dialog" aria-modal="true" aria-label="Capabilities" aria-hidden="true">
+  <div class="cap-head">
+    <div>
+      <h2>⚙ Capabilities</h2>
+      <div class="sub">Every feature, and what's connected right now</div>
+    </div>
+    <button class="iconbtn" id="capClose" title="Close" aria-label="Close">✕</button>
+  </div>
+  <div class="cap-body" id="capPanelBody"></div>
+  <div class="cap-foot" id="capPanelFoot"></div>
+</aside>
 
 <div class="toast" id="toast">done</div>
 
@@ -1169,10 +1248,12 @@ function renderCaps(){
   var av = CAPS.abilities.filter(function(a){ return a && a.available; });
   var no = CAPS.abilities.filter(function(a){ return a && !a.available; });
   bar.innerHTML = no.length
-    ? '<div class="capnote"><b>Not yet:</b> ' + no.map(function(a){
-        return esc(a.label || a.key) + ' — ' + esc(a.reason || 'no reason given');
-      }).join(' · ') + '</div>'
+    ? '<div class="capnote"><b>' + no.length + ' ' + (no.length === 1 ? 'capability isn’t' : 'capabilities aren’t') +
+      ' connected yet.</b> Everything else — reads, triage, tickets, investigation — is live. ' +
+      '<button type="button" class="capnote-more" id="capNudge">See all capabilities →</button></div>'
     : '';
+  var nudge = document.getElementById('capNudge');
+  if(nudge){ nudge.addEventListener('click', function(){ var b = document.getElementById('capBtn'); if(b) b.click(); }); }
   /* A chip prefills the ability's `example` — an OPERATOR-VOICED sample ask.
      `plain` is Jarvis's own description of itself; putting that in the box would
      send Jarvis's words to Jarvis as if the operator had typed them. So it is
@@ -3848,6 +3929,131 @@ function boot(){
   if(saved){ OP = saved; applyName(); $('gate').classList.add('hide'); boot(); }
   else setTimeout(function(){ $('nameIn').focus(); }, 200);
 })();
+
+/* ============================================================
+   CAPABILITIES PANEL — always-discoverable "what can this desk do?"
+   Group 1 is the always-on desk (static, green). Group 2 integrations
+   fetch their REAL status endpoint in parallel on open and every 10s
+   while open — green ONLY when the API reports connected, amber (or
+   "status unavailable" on a failed fetch) otherwise. Interval is cleared
+   on close. Every dynamic string is escaped via esc().
+   ============================================================ */
+var CAP_LIVE = [
+  ['Ask Jarvis (chat)',        'the ask bar at the bottom of the center pane'],
+  ['Investigation loop',       'the 🔬 Investigate button'],
+  ['Catalyst Center reads',    'Evidence Board → Findings tab'],
+  ['Triage → ranked verdict',  'pick an incident on the left; verdict lands on Findings'],
+  ['Ticket queue',             'Evidence Board → Tickets tab'],
+  ['Change engine',            'Evidence Board → Change wrap tab', 'apply frozen — sandbox read-only'],
+  ['Drift check',              'Evidence Board → Drift tab'],
+  ['Incident bridge',          'Evidence Board → Bridge tab'],
+  ['Packet-capture analysis',  'ask Jarvis to read a capture'],
+  ['Capability honesty card',  'appears under the ask bar when a limit is hit']
+];
+var CAP_INTEG = [
+  { id:'feeds', name:'Live feeds (syslog + SNMP-trap)',
+    note:'syslog + SNMP-trap — NOT NetFlow',
+    hint:'feed env vars; syslog port 5514',
+    url:'/api/copilot/feeds/status',
+    ok:function(j){ return !!(j && j.syslog && (j.syslog.enabled === true || j.syslog.listening === true)); } },
+  { id:'mcp', name:'MCP external tools',
+    hint:'configure an MCP server',
+    url:'/api/copilot/mcp/status',
+    ok:function(j){ return !!(j && (j.configured === true || (Array.isArray(j.servers) && j.servers.length > 0))); } },
+  { id:'batfish', name:'Batfish offline validation',
+    hint:'set BATFISH_HOST',
+    url:'/api/copilot/batfish/status',
+    ok:function(j){ return !!(j && j.connected === true); } },
+  { id:'nautobot', name:'Nautobot source-of-truth',
+    hint:'set NAUTOBOT_URL + token',
+    url:'/api/copilot/nautobot/status',
+    ok:function(j){ return !!(j && j.connected === true); } },
+  { id:'teams', name:'Microsoft Teams bridge',
+    hint:'set TEAMS_WEBHOOK',
+    url:'/api/copilot/teams/status',
+    ok:function(j){ return !!(j && j.connected === true); } },
+  { id:'servicenow', name:'Two-way ServiceNow',
+    hint:'set SNOW_INSTANCE / SNOW_USER / SNOW_PASS',
+    url:'/api/copilot/servicenow/status',
+    ok:function(j){ return !!(j && j.connected === true); } }
+];
+var CAP_STATE = {};   // id -> 'loading' | 'green' | 'amber' | 'unavailable'
+var capOpen = false, capTimer = null;
+
+/* Build one row. light/stateCls/hint-flag are internal constants (never user
+   data); name + line text are the only dynamic bits and go through esc(). */
+function capRow(light, name, stateCls, stateTxt, lines){
+  var h = '<div class="cap-row"><span class="cap-light ' + light + '"></span><div class="cap-main">';
+  h += '<div class="cap-name">' + esc(name);
+  if(stateTxt) h += '<span class="cap-state ' + stateCls + '">' + esc(stateTxt) + '</span>';
+  h += '</div>';
+  (lines || []).forEach(function(ln){
+    if(!ln || !ln.text) return;
+    if(ln.hint) h += '<div class="cap-hint"><b>Turn on:</b> ' + esc(ln.text) + '</div>';
+    else h += '<div class="cap-where">' + esc(ln.text) + '</div>';
+  });
+  return h + '</div></div>';
+}
+
+function renderCapPanel(){
+  var g1 = '';
+  CAP_LIVE.forEach(function(f){
+    var lines = [{ text:f[1] }];
+    if(f[2]) lines.push({ text:f[2] });
+    g1 += capRow('green', f[0], 'green', 'LIVE', lines);
+  });
+  var g2 = '';
+  CAP_INTEG.forEach(function(it){
+    var st = CAP_STATE[it.id] || 'loading';
+    var light, cls, txt, lines = [];
+    if(it.note) lines.push({ text:it.note });
+    if(st === 'green'){ light='green'; cls='green'; txt='Live'; }
+    else if(st === 'loading'){ light='grey'; cls='grey'; txt='Checking…'; lines.push({ hint:true, text:it.hint }); }
+    else if(st === 'unavailable'){ light='amber'; cls='amber'; txt='Status unavailable'; lines.push({ hint:true, text:it.hint }); }
+    else { light='amber'; cls='amber'; txt='Built · Off'; lines.push({ hint:true, text:it.hint }); }
+    g2 += capRow(light, it.name, cls, txt, lines);
+  });
+  $('capPanelBody').innerHTML =
+    '<div class="cap-group"><div class="gh">🟢 Live now — always-on desk features</div>' + g1 + '</div>' +
+    '<div class="cap-group"><div class="gh">🔌 Integrations — connect to enable</div>' + g2 + '</div>';
+  $('capPanelFoot').textContent =
+    "Off integrations are real code waiting on a connection — they surface through " +
+    "Jarvis until they have data. NetFlow is not built (we use syslog + SNMP-trap + packet capture).";
+}
+
+function capFetchAll(){
+  CAP_INTEG.forEach(function(it){
+    api(it.url)
+      .then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function(j){ CAP_STATE[it.id] = it.ok(j) ? 'green' : 'amber'; })
+      .catch(function(){ CAP_STATE[it.id] = 'unavailable'; })
+      .then(function(){ if(capOpen) renderCapPanel(); });
+  });
+}
+
+function openCap(){
+  if(capOpen) return;
+  capOpen = true;
+  CAP_INTEG.forEach(function(it){ if(!CAP_STATE[it.id]) CAP_STATE[it.id] = 'loading'; });
+  $('capDrawer').classList.add('on');
+  $('capScrim').classList.add('on');
+  $('capDrawer').setAttribute('aria-hidden', 'false');
+  renderCapPanel();
+  capFetchAll();
+  capTimer = setInterval(capFetchAll, 10000);
+}
+function closeCap(){
+  if(!capOpen) return;
+  capOpen = false;
+  $('capDrawer').classList.remove('on');
+  $('capScrim').classList.remove('on');
+  $('capDrawer').setAttribute('aria-hidden', 'true');
+  if(capTimer){ clearInterval(capTimer); capTimer = null; }
+}
+$('capBtn').addEventListener('click', function(){ capOpen ? closeCap() : openCap(); });
+$('capClose').addEventListener('click', closeCap);
+$('capScrim').addEventListener('click', closeCap);
+document.addEventListener('keydown', function(e){ if(e.key === 'Escape' && capOpen) closeCap(); });
 
 })();
 </script>
