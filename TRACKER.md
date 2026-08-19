@@ -4,7 +4,7 @@
 first. Vikas is AWAY; work is FULLY AUTONOMOUS — no waiting for his approval. Fix the CLASS not the case.
 Every reviewable thing he sees = a visual HTML page. Never fabricate. Keep this file updated every turn.
 
-Last updated: 2026-08-18 · driver: fresh Fable session (autonomous resume)
+Last updated: 2026-08-19 · driver: Fable session · demo delivered
 
 ## Mode & standing orders (Vikas, 2026-08-17)
 - FULLY AUTONOMOUS. Do not wait for approval/permission. Run QA from every angle, write a spec report,
@@ -30,6 +30,7 @@ Last updated: 2026-08-18 · driver: fresh Fable session (autonomous resume)
 | 6 | Fix: "show version on sw" guessed sw1 — must ASK which switch | DONE — PR #46 merged + LIVE-VERIFIED: "show version on sw" now lists sw1-sw4 and asks, runs nothing |
 | 7 | Spawn QA agents, test from EVERY angle, don't wait for me | IN PROGRESS — 3/5 QA reports in (wireup, intent, adversarial). Root cause = deterministic keyword layer over the real LLM planner. Adversarial: all SAFETY laws held; gate fails-open on bad mode value + 2 stack-trace leaks. 2 running. |
 | 8 | Full autonomous; self-resume on quota reset; live to-do tracker | DONE — this file + wakeup armed |
+| 9 | Create a demo video to launch; cover ALL features, show full capability | DONE (2026-08-19) — 4 REAL screen-capture GIFs recorded off the live app (ambiguity-ask "which switch", investigation loop, real show-version read, full P1 triage→verdict+tickets) delivered as files; launch page published (artifact 325666a3) embedding 3 clips + full capability matrix (all features w/ honest live/read-only/not-connected states) + feedback layer. Captured on cheap Sonnet; app restored to Opus default. |
 
 ## Build waves (copilot) — see docs/copilot-design.md
 - CW-1 desk + identity + capability honesty — MERGED + live 2026-08-17
