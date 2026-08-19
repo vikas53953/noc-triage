@@ -4,7 +4,7 @@
 first. Vikas is AWAY; work is FULLY AUTONOMOUS — no waiting for his approval. Fix the CLASS not the case.
 Every reviewable thing he sees = a visual HTML page. Never fabricate. Keep this file updated every turn.
 
-Last updated: 2026-08-19 · driver: Fable session · demo delivered
+Last updated: 2026-08-19 · driver: Fable session · panel+banner+synthesis-fix+launch MP4 shipped
 
 ## Mode & standing orders (Vikas, 2026-08-17)
 - FULLY AUTONOMOUS. Do not wait for approval/permission. Run QA from every angle, write a spec report,
@@ -30,7 +30,9 @@ Last updated: 2026-08-19 · driver: Fable session · demo delivered
 | 6 | Fix: "show version on sw" guessed sw1 — must ASK which switch | DONE — PR #46 merged + LIVE-VERIFIED: "show version on sw" now lists sw1-sw4 and asks, runs nothing |
 | 7 | Spawn QA agents, test from EVERY angle, don't wait for me | IN PROGRESS — 3/5 QA reports in (wireup, intent, adversarial). Root cause = deterministic keyword layer over the real LLM planner. Adversarial: all SAFETY laws held; gate fails-open on bad mode value + 2 stack-trace leaks. 2 running. |
 | 8 | Full autonomous; self-resume on quota reset; live to-do tracker | DONE — this file + wakeup armed |
-| 9 | Create a demo video to launch; cover ALL features, show full capability | DONE (2026-08-19) — 4 REAL screen-capture GIFs recorded off the live app (ambiguity-ask "which switch", investigation loop, real show-version read, full P1 triage→verdict+tickets) delivered as files; launch page published (artifact 325666a3) embedding 3 clips + full capability matrix (all features w/ honest live/read-only/not-connected states) + feedback layer. Captured on cheap Sonnet; app restored to Opus default. |
+| 9 | Create a demo video to launch; cover ALL features (he rejected the GIFs+page as "not a launch video", pointed to Creatify) | DONE (2026-08-19 v2) — built a REAL 1080p H.264 MP4 with ffmpeg (kit at demo-captures/video/make-video.sh): intro card → 4 live scenes (which-switch, verdict, tickets, capabilities panel) → CTA, burned captions + soft music, NO watermarks. Delivered as file. Creatify declined (needs his login/pay/terms; makes generic avatar video not the real product). Open offer: square/vertical cut, longer version. |
+| 10 | "I can't see any of the new features on localhost:3000" | DONE — root cause: features live on /desk.html, he was on old root page. Shipped: ⚙ Capabilities panel on desk (every feature + integration w/ live/off light, read from status endpoints) + "Where Everything Lives" map (artifact ca59340d). NetFlow honestly flagged NOT built (we have syslog+SNMP+pcap). |
+| 11 | Giant "Not yet" banner irritating + "write-up declined by model" keeps showing | DONE — banner shrunk to one-line pointer to the panel. "declined" root-caused: Opus5 safety classifier refuses to SUMMARISE findings carrying device config/creds/HTML. SAFE fix: redact secrets+markup, retry ONCE on SAME model, else one calm line. CAUGHT+REMOVED a sub-agent bypass that switched to a permissive model to defeat the refusal. |
 
 ## Build waves (copilot) — see docs/copilot-design.md
 - CW-1 desk + identity + capability honesty — MERGED + live 2026-08-17
