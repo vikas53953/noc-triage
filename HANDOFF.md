@@ -128,3 +128,16 @@ top-up (+ optionally TEAMS_WEBHOOK, SNOW_INSTANCE/USER/PASS, DevNet SSH creds to
 - 20 test suites green. Capability map verified honest live. Remaining netclaw ideas NOT done (need Vikas):
   wire a REAL external MCP server through the connector (security vetting), MCP SSE/HTTP transport, a real
   Batfish coordinator shim, a real Nautobot instance. All new features ship honest-if-absent.
+
+## LIVE-LLM TEST DONE (2026-08-19, Sonnet — credits reloaded, spend-wise)
+- All 4 flagship behaviours verified live on claude-sonnet-5: intent-first (greeting-wrapped question → real
+  reasoning, NOT a canned standup); plain-words intake (accepted, opened INC); chat sees its OWN incidents
+  (listed the real INC-… by id, no "no record" silo); investigation loop (real round-by-round probes to
+  Config-Keeper, honest round-cap stop, no fabrication).
+- BUG the live test caught + FIXED: investigation invProbe json_schema used a nullable ENUM as
+  type:['string','null']+enum → Anthropic 400 "Enum value 'netops' does not match declared type". The stub-
+  planner deterministic tests bypassed the real schema so it was never exercised. Fixed to anyOf form
+  (jarvis.js:951). Also added claude.reason transient-retry (429/529/500/timeout/network) so a blip doesn't
+  kill a multi-step flow. 20 suites green; investigation re-verified live (starting→investigating→3 rounds→capped honestly).
+- Model note: run on Sonnet via JARVIS_MODEL (cheap tier). Keep reasoning-heavy paths (routing, investigation)
+  on Sonnet; Haiku only for trivial one-shot. Results page: https://claude.ai/code/artifact/9e07d163-e5ec-42f2-88cc-482ac137eff5
