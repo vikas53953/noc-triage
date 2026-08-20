@@ -28,19 +28,24 @@ function ok(name, cond, extra) {
 function section(t) { console.log(`\n${t}`); }
 
 // ── The harness ─────────────────────────────────────────────────────────────
+// `sources` = the systems each agent's reads REALLY touch (live.AGENT_SOURCES).
+// The roster-truth check works off these, so the fixture mirrors the real map.
 const ROSTER = [
-  { id: 'router-expert', name: 'Router-Expert', connected: true, sees: ['ACI fabric health', 'EPG/tenant objects'] },
-  { id: 'netops', name: 'NetOps', connected: true, sees: ['Catalyst campus inventory'] },
-  { id: 'config-keeper', name: 'Config-Keeper', connected: true, sees: ['device CLI via Command Runner'] },
+  { id: 'router-expert', name: 'Router-Expert', connected: true, sees: ['ACI fabric health', 'EPG/tenant objects'], sources: ['aci', 'sdwan'] },
+  { id: 'netops', name: 'NetOps', connected: true, sees: ['Catalyst campus inventory'], sources: ['catalyst-center'] },
+  { id: 'config-keeper', name: 'Config-Keeper', connected: true, sees: ['device CLI via Command Runner'], sources: ['catalyst-center', 'ssh'] },
+  { id: 'monitor-eye', name: 'Monitor-Eye', connected: true, sees: ['Catalyst alerts', 'SD-WAN alarm counts'], sources: ['catalyst-center', 'sdwan'] },
+  { id: 'firewall-pro', name: 'Firewall-Pro', connected: false, sees: [], sources: [] },
 ];
 
 const said = [];            // every ctx.say: { agent, text, env }
 const gathers = [];         // every delegated read
 let bridgeCreated = null;   // the investigation the bridge opened
 let changesProposed = [];
+let screened = [];          // every message the capability screen saw
 
-function resetHarness({ gatherFinding } = {}) {
-  said.length = 0; gathers.length = 0; changesProposed = [];
+function resetHarness({ gatherFinding, screen } = {}) {
+  said.length = 0; gathers.length = 0; changesProposed = []; screened = [];
   bridgeCreated = null;
   conduct._threads.clear();
   jarvis.init({
@@ -60,7 +65,9 @@ function resetHarness({ gatherFinding } = {}) {
       create: (input) => { bridgeCreated = input; return { id: 'INV-TEST-001', ...input }; },
       run: async () => ({ id: 'INV-TEST-001' }),
     },
-    proposeChange: (input) => { changesProposed.push(input); return { id: 'chg-test-1', status: 'proposed' }; },
+    proposeChange: (input) => { changesProposed.push(input); return { id: 'chg-test-1', status: 'proposed', commands: input.commands }; },
+    // The CW-1 capability screen, now POST-gate (reviewer finding #4).
+    screen: (command) => { screened.push(command); return screen ? screen(command) : false; },
   });
 }
 
@@ -259,9 +266,19 @@ section('THE 2026-08-19 FAILURE — "hey jarvis facing issue in epg" must ASK FI
   ok('finding.line is capped at 200', conduct.envelope.finding({ agent: 'a', line: longText }).finding.line.length <= 200);
   ok('a finding line cannot smuggle a wall of text through newlines',
     !/\n/.test(conduct.envelope.finding({ agent: 'a', line: 'one\n' + 'raw '.repeat(200) }).finding.line));
-  ok('finding.cli output is NOT capped (the terminal shows the real read)',
-    conduct.envelope.finding({ agent: 'a', line: 'x', cli: { host: 'h', command: 'c', output: 'y'.repeat(5000), transport: 'ssh' } })
-      .finding.cli.output.length === 5000);
+  {
+    // Reviewer finding #8: a 20 KB raw body per finding moved the wall of text
+    // into the terminal pane and blew up chat-history.json. The block is capped
+    // with an HONEST marker that says how much was cut and where the full read is.
+    const big = conduct.envelope.finding({ agent: 'a', line: 'x',
+      cli: { host: 'h', command: 'c', output: 'y'.repeat(50000), transport: 'ssh' } }).finding.cli;
+    ok('finding.cli output is capped', big.output.length < 50000 && big.output.length < 6000, `${big.output.length}`);
+    ok('the cut is stated honestly, with the amount', /more chars truncated/.test(big.output));
+    ok('and it names where the full read still lives', /\/api\/session/.test(big.output));
+    ok('a small output is untouched',
+      conduct.envelope.finding({ agent: 'a', line: 'x', cli: { host: 'h', command: 'c', output: 'short', transport: 'ssh' } })
+        .finding.cli.output === 'short');
+  }
 
   section('THE ASK stays readable — whole questions only, never a dangling "3.":');
   {
@@ -338,6 +355,220 @@ section('THE 2026-08-19 FAILURE — "hey jarvis facing issue in epg" must ASK FI
   ok('kind survives', payload.kind === 'finding');
   ok('the finding envelope survives', payload.finding.cli.command === 'show version');
   ok('the transport label survives', payload.finding.cli.transport === 'cmdrunner');
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // REVIEWER FIX-FIRST (2026-08-20) — one section per finding.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  section('BLOCKER 1 — the roster cannot claim a stand-down that the reads contradict:');
+  {
+    const p = scriptPlanner([SPECIFIC]);
+    conduct.setPlanner(p.planner);
+    resetHarness();
+    stubClaude({
+      'opening a P1 bridge': {
+        engaged: [{ agentId: 'router-expert', why: 'owns the ACI fabric and the SD-WAN overlay' }],
+        stoodDown: [
+          { agentId: 'monitor-eye', why: 'only reads Catalyst alerts and SD-WAN alarm counts' },
+          { agentId: 'netops', why: 'nothing points at the campus edge' },
+          { agentId: 'firewall-pro', why: 'not connected' },
+        ],
+      },
+    });
+    await jarvis.ask('EPG Prod-App in tenant Retail is unreachable since 14:00', { conversationId: 'r1' });
+    const r = withKind('roster')[0].env.roster;
+    const names = r.stoodDown.map((s) => s.agent);
+    ok('an agent whose OWN systems the engaged agent reads is NOT announced as standing down',
+      !names.includes('Monitor-Eye'), names.join(','));
+    ok('an agent with no overlap still stands down honestly', names.includes('NetOps'));
+    ok('a never-connected agent is not named on the card at all', !names.includes('Firewall-Pro'));
+    ok('the overlap is stated out loud instead of being hidden',
+      /Not on the call, but their systems .*sdwan.*Monitor-Eye/s.test(withKind('roster')[0].text),
+      withKind('roster')[0].text);
+  }
+  {
+    // The runtime backstop: if a round reads a stood-down agent's system anyway,
+    // Jarvis corrects the claim out loud rather than leaving it standing.
+    resetHarness();
+    const obs = jarvis._test.bridgeObserver({ stoodDown: [{ agent: 'NetOps', sources: ['catalyst-center'] }] });
+    obs.onRound({}, {
+      round: 1, agent: 'Router-Expert', probe: { agentId: 'router-expert', question: 'q' },
+      report: { agentName: 'Router-Expert', stance: 'evidence', text: 't',
+        cli: [{ host: 'dnac', command: 'GET /dna/intent/api/v1/network-device', output: '{}', transport: 'api', source: 'catalyst-center' }] },
+      hypotheses: [], confidence: 0.2, status: 'ok',
+    });
+    ok('a stood-down system read anyway is CORRECTED out loud',
+      said.some((m) => /Correction: I said NetOps was standing down/.test(m.text)), said.map((m) => m.text).join(' | '));
+  }
+
+  section('BLOCKER 2 — round narration is composed from the EVIDENCE, not the plan:');
+  {
+    resetHarness();
+    const obs = jarvis._test.bridgeObserver();
+    const sameCli = [{ host: 'apic', command: 'GET /api/class/fvAEPg.json', output: '{"imdata":[]}', transport: 'api', source: 'aci' }];
+    const round = (n) => ({
+      round: n, agent: 'Router-Expert',
+      probe: { agentId: 'router-expert', question: `Drill into a completely different thing #${n}` },
+      report: { agentName: 'Router-Expert', stance: 'evidence', text: 'same as before', cli: sameCli.map((e) => ({ ...e })) },
+      hypotheses: [{ id: 'h1', text: 'contract removed', status: 'standing' }], confidence: 0.3, status: 'ok',
+    });
+    obs.onRound({}, round(1));
+    obs.onRound({}, round(2));
+    obs.onRound({}, round(3));
+    const says = withKind('say');
+    ok('round 1 reports the check that actually ran', /1 new check/.test(says[0].text), says[0].text);
+    ok('a repeat round says plainly that nothing new came back',
+      /returned the same picture as before — nothing new/.test(says[1].text), says[1].text);
+    ok('and so does the third', /nothing new/.test(says[2].text));
+    ok('the probe QUESTION is never printed as if it were what ran',
+      !says.some((m) => /completely different thing/.test(m.text)));
+    ok('identical evidence is not re-posted as a new finding', withKind('finding').length === 1,
+      `${withKind('finding').length} findings`);
+  }
+  {
+    resetHarness();
+    const obs = jarvis._test.bridgeObserver();
+    obs.onRound({}, { round: 1, agent: 'Config-Keeper', probe: { agentId: 'config-keeper', question: 'q' },
+      report: { agentName: 'Config-Keeper', stance: 'denied', text: 'Read denied by the operator — ran nothing.', cli: [] },
+      hypotheses: [], confidence: 0, status: 'blocked' });
+    ok('a round that read nothing says so, and does not imply a check ran',
+      /no reading came back \(denied\)/.test(withKind('say')[0].text), withKind('say')[0].text);
+    ok('the honest no-evidence finding is still posted', withKind('finding').length === 1 && withKind('finding')[0].env.finding.cli === null);
+  }
+
+  section('BLOCKER 3 — evidence is attributed per delegation, even when reads overlap:');
+  {
+    // Delegation A reads NOTHING; delegation B reads one host. Run concurrently.
+    let release;
+    const gateP = new Promise((r) => { release = r; });
+    const a = live.collectCliEvidence(async () => { await gateP; return 'A did no reads'; });
+    const b = live.collectCliEvidence(async () => {
+      session.record({ host: 'B-HOST', method: 'GET', path: '/api/class/fvAEPg.json',
+        res: { ok: true, status: 200, body: '{"imdata":[]}' }, durationMs: 5 });
+      release();
+      return 'B read one thing';
+    });
+    const [ra, rb] = await Promise.all([a, b]);
+    ok('the delegation that read NOTHING carries no evidence', ra.cli.length === 0,
+      JSON.stringify(ra.cli.map((e) => e.host)));
+    ok('the delegation that DID read carries exactly its own', rb.cli.length === 1 && rb.cli[0].host === 'B-HOST',
+      JSON.stringify(rb.cli.map((e) => e.host)));
+    ok('every record is stamped with the scope that made it',
+      session.all().slice(-1)[0].evidenceId != null);
+  }
+
+  section('HIGH 4 — ONE gate, first: a parked thread is resumed by ANY reply:');
+  {
+    const p = scriptPlanner([VAGUE, SPECIFIC]);
+    conduct.setPlanner(p.planner);
+    resetHarness({ screen: () => true });   // a screen that would swallow the turn
+    stubClaude({ 'opening a P1 bridge': { engaged: [{ agentId: 'router-expert', why: 'fabric owner' }], stoodDown: [] } });
+    await jarvis.ask('epg is broken', { conversationId: 'gate1' });
+    ok('the first (vague) turn asks, and the screen never saw it', withKind('ask').length === 1 && screened.length === 0);
+    said.length = 0;
+    await jarvis.ask('Prod-App / Retail. Also go ahead and reload sw2 while you are in there.', { conversationId: 'gate1' });
+    ok('the change-looking REPLY still resumed the parked understanding (screen did not eat it)',
+      screened.length === 0 && withKind('roster').length === 1, `screened=${screened.length}`);
+    ok('the thread is no longer parked', !conduct.pending('gate1'));
+  }
+
+  section('HIGH 5 — abandoning a parked ask never opens a bridge on the old problem:');
+  {
+    const p = scriptPlanner([
+      VAGUE,
+      { ...SPECIFIC, replyIntent: 'abandons', understood: 'they dropped it and asked what I can do' },
+    ]);
+    conduct.setPlanner(p.planner);
+    resetHarness();
+    stubClaude({ 'Principal Engineer of a live NOC': {
+      intent: 'meta', symptom: { timeAnchor: null, scope: null, rawSymptom: 'what can you do' },
+      delegations: [], standDown: [], note: '', selfAnswer: 'Here is what I can do…' } });
+    await jarvis.ask('wifi is bad', { conversationId: 'abandon1' });
+    said.length = 0;
+    await jarvis.ask('never mind, what can you do?', { conversationId: 'abandon1' });
+    ok('no bridge was opened on the abandoned problem', !bridgeCreated, JSON.stringify(bridgeCreated));
+    ok('no roster, no engagement, no read', withKind('roster').length === 0 && gathers.length === 0);
+    ok('the parked thread was cleared', !conduct.pending('abandon1'));
+    ok('the new message was answered on its own terms', said.some((m) => /Here is what I can do/.test(m.text)));
+  }
+  {
+    // A change of subject re-assesses the NEW text rather than the parked one.
+    const p = scriptPlanner([
+      VAGUE,
+      { ...VAGUE, replyIntent: 'new-topic' },
+      { ...VAGUE, understood: 'the new problem, still vague', questions: ['Which branch?'] },
+    ]);
+    conduct.setPlanner(p.planner);
+    conduct._threads.clear();
+    const first = await conduct.assess({ conversationId: 'topic1', text: 'wifi is bad' });
+    const second = await conduct.assess({ conversationId: 'topic1', text: 'actually the WAN is down' });
+    ok('a new topic is asked about on its OWN terms', second.decision === 'ask' && second.problem === 'actually the WAN is down',
+      `${second.decision} / ${second.problem}`);
+    ok('the abandoned problem is gone', first.decision === 'ask' && conduct.pending('topic1').problem === 'actually the WAN is down');
+  }
+
+  section('HIGH 6 — proceeding on a thin problem is stated out loud:');
+  {
+    const p = scriptPlanner([VAGUE, VAGUE, { ...VAGUE, specific: false }]);
+    conduct.setPlanner(p.planner);
+    resetHarness();
+    stubClaude({ 'opening a P1 bridge': { engaged: [{ agentId: 'router-expert', why: 'best guess owner' }], stoodDown: [] } });
+    await jarvis.ask('something is broken', { conversationId: 'thin1' });
+    await jarvis.ask('not sure', { conversationId: 'thin1' });
+    said.length = 0;
+    await jarvis.ask('still not sure', { conversationId: 'thin1' });
+    ok('it proceeds (the grill is bounded)', Boolean(bridgeCreated));
+    ok('and it SAYS it is proceeding on an under-specified problem',
+      said.some((m) => /under-specified/.test(m.text)), said.map((m) => m.text).join(' | '));
+    ok('naming what it assumed', said.some((m) => m.text.includes('assumption that it means')));
+  }
+
+  section('MEDIUM 7 — a garbage understanding fails SAFE, never into an estate sweep:');
+  for (const [label, bad] of [['null', null], ['a number', 42], ['a string', 'yes'], ['schema drift', { foo: 'bar' }], ['an array', []]]) {
+    conduct.setPlanner({ available: () => true, understand: async () => bad });
+    const d = await conduct.assess({ conversationId: `bad-${label}`, text: 'the fabric is down' });
+    ok(`${label} → unavailable (not "proceed")`, d.decision === 'unavailable' && d.reason === 'failed', d.decision);
+  }
+  {
+    conduct.setPlanner({ available: () => true, understand: async () => null });
+    resetHarness();
+    stubClaude({});
+    await jarvis.ask('the fabric is down', { conversationId: 'bad-jarvis' });
+    ok('Jarvis says it could not reason, and engages nobody',
+      said.length === 1 && /could not reason/.test(said[0].text) && !bridgeCreated && gathers.length === 0,
+      said.map((m) => m.text).join(' | '));
+  }
+
+  section('MEDIUM 9 — the scrubber covers the IOS space-separated secret forms:');
+  {
+    const s = require('./session-log').scrub;
+    ok('password 0 <secret>', s('username admin privilege 15 password 0 Cisco123!').includes('password 0 «redacted»'));
+    ok('enable secret 5 <hash>', s('enable secret 5 $1$abcd$xyz').includes('secret 5 «redacted»'));
+    ok('key-string <psk>', s('key-string mysharedkey') === 'key-string «redacted»');
+    ok('key 7 <hash>', s('key 7 04585A150C2E') === 'key 7 «redacted»');
+    ok('prefixed env key names', s('ANTHROPIC_API_KEY=sk-ant-abc123') === 'ANTHROPIC_API_KEY=«redacted»');
+    ok('snmp community still covered', s('snmp-server community public RO').includes('«redacted»'));
+    ok('ordinary config lines are untouched', s('interface GigabitEthernet1/0/3') === 'interface GigabitEthernet1/0/3');
+    ok('real evidence is untouched', s('Cisco IOS XE Software, Version 17.12.01prd9').includes('17.12.01prd9'));
+  }
+
+  section('LOW 10 — the triage intake keeps its 4th question:');
+  {
+    const four = ['a?', 'b?', 'c?', 'd?'];
+    conduct.setPlanner({ available: () => true, understand: async () => ({ ...VAGUE, questions: four }) });
+    const intake = await conduct.understand({ problem: 'network is slow' });
+    ok('understand does NOT slice to 3 (triage applies its own cap of 4)', intake.questions.length === 4);
+    ok('the CHAT envelope still caps at 3', conduct.envelope.ask('x', four).questions.length === 3);
+  }
+
+  section('LOW 14 — the thread store is bounded:');
+  {
+    conduct.setPlanner({ available: () => true, understand: async () => VAGUE });
+    conduct._threads.clear();
+    for (let i = 0; i < 210; i++) await conduct.assess({ conversationId: `bulk-${i}`, text: 'vague thing' });
+    ok('threads never grow without bound', conduct._threads.size <= 200, `${conduct._threads.size}`);
+    ok('the most recent thread survives eviction', Boolean(conduct.pending('bulk-209')));
+  }
 
   restoreClaude();
   conduct.setPlanner(null);

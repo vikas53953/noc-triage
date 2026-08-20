@@ -409,3 +409,21 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - Every read now carries finding.cli {host, command, raw scrubbed output, honest transport} — Command
   Runner is 'cmdrunner', never dressed as ssh; anything else is 'api'. Raw output never enters message text.
 - 24 suites / 918 assertions green (new sources/conduct.cw9.test.js: 71; CW-7 suite grew by 8).
+
+## 2026-08-20 — CW-9 backend FIX-FIRST pass (reviewer blockers 1-3, high 4-6, medium 7-10)
+- Roster truth: agents now carry the SOURCE SYSTEMS they really read (live.AGENT_SOURCES). A stand-down is
+  only claimed when no engaged agent reads that agent's systems; overlap is stated out loud; a round that
+  reads a stood-down system anyway triggers an honest correction. Never-connected agents are off the card.
+- Narration from evidence: each round is described by the checks it actually produced, diffed against every
+  earlier round ("returned the same picture — nothing new"); repeated evidence is not re-posted; the probe
+  QUESTION is never printed as if it were what ran.
+- Evidence attribution: session-log contexts NEST and every wire record is stamped with its evidence scope
+  id at write time; the collector keeps only its own records (watermark sweep deleted). Proved live: a
+  delegation that read nothing came back with 0 entries while a concurrent real read kept its 2.
+- ONE gate, first: capabilities.checkAsk is now a POST-gate ctx.screen; a parked thread is resumed by ANY
+  reply (a write ask inside the answer is refused out loud AND the answer still resumes).
+- Abandon/new-topic on resume are LLM-judged (replyIntent); garbage planner output fails SAFE; thin proceed
+  is stated out loud; cli output capped 4000 with honest marker; IOS space-separated secrets scrubbed;
+  triage keeps its 4th question and now posts kind:'ask'; operatorTz carried on HTTP; change steps = record.
+- 24 suites / 966 assertions green (CW-9 suite 119). Live Sonnet: EPG ask-first 0 reads; abandonment opens
+  no bridge; concurrent delegations do not swap evidence; roster claims no false stand-down.

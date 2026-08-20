@@ -110,6 +110,22 @@ function transportOf(value) {
   return 'api';
 }
 
+// How much RAW output one terminal block carries into the chat (and onto disk).
+// A 20 KB APIC JSON body per finding turned chat-history.json into 267 KB in 34
+// messages and shipped the wall of text into the terminal pane (reviewer finding
+// #8). The block is capped with the SAME honest truncation marker the session log
+// uses, and it names where the untruncated read still lives — nothing is hidden,
+// and no read is silently shortened.
+const OUTPUT_MAX = Number(process.env.CW9_CLI_OUTPUT_MAX) > 0
+  ? Number(process.env.CW9_CLI_OUTPUT_MAX) : 4000;
+
+function capOutput(text) {
+  const s = text == null ? '' : String(text);
+  if (s.length <= OUTPUT_MAX) return s;
+  return s.slice(0, OUTPUT_MAX) +
+    `\n… (${s.length - OUTPUT_MAX} more chars truncated — full read in the CLI/session view, /api/session)`;
+}
+
 function cliOf(cli) {
   if (!cli || typeof cli !== 'object') return null;
   return {
@@ -117,9 +133,12 @@ function cliOf(cli) {
     command: String(cli.command || '').trim(),
     // RAW output (already secret-scrubbed upstream by the session log). It is
     // never summarised away and never re-typed into `text` — it travels ONLY
-    // here, and the UI escapes it at the sink.
-    output: cli.output == null ? '' : String(cli.output),
+    // here, capped with an honest marker, and the UI escapes it at the sink.
+    output: capOutput(cli.output),
     transport: transportOf(cli.transport),
+    // Which source system this read touched (roster-truth checking + the UI's
+    // caption). Never guessed: it comes from the record that made the call.
+    source: cli.source ? String(cli.source) : null,
   };
 }
 
@@ -191,8 +210,15 @@ function clear(conversationId) {
   threads.delete(String(conversationId || 'default'));
 }
 
+// Bounded (reviewer finding #14): a console left running for weeks must not
+// accumulate threads forever. Oldest-first eviction, and a thread is only ever
+// a few short strings.
+const MAX_THREADS = 200;
 function saveThread(conversationId, t) {
-  threads.set(String(conversationId || 'default'), t);
+  const key = String(conversationId || 'default');
+  threads.delete(key);          // re-insert so Map order is least-recent-first
+  threads.set(key, t);
+  while (threads.size > MAX_THREADS) threads.delete(threads.keys().next().value);
   return t;
 }
 
@@ -211,10 +237,12 @@ function saveThread(conversationId, t) {
  *
  * Nothing here reads the network or engages an agent; that is the whole point.
  */
-async function assess({ conversationId, text, operatorTz } = {}) {
+async function assess({ conversationId, text, operatorTz, _depth } = {}) {
   const said = String(text || '').trim();
   if (!available()) {
-    return { decision: 'unavailable', why: 'no reasoning planner is wired up or it has no key' };
+    // No planner at all (no key / not wired). The caller keeps its own honest
+    // path — this is not a reasoning FAILURE, it is reasoning being absent.
+    return { decision: 'unavailable', reason: 'no-planner', why: 'no reasoning planner is wired up or it has no key' };
   }
 
   const open = pending(conversationId);
@@ -226,19 +254,51 @@ async function assess({ conversationId, text, operatorTz } = {}) {
 
   let u;
   try {
-    u = await planner.understand({ problem, operatorTz: operatorTz || null, answers: answers.slice() });
+    u = await planner.understand({
+      problem, operatorTz: operatorTz || null, answers: answers.slice(),
+      // The LATEST reply, given separately on a resume so the planner can judge
+      // whether it answers the questions, changes the subject, or abandons the
+      // problem entirely (reviewer finding #5).
+      reply: open ? said : null,
+    });
   } catch (err) {
-    return { decision: 'unavailable', why: (err && err.message) || 'the understanding step failed' };
+    return { decision: 'unavailable', reason: 'failed', why: (err && err.message) || 'the understanding step failed' };
+  }
+
+  // FAIL SAFE, NOT OPEN (reviewer finding #7). A null, a number, or a
+  // schema-drifted object is not "specific enough to engage the squad" — it is
+  // an understanding we do not have. Step aside honestly; engage nobody.
+  if (!u || typeof u !== 'object' || Array.isArray(u)
+      || typeof u.specific !== 'boolean' || typeof u.understood !== 'string') {
+    return { decision: 'unavailable', reason: 'failed',
+      why: 'the understanding step came back in a shape I could not read, so I did not act on it' };
   }
 
   const understood = (u && u.understood) || problem;
   const hypotheses = (u && Array.isArray(u.hypotheses)) ? u.hypotheses : [];
   const relevantFronts = (u && Array.isArray(u.relevantFronts)) ? u.relevantFronts : [];
 
-  // Not a problem report at all (a greeting, a meta ask, "run show version on
-  // sw2") — the gate stays out of the way. It never asks narrowing questions
-  // about something that is not a problem.
-  if (u && u.problemReport === false && !open) {
+  // ── A REPLY to parked questions is judged by the LLM, not assumed ──────────
+  // (reviewer finding #5). It either answers them, changes the subject, or walks
+  // away — and "never mind, what can you do?" must NEVER open a bridge on the
+  // problem the operator just abandoned.
+  if (open) {
+    const intent = typeof u.replyIntent === 'string' ? u.replyIntent : 'answers';
+    if (intent === 'abandons') {
+      clear(conversationId);
+      return { decision: 'not-a-problem', understood: said, abandoned: true, dropped: problem };
+    }
+    if (intent === 'new-topic') {
+      clear(conversationId);
+      // Start again on what they ACTUALLY said now. One level only — a planner
+      // that kept saying "new topic" could otherwise loop.
+      if ((_depth || 0) < 1) return assess({ conversationId, text: said, operatorTz, _depth: (_depth || 0) + 1 });
+      return { decision: 'not-a-problem', understood: said, switched: true };
+    }
+  } else if (u.problemReport === false) {
+    // Not a problem report at all (a greeting, a meta ask, "run show version on
+    // sw2") — the gate stays out of the way. It never asks narrowing questions
+    // about something that is not a problem.
     clear(conversationId);
     return { decision: 'not-a-problem', understood };
   }
@@ -303,7 +363,10 @@ async function understand({ problem, priorAnswers, operatorTz } = {}) {
     specific: !(u && u.specific === false),
     understood: (u && u.understood) || String(problem || ''),
     hypotheses: (u && Array.isArray(u.hypotheses)) ? u.hypotheses : [],
-    questions: (u && Array.isArray(u.questions)) ? u.questions.map(String).filter(Boolean).slice(0, MAX_QUESTIONS) : [],
+    // NOT sliced here (reviewer finding #10): the triage intake has always been
+    // allowed 4 questions and applies its own slice. The 3-question cap is a
+    // CHAT-ENVELOPE rule (envelope.ask), not a property of understanding.
+    questions: (u && Array.isArray(u.questions)) ? u.questions.map(String).filter(Boolean) : [],
     relevantFronts: (u && Array.isArray(u.relevantFronts)) ? u.relevantFronts : [],
   };
 }

@@ -317,8 +317,25 @@ async function ask(question, opts) {
   if (gate.decision === 'ask') return askNarrowing(q, gate);
   // A real, specific problem report → run the bridge (roster + the CW-7 loop).
   if (gate.decision === 'proceed') return runBridge(q, gate, { conversationId, operatorTz });
-  // Anything else (a question, a greeting, a command — or no gate available)
-  // takes the existing plan → gather → answer path, unchanged.
+  // The understanding step FAILED (threw, or came back in a shape we cannot
+  // read). That is not permission to engage the squad — fail SAFE (reviewer
+  // finding #7): say so, engage nobody, read nothing.
+  if (gate.decision === 'unavailable' && gate.reason === 'failed') {
+    speak('jarvis', conduct.envelope.say(
+      `I could not reason about that — ${gate.why}. I have engaged nobody and read nothing. Say it again and I will try once more.`));
+    ctx.status('jarvis', 'idle', 'Could not understand it — engaged nobody');
+    ctx.log(`[Jarvis] Conduct gate failed safe (${gate.why}) — zero engagement — "${q.slice(0, 60)}"`);
+    return;
+  }
+  // ONE GATE, FIRST, ON EVERY PATH (reviewer finding #4). The capability screen
+  // used to sit in FRONT of this in server.js, which meant an operator's ANSWER
+  // to parked questions could be swallowed by a change-proposal bubble and the
+  // thread orphaned in awaiting-info forever. It now runs HERE — after the gate
+  // has had its say — so nothing decides before conduct does. It may still only
+  // refuse (safety) or offer a proposal; it never routes an answer away.
+  if (typeof ctx.screen === 'function' && ctx.screen(q)) return;
+  // Anything else (a question, a greeting, a command) takes the existing
+  // plan → gather → answer path, unchanged.
   return planAndAnswer(q);
 }
 
@@ -611,7 +628,7 @@ async function runBridge(q, gate, opts) {
   } catch (err) {
     call = null;
   }
-  const engagedIds = (call && call.engaged.length ? call.engaged : roster.slice(0, 1).map((a) => ({ agentId: a.id, why: 'the only owner I can reach for this' })))
+  const engagedIds = (call && call.engaged.length ? call.engaged : [])
     .filter((e) => roster.some((a) => a.id === e.agentId));
   if (!engagedIds.length) {
     speak('jarvis', conduct.envelope.say(
@@ -620,14 +637,39 @@ async function runBridge(q, gate, opts) {
     return;
   }
   const engaged = engagedIds.map((e) => ({ agent: ctx.nameOf(e.agentId), why: e.why }));
-  const stoodDown = ((call && call.stoodDown) || [])
+
+  // ROSTER TRUTH (reviewer blocker #1). A stand-down claim is only made when it
+  // is true of the READS, not just of the plan: an agent whose own source
+  // systems an ENGAGED agent is going to read is NOT announced as standing down
+  // — it is named honestly as "not on the call, but their systems get read".
+  // Never-connected agents are left off entirely: naming them every time is
+  // noise on the one card that has to be scannable.
+  const sourcesOf = (id) => ((roster.find((a) => a.id === id) || {}).sources || []);
+  const engagedSources = new Set(engagedIds.flatMap((e) => sourcesOf(e.agentId)));
+  const claimed = ((call && call.stoodDown) || [])
     .filter((s) => s && s.agentId && !engagedIds.some((e) => e.agentId === s.agentId))
+    .filter((s) => (roster.find((a) => a.id === s.agentId) || {}).connected !== false);
+  const stoodDown = claimed
+    .filter((s) => !sourcesOf(s.agentId).some((src) => engagedSources.has(src)))
     .map((s) => ({ agent: ctx.nameOf(s.agentId), why: s.why }));
+  const overlapping = claimed
+    .filter((s) => sourcesOf(s.agentId).some((src) => engagedSources.has(src)))
+    .map((s) => ({ agent: ctx.nameOf(s.agentId), shared: sourcesOf(s.agentId).filter((src) => engagedSources.has(src)) }));
 
   speak('jarvis', conduct.envelope.say(conduct.capText(gate.understood)));
+  // The gate ran out of narrowing rounds and we are working a thin problem —
+  // say so plainly, and say what is being assumed (ambiguity law).
+  if (gate.thin) {
+    speak('jarvis', conduct.envelope.say(
+      `Heads up: this is still under-specified after ${conduct.MAX_ASK_ROUNDS} rounds of questions. ` +
+      `I am proceeding on the assumption that it means: ${gate.understood} — correct me and I will re-scope.`));
+  }
   speak('jarvis', conduct.envelope.roster(
     `On the bridge: ${engaged.map((e) => e.agent).join(', ')}.` +
-      (stoodDown.length ? ` Standing down: ${stoodDown.map((e) => e.agent).join(', ')}.` : ''),
+      (stoodDown.length ? ` Standing down: ${stoodDown.map((e) => e.agent).join(', ')}.` : '') +
+      (overlapping.length
+        ? ` Not on the call, but their systems (${overlapping[0].shared.join(', ')}) still get read: ${overlapping.map((o) => o.agent).join(', ')}.`
+        : ''),
     engaged, stoodDown));
   session.recordReasoning({
     command: 'BRIDGE',
@@ -636,7 +678,14 @@ async function runBridge(q, gate, opts) {
     interpretation: 'Opened a bridge on a problem the shared conduct gate judged specific enough to work — the engaged set is the only set the investigation loop may task.',
   });
 
-  const observer = bridgeObserver();
+  const observer = bridgeObserver({
+    // The backstop for the roster claim: if a round's REAL evidence touches a
+    // system belonging to someone we announced as standing down, Jarvis says so
+    // out loud instead of leaving a false claim standing.
+    stoodDown: claimed
+      .filter((s) => !sourcesOf(s.agentId).some((src) => engagedSources.has(src)))
+      .map((s) => ({ agent: ctx.nameOf(s.agentId), sources: sourcesOf(s.agentId) })),
+  });
   const rec = ctx.investigate.create({
     problem: gate.problem,
     understood: gate.understood,
@@ -650,22 +699,58 @@ async function runBridge(q, gate, opts) {
   ctx.status('jarvis', 'idle', 'Bridge closed');
 }
 
-// Narrates the CW-7 loop into the pinned envelope, round by round. It only ever
-// states what the record already holds — it computes no verdict of its own.
-function bridgeObserver() {
+// Narrates the CW-7 loop into the pinned envelope, round by round.
+//
+// NARRATION IS COMPOSED FROM THE EVIDENCE, NOT FROM THE PLAN (reviewer blocker
+// #2). The first cut printed the probe's QUESTION as if it were what ran, so
+// three rounds that produced byte-identical reads read like three escalating
+// investigations. Now each round is described by the checks it ACTUALLY
+// produced, diffed against every earlier round: a round that turned up nothing
+// new says so in plain words, and its repeated evidence is not posted again.
+function bridgeObserver(opts) {
   let closed = false;
+  const seen = new Set();                       // source|command already evidenced
+  const stoodDown = (opts && opts.stoodDown) || [];
+  const corrected = new Set();
   return {
     onRound(snap, round) {
       if (!round) return;
       const report = round.report || {};
+      const cli = Array.isArray(report.cli) ? report.cli : [];
+      const sig = (e) => `${e.source || 'unknown'}|${e.command || ''}`;
+      const fresh = cli.filter((e) => !seen.has(sig(e)));
+      cli.forEach((e) => seen.add(sig(e)));
       const lead = (round.hypotheses || []).find((h) => h.status === 'confirmed')
         || (round.hypotheses || []).find((h) => h.status !== 'eliminated');
-      speak('jarvis', conduct.envelope.say(
-        `Round ${round.round} — asked ${round.agent}: ${round.probe && round.probe.question}. ` +
-        `Came back ${report.stance}.` +
-        (lead ? ` Leading line: ${lead.text} (${Math.round((round.confidence || 0) * 100)}%).` : '')));
-      emitFindings((round.probe && round.probe.agentId) || 'jarvis',
-        { name: report.agentName, text: report.text, cli: report.cli });
+      const tail = lead ? ` Leading line: ${lead.text} (${Math.round((round.confidence || 0) * 100)}%).` : '';
+
+      // What actually happened this round, in the order of what is TRUE.
+      const head = !cli.length
+        ? `Round ${round.round} — ${round.agent}: no reading came back (${report.stance}).`
+        : !fresh.length
+          ? `Round ${round.round} — ${round.agent}: ${cli.length} check(s) ran and returned the same picture as before — nothing new.`
+          : `Round ${round.round} — ${round.agent}: ${fresh.length} new check(s) — ${fresh.slice(0, 2).map((e) => e.command).join(', ')}.`;
+      speak('jarvis', conduct.envelope.say(head + tail));
+
+      // Only NEW evidence is posted as findings; a repeat is not re-dumped.
+      if (fresh.length) {
+        emitFindings((round.probe && round.probe.agentId) || 'jarvis',
+          { name: report.agentName, text: report.text, cli: fresh });
+      } else if (!cli.length) {
+        emitFindings((round.probe && round.probe.agentId) || 'jarvis',
+          { name: report.agentName, text: report.text, cli: [] });
+      }
+
+      // ROSTER BACKSTOP: did this round read a system we said was standing down?
+      for (const s of stoodDown) {
+        const hit = cli.find((e) => s.sources.includes(e.source));
+        if (hit && !corrected.has(s.agent)) {
+          corrected.add(s.agent);
+          speak('jarvis', conduct.envelope.say(
+            `Correction: I said ${s.agent} was standing down, but that check read ${hit.source} — ` +
+            `${s.agent}'s own system. The read stands; the stand-down claim does not.`));
+        }
+      }
     },
     onUpdate(snap) {
       if (closed || !snap) return;
@@ -701,7 +786,9 @@ function offerChange(snap) {
     if (!rec || !rec.id) return;
     speak('jarvis', conduct.envelope.change(
       `Fix drafted for ${proposal.device} — ${rec.id}, held for your approval. Nothing has run.`,
-      { id: rec.id, steps: proposal.commands }));
+      // The steps shown are the ones the RECORD holds (reviewer finding #13) —
+      // the approval card can never show a different list from what would run.
+      { id: rec.id, steps: Array.isArray(rec.commands) && rec.commands.length ? rec.commands : proposal.commands }));
     ctx.log(`[Jarvis] Change ${rec.id} drafted from bridge ${snap.id} — held for approval, nothing applied`);
   } catch (err) {
     speak('jarvis', conduct.envelope.say(
@@ -1276,6 +1363,15 @@ version on sw2", "who is on INC-20260817-013?"). Those are false. Reason about w
 never decide this from keywords. Everything below only matters when problemReport is true — when
 it is false, set specific=true, questions to an empty list, and do not grill anyone.
 
+WHEN THE OPERATOR IS REPLYING to clarifying questions you already asked, you are also given
+their latest reply on its own. Judge it in "replyIntent":
+  - "answers"   — it narrows the SAME problem (even partially, even badly).
+  - "new-topic" — they are now talking about a DIFFERENT problem or asking something else.
+  - "abandons"  — they are dropping it ("never mind", "forget it", "what can you do?").
+Only "answers" may continue the parked problem; the other two mean it is finished. Never treat
+a change of subject as an answer, and never assume: judge what they MEAN. When you are not
+replying to questions, set replyIntent to "answers".
+
 Before probing anything you must decide whether the problem is SPECIFIC ENOUGH to investigate.
 A problem is specific enough when you can name a first read-only check worth running — it has
 enough of a symptom, a scope (a device/site/front) and/or a timeframe to act on.
@@ -1334,11 +1430,15 @@ Compose a fix, grounded ONLY in the evidence gathered (the rounds/reports). Retu
   manual/external (replace hardware, call a carrier, an operator action), set proposal to null and put
   the steps in summary. Never propose a change the evidence does not justify.`;
 
-async function invUnderstand({ problem, operatorTz, answers }) {
+async function invUnderstand({ problem, operatorTz, answers, reply }) {
   const format = { type: 'json_schema', schema: {
     type: 'object', additionalProperties: false,
-    required: ['problemReport', 'specific', 'understood', 'hypotheses', 'questions', 'relevantFronts'],
+    required: ['problemReport', 'replyIntent', 'specific', 'understood', 'hypotheses', 'questions', 'relevantFronts'],
     properties: {
+      // CW-9 (resume): does the operator's latest reply answer the parked
+      // questions, change the subject, or drop it? An abandoned problem must
+      // never be quietly investigated anyway.
+      replyIntent: { type: 'string', enum: ['answers', 'new-topic', 'abandons'] },
       // CW-9: is this a problem report at all? The shared conduct gate only
       // narrows PROBLEMS — a greeting or a direct command is never grilled.
       problemReport: { type: 'boolean' },
@@ -1360,8 +1460,10 @@ async function invUnderstand({ problem, operatorTz, answers }) {
     system: INV_UNDERSTAND_SYSTEM,
     messages: [{ role: 'user', content:
       `Current time (UTC): ${new Date().toISOString()}${operatorTz ? `  Operator timezone: ${operatorTz}` : ''}\n\n` +
-      `Problem the operator gave:\n"${String(problem || '')}"${answerBlock}\n\n` +
-      `Decide if this is specific enough to start probing. If not, ask; if yes, state it + initial hypotheses.` }],
+      `Problem the operator gave:\n"${String(problem || '')}"${answerBlock}` +
+      (reply ? `\n\nTheir LATEST reply, to the clarifying questions you asked:\n"${String(reply)}"\n` +
+        `Judge it in replyIntent: does it answer those questions, change the subject, or abandon the problem?` : '') +
+      `\n\nDecide if this is specific enough to start probing. If not, ask; if yes, state it + initial hypotheses.` }],
     maxTokens: 3000, effort: 'high', format,
   });
   if (res.refused) throw new Error('reasoning declined');
@@ -1370,6 +1472,8 @@ async function invUnderstand({ problem, operatorTz, answers }) {
     // Additive: investigation.js and triage.js ignore problemReport; the CW-9
     // conduct gate uses it to keep its hands off anything that is not a problem.
     problemReport: p.problemReport !== false,
+    // 'answers' | 'new-topic' | 'abandons' — only meaningful on a resume.
+    replyIntent: ['answers', 'new-topic', 'abandons'].includes(p.replyIntent) ? p.replyIntent : 'answers',
     specific: p.specific !== false,
     understood: p.understood || String(problem || ''),
     hypotheses: Array.isArray(p.hypotheses) ? p.hypotheses : [],

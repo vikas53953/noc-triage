@@ -1103,6 +1103,9 @@ function buildJarvisRoster() {
     name: agents[id]?.name || id,
     connected: !live.NO_BACKEND[id],
     sees: (live.CAPABILITIES[id] && live.CAPABILITIES[id].can) || [],
+    // CW-9: the source systems this agent's reads REALLY touch, so the bridge
+    // roster can be checked against them before it claims anyone stood down.
+    sources: live.sourcesFor(id),
     note: live.NO_BACKEND[id] ? `not connected — ${live.NO_BACKEND[id]}` : '',
   }));
   return squad.concat(mcp.rosterEntries());
@@ -1136,6 +1139,9 @@ jarvis.init({
   // so a greeting or a "what can you do / help" meta-ask is answered warmly from
   // the real, honest ability map — never a brusque refusal or an incomplete list.
   abilities: () => capabilities.list(),
+  // CW-9 — the CW-1 capability screen, run AFTER the conduct gate (never before
+  // it). Returns true when it answered and Jarvis should stop.
+  screen: (command) => jarvisCapabilityScreen(command),
   // CW-9 — the bridge: a chat problem report that the shared conduct gate judged
   // specific enough is run through the SAME CW-7 investigation loop, round by
   // round, with an observer that narrates it in the pinned envelope.
@@ -1687,6 +1693,17 @@ function runAgentAction(agentId, command) {
     && screenThis
     && live.isDeviceCliRequest(command)
     && guardrails.splitIntent(command).compound;
+  // CW-9 (reviewer finding #4, second half): while a conduct thread is PARKED
+  // awaiting the operator's answer, a safety refusal must refuse the change —
+  // and must NOT swallow the answer with it. The operator wrote "…since 2pm,
+  // general throughput. Also reload sw2" — the reload is refused out loud, and
+  // the scoping half still resumes the parked understanding, so the turn is not
+  // lost and the thread is not orphaned.
+  if (writeIntent.destructive && !compoundGoesToChokePoint
+      && agentId === 'jarvis' && conduct.pending((currentRequest() || {}).conversationId || 'default')) {
+    live.refuseWrite(agentId, command, writeIntent);
+    return simulateJarvisAction(agentId, command);
+  }
   if (writeIntent.destructive && !compoundGoesToChokePoint) {
     // The audit + activity record is written inside live.refuseWrite — the ONE
     // sink every refused write passes through. Logging it here as well would
@@ -1800,13 +1817,26 @@ function simulateJarvisAction(agentId, command) {
   // gate below, and it may only REFUSE-FOR-SAFETY (an unambiguous imperative to
   // perform an unbuilt ability, or an off-topic ask); it never answers or routes.
 
-  // CW-1 honest refusal. Before an open-ended ask reaches the reasoning engine,
-  // it is checked against the capability map (sources/capabilities.js — the
-  // single source of truth). ONLY two things are refused: an ask that plainly
-  // asks Jarvis to PERFORM an ability that is not built yet, and an ask with
-  // nothing to do with this NOC. Everything else passes through to real
-  // reasoning — a wrong refusal would be worse than a slow answer. The refusal
-  // text is built FROM the map, never hardcoded, and touches no device.
+  // CW-9 (reviewer finding #4): the capability screen NO LONGER sits in front of
+  // the conduct gate. It is handed to Jarvis as ctx.screen and runs AFTER the
+  // gate has decided (see jarvis.ask), so an operator's ANSWER to parked
+  // narrowing questions can never be swallowed by a change-proposal bubble and
+  // the thread can never be orphaned in awaiting-info. One gate, first, always.
+  const req = currentRequest() || {};
+  return jarvis.ask(command, { conversationId: req.conversationId || 'default', operatorTz: req.operatorTz || null });
+}
+
+// The CW-1 honest capability screen, now a POST-GATE screen (ctx.screen).
+// Checked against the capability map (sources/capabilities.js - the single
+// source of truth). ONLY two things are refused: an ask that plainly asks Jarvis
+// to PERFORM an ability that is not built yet, and an ask with nothing to do
+// with this NOC. Everything else passes through to real reasoning - a wrong
+// refusal would be worse than a slow answer. The refusal text is built FROM the
+// map, never hardcoded, and touches no device.
+// Returns TRUE when it answered (refusal or change proposal) and Jarvis should
+// stop; FALSE when the message should carry on to the planner.
+function jarvisCapabilityScreen(command) {
+  const agentId = 'jarvis';
   const check = capabilities.checkAsk(command);
   if (!check.allowed) {
     const a = agents[agentId];
@@ -1832,7 +1862,7 @@ function simulateJarvisAction(agentId, command) {
       });
       appendToActivityLog(`[${new Date().toISOString()}] [Jarvis] Offered a change proposal (chat never fires a change) — asked: "${String(command).slice(0, 60)}"\n`);
       updateAgentStatus(agentId, 'idle', 'Drafted a change proposal — waiting for you to confirm');
-      return;
+      return true;
     }
     session.audit({
       what: `ask: ${String(command).slice(0, 200)}`,
@@ -1846,15 +1876,9 @@ function simulateJarvisAction(agentId, command) {
       : `nothing in my capability map covers this`;
     appendToActivityLog(`[${new Date().toISOString()}] [Jarvis] Honest refusal — ${why} — asked: "${String(command).slice(0, 60)}"\n`);
     updateAgentStatus(agentId, 'idle', 'Answered honestly: not something I can do yet');
-    return;
+    return true;
   }
-
-  // Open-ended reasoning (triage/escalate/general/inferred) → REAL agentic Jarvis.
-  // CW-9: the conversation id and timezone travel with the ask, so the shared
-  // conduct gate can remember THIS thread's questions and the answer that
-  // resumes it — scoped to one conversation, never global.
-  const req = currentRequest() || {};
-  return jarvis.ask(command, { conversationId: req.conversationId || 'default', operatorTz: req.operatorTz || null });
+  return false;
 }
 
 // Jarvis: Daily standup — collect status from all agents
@@ -3140,7 +3164,7 @@ app.post('/api/command', (req, res) => {
   // assumes a string. (The global error handler at the end of this file is the
   // second net for anything a route still throws.)
   const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
-  const { agent, command, conversationId } = body;
+  const { agent, command, conversationId, operatorTz } = body;
   if (typeof agent !== 'string' || !agent.trim()) {
     return res.status(400).json({ error: 'A text "agent" is required (the agent id to talk to).' });
   }
@@ -3150,7 +3174,10 @@ app.post('/api/command', (req, res) => {
   if (conversationId != null && typeof conversationId !== 'string') {
     return res.status(400).json({ error: 'If you send a "conversationId" it must be text.' });
   }
-  handleCommand({ agent, command, conversationId });
+  // CW-9 (reviewer finding #12): operatorTz was read by handleCommand but never
+  // destructured here, so the HTTP surface silently dropped the operator's
+  // timezone while the websocket kept it. Both carry it now.
+  handleCommand({ agent, command, conversationId, operatorTz: typeof operatorTz === 'string' ? operatorTz : undefined });
   res.json({ success: true, message: 'Command queued' });
 });
 

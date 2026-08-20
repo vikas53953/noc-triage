@@ -27,8 +27,14 @@ const als = new AsyncLocalStorage();
 // ── Context: which agent / triage a wire call belongs to ────────────────────
 // Callers (live-agents runLive, triage withAgent, a manual retry) wrap their
 // live work in runWithContext so the wire calls underneath get tagged.
+// CW-9 fix: contexts now NEST — an inner context inherits the outer one and
+// overrides only the keys it sets. Before this, an inner runWithContext (a
+// delegated read inside a collection scope) REPLACED the store, which erased the
+// outer tag and made per-delegation attribution impossible. Every wire call made
+// under a scope is now stamped with that scope's id at WRITE time, so evidence
+// is attributed by the record itself and never by a watermark over a shared log.
 function runWithContext(context, fn) {
-  return als.run({ ...(context || {}) }, fn);
+  return als.run({ ...getContext(), ...(context || {}) }, fn);
 }
 function getContext() {
   return als.getStore() || {};
@@ -81,6 +87,24 @@ function scrub(text) {
   // the `snmp` prefix so a bare English "community <word>" is never touched.
   s = s.replace(/\b(snmp(?:[-\s]server)?[-\s]community)(\s+)(?!«)([^\s,;&"'}\])]{3,})/gi,
     (m, k, sep) => k + sep + '«redacted»');
+  // PREFIXED env-style key names: `ANTHROPIC_API_KEY=sk-…`, `DNAC_PASSWORD=…`,
+  // `SNOW_SECRET_KEY: …`. The rule above anchors on \b, which a leading
+  // `ANTHROPIC_` defeats, so the whole NAME is matched here instead.
+  s = s.replace(/\b([A-Za-z0-9_-]*(?:api[-_]?key|api[-_]?token|access[-_]?key|secret[-_]?key|password|passwd|secret|token))(\s*[:=]\s*)(?!"|«)([^\s,;&"'}\])]{4,})/gi,
+    (m, k, sep) => k + sep + '«redacted»');
+  // IOS/NX-OS CONFIG FORMS (CW-9 reviewer finding #9). A running-config states a
+  // secret with SPACES, not `=`: `password 0 Cisco123!`, `enable secret 5 $1$…`,
+  // `key-string mysharedkey`, `pre-shared-key address 1.1.1.1 key MYPSK`. Now
+  // that real device config travels into the chat as terminal evidence, these
+  // must be redacted at the same class-level sink as everything else. The
+  // keyword (and the encryption type, which is not a secret) stays visible so
+  // the line still reads as evidence: `password 0 «redacted»`.
+  s = s.replace(/\b(password|passwd|secret|key-string|key-hash|pre-shared-key|ppp\s+chap\s+password|md5)(\s+(?:\d\s+|encrypted\s+|0x)?)(?!«)([^\s,;"'<>]{3,})/gi,
+    (m, k, sep) => k + sep + '«redacted»');
+  // `username admin privilege 15 password 0 Cisco123!` is covered by the rule
+  // above (it redacts from `password`), and `snmp-server user … auth md5 <x>`
+  // by the md5 keyword. A bare `key 7 04585A150C2E` (interface/EIGRP auth):
+  s = s.replace(/\b(key)(\s+\d\s+)(?!«)([^\s,;"'<>]{3,})/gi, (m, k, sep) => k + sep + '«redacted»');
   // `Authorization: Bearer <token>` / a bare `Bearer <token>` in free text.
   s = s.replace(/\b(Bearer\s+)(?!«)[A-Za-z0-9._~+/=-]{8,}/g, (m, k) => k + '«redacted»');
   return s;
@@ -243,6 +267,10 @@ function record({ host, method, path, res, durationMs }) {
     path: path || '',
     agentId: ctx.agentId || null,
     agentName: ctx.agentName || null,
+    // CW-9: which evidence scope (one delegation / one probe) made this call.
+    // Stamped at write time — the ONLY honest way to attribute a command to the
+    // agent that actually ran it when two reads overlap.
+    evidenceId: ctx.evidenceId || null,
     triageId: ctx.triageId || null,
     front: ctx.front || null,
     origin: ctx.label || null, // e.g. "Device health check" / "manual retry"
