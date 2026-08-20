@@ -1,0 +1,424 @@
+<title>Jarvis Bridge Call Prototype</title>
+<style>
+:root{
+  --ground:#070b12;--panel:#0f1622;--panel2:#131e2f;--ink:#d6e2f0;--muted:#7e93ac;
+  --line:#1f2c40;--accent:#f0b445;--good:#46c78d;--sev:#ff6b6b;--ask:#58a6ff;
+  --term-bg:#04070b;--term-ink:#9fb6ce;--term-green:#7ee787;--term-amber:#ffd479;--term-prompt:#58a6ff;
+  --mono:Consolas,"Cascadia Mono",monospace;
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font:15px/1.55 "Segoe UI",system-ui,sans-serif;margin:0;padding:1.5rem 1rem 8rem}
+.head{max-width:1180px;margin:0 auto 1.2rem}
+.head .stamp{font:600 .72rem/1 var(--mono);letter-spacing:.14em;color:var(--accent);text-transform:uppercase}
+.head h1{margin:.25rem 0 .3rem;font-size:1.5rem;letter-spacing:-.01em}
+.head p{margin:0;color:var(--muted);max-width:70ch}
+.head b{color:var(--accent)}
+
+.stage{max-width:1180px;margin:0 auto;display:grid;gap:1rem}
+.stage.v1{grid-template-columns:minmax(0,760px);justify-content:center}
+.stage.v2{grid-template-columns:minmax(0,1fr) minmax(340px,480px)}
+.stage.v3{grid-template-columns:minmax(0,860px);justify-content:center}
+@media(max-width:900px){.stage.v2{grid-template-columns:1fr}}
+
+.pane{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+.pane-h{display:flex;align-items:center;gap:.6rem;padding:.6rem .9rem;border-bottom:1px solid var(--line);background:var(--panel2);font:600 .78rem/1 var(--mono);letter-spacing:.08em;color:var(--muted);text-transform:uppercase}
+.pane-h .dotr{width:9px;height:9px;border-radius:50%;background:var(--sev);box-shadow:0 0 6px var(--sev)}
+.chat{padding:1rem;display:flex;flex-direction:column;gap:.7rem;min-height:420px}
+
+.msg{max-width:88%;display:flex;flex-direction:column;gap:.25rem}
+.msg .who{font:600 .7rem/1 var(--mono);letter-spacing:.1em;color:var(--muted);text-transform:uppercase}
+.msg .bub{padding:.55rem .8rem;border-radius:10px;border:1px solid var(--line);background:var(--panel2)}
+.msg.op{align-self:flex-end;align-items:flex-end}
+.msg.op .bub{background:#1a2a1f;border-color:#2d4636}
+.msg.jarvis .who{color:var(--accent)}
+.msg.jarvis .bub{border-left:3px solid var(--accent)}
+.msg.ask .bub{border-left:3px solid var(--ask)}
+.msg .bub ul{margin:.3rem 0 0;padding-left:1.1rem}
+.msg .bub li{margin:.15rem 0}
+.msg .sys{font-size:.85rem;color:var(--muted)}
+
+.chips{display:flex;flex-wrap:wrap;gap:.45rem;align-self:flex-end}
+.chips button{font:600 .82rem/1.3 "Segoe UI",sans-serif;background:#14263c;color:#bcd7f5;border:1px solid #2a4568;border-radius:99px;padding:.45rem .8rem;cursor:pointer;text-align:left}
+.chips button:hover,.chips button:focus-visible{border-color:var(--ask);outline:none}
+
+.bridge{border:1px solid var(--line);border-radius:10px;background:var(--panel2);padding:.7rem .9rem;font-size:.88rem}
+.bridge .t{font:600 .72rem/1 var(--mono);letter-spacing:.1em;color:var(--sev);text-transform:uppercase;margin-bottom:.4rem}
+.roster{display:flex;flex-wrap:wrap;gap:.4rem}
+.roster span{font:600 .74rem/1 var(--mono);padding:.3rem .6rem;border-radius:99px;border:1px solid var(--line)}
+.roster .on{color:var(--good);border-color:#2d5c46;background:#0f2a1e}
+.roster .off{color:var(--muted);opacity:.55;text-decoration:line-through}
+
+.finding{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel2)}
+.finding summary{cursor:pointer;padding:.5rem .8rem;font-size:.9rem;display:flex;gap:.5rem;align-items:baseline;list-style:none}
+.finding summary::before{content:"▸";color:var(--muted);font-family:var(--mono)}
+.finding[open] summary::before{content:"▾"}
+.finding summary .agent{font:600 .72rem/1.6 var(--mono);color:var(--ask);text-transform:uppercase;letter-spacing:.08em;white-space:nowrap}
+.finding .body{border-top:1px solid var(--line)}
+
+.term{background:var(--term-bg);color:var(--term-ink);font:.82rem/1.5 var(--mono);padding:.7rem .9rem;overflow-x:auto;white-space:pre;border-radius:0 0 10px 10px}
+.term .p{color:var(--term-prompt)}
+.term .g{color:var(--term-green)}
+.term .a{color:var(--term-amber)}
+.term .r{color:var(--sev)}
+.term-cap{display:flex;justify-content:space-between;align-items:center;background:#0a1018;padding:.35rem .8rem;font:600 .7rem/1 var(--mono);letter-spacing:.08em;color:var(--muted)}
+.term-cap .dots{display:flex;gap:.3rem}
+.term-cap .dots i{width:8px;height:8px;border-radius:50%;display:inline-block}
+.term-cap .dots i:nth-child(1){background:#ff5f57}.term-cap .dots i:nth-child(2){background:#febc2e}.term-cap .dots i:nth-child(3){background:#28c840}
+
+.verdict{border:1px solid #2d5c46;border-radius:10px;background:#0f2a1e;padding:.7rem .9rem;font-size:.9rem}
+.verdict .t{font:600 .72rem/1 var(--mono);letter-spacing:.1em;color:var(--good);text-transform:uppercase;margin-bottom:.35rem}
+.chg{border:1px solid #5c4a2d;border-radius:10px;background:#2a2113;padding:.7rem .9rem;font-size:.9rem}
+.chg .t{font:600 .72rem/1 var(--mono);letter-spacing:.1em;color:var(--accent);text-transform:uppercase;margin-bottom:.35rem}
+
+.sidechat .term-pane{position:sticky;top:1rem}
+.tickrow{display:grid;grid-template-columns:auto auto 1fr;gap:.3rem .8rem;padding:.45rem .2rem;border-bottom:1px solid var(--line);font-size:.9rem;align-items:baseline}
+.tickrow .tt{font:600 .78rem/1.6 var(--mono);color:var(--muted);white-space:nowrap}
+.tickrow .ww{font:600 .72rem/1.7 var(--mono);letter-spacing:.06em;text-transform:uppercase;white-space:nowrap;color:var(--ask)}
+.tickrow.j .ww{color:var(--accent)}
+.tickrow.o .ww{color:var(--good)}
+
+.next{align-self:center;margin-top:.4rem;font:600 .85rem/1 var(--mono);background:var(--accent);color:#1d1503;border:none;border-radius:99px;padding:.6rem 1.3rem;cursor:pointer}
+.next:hover{filter:brightness(1.1)}
+.replay{background:transparent;color:var(--muted);border:1px solid var(--line)}
+
+.vbar{position:fixed;left:1rem;bottom:1rem;z-index:9998;display:flex;gap:.4rem;background:var(--panel2);border:1px solid var(--line);border-radius:99px;padding:.35rem;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+.vbar button{font:600 .78rem/1 var(--mono);background:transparent;color:var(--muted);border:none;border-radius:99px;padding:.5rem .85rem;cursor:pointer}
+.vbar button.on{background:var(--accent);color:#1d1503}
+
+.fbnotes{max-width:1180px;margin:1.4rem auto 0;display:grid;gap:.8rem;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.fbnotes>div{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:.8rem 1rem .9rem;font-size:.9rem}
+.fbnotes h3{margin:0 0 .3rem;font-size:.95rem;color:var(--accent)}
+.fbnotes p{margin:.2rem 0;color:var(--muted)}
+</style>
+
+<div class="head">
+  <div class="stamp">Prototype · throwaway · nothing built yet</div>
+  <h1>Jarvis as the call leader — the bridge experience</h1>
+  <p>This replays your real test — <b>"hey jarvis facing issue in epg"</b> — the way you described a bridge should run: understand first, engage only who's needed, short messages, and CLI output on a black screen like a real SSH session. Click the blue reply chips / <b>▶</b> to walk the call. Switch the 3 looks with the bar at bottom-left. Mark anything with 👍 / 👎 / 💬.</p>
+</div>
+
+<div class="stage v1" id="stage">
+  <div class="pane" id="chatPane">
+    <div class="pane-h"><span class="dotr"></span> P1 BRIDGE · INC-20260820-001 · EPG ACCESS <span style="margin-left:auto">SLA 03:42</span></div>
+    <div class="chat" id="chat"></div>
+  </div>
+  <div class="pane term-pane" id="sidePane" style="display:none">
+    <div class="pane-h">LIVE SESSION · apic1 / Leaf-101</div>
+    <div class="term" id="sideTerm" style="border-radius:0;flex:1;min-height:420px"><span class="p">jarvis@bridge</span>:~$ <span style="opacity:.5">waiting for first command…</span></div>
+  </div>
+</div>
+
+<div class="fbnotes">
+  <div data-fb="Ask-first opening"><h3>1 · Ask before touching anything</h3><p>Jarvis's first move is 3 narrowing questions — zero sweeps, zero engineers engaged. Last night's real reply swept the whole APIC first and asked last.</p></div>
+  <div data-fb="Short messages"><h3>2 · Call-length messages</h3><p>Every Jarvis line fits a bridge call: 1–2 sentences. Evidence is folded away until you expand it — no walls of text.</p></div>
+  <div data-fb="Bridge roster"><h3>3 · Who's on the call</h3><p>The bridge card shows who Jarvis pulled in and who was stood down — like a real call roster. Only the ACI engineer works this one.</p></div>
+  <div data-fb="SSH terminal output"><h3>4 · Black-screen CLI</h3><p>Command evidence renders as an SSH session — prompt, real command, colored output — not prose paragraphs.</p></div>
+  <div data-fb="Round-by-round narrowing"><h3>5 · The narrowing loop</h3><p>Jarvis tasks an engineer, reads the answer, states what it means in one line, then asks the next question — until cause is found.</p></div>
+  <div data-fb="Fix under change management"><h3>6 · Fix goes through change</h3><p>The fix is drafted as a change record and HELD for approval — Jarvis never touches devices on its own.</p></div>
+  <div data-fb="Which look — V1 bridge / V2 split terminal / V3 war-room ticker"><h3>7 · Pick the look</h3><p>V1: everything in the chat. V2: chat left + a persistent SSH pane right. V3: compact war-room timeline. Which one (or a mix)?</p></div>
+</div>
+
+<script>
+"use strict";
+var TERM1 =
+'<span class="p">jarvis@bridge</span>:~$ ssh admin@apic1\n' +
+'<span class="p">apic1#</span> moquery -c faultInst -f \'fault.Inst.dn*"APP-VIKAS-1"\'\n' +
+'<span class="r">F0467</span>  uni/tn-ACI-FIRST-TENENT/ap-APP/epg-APP-VIKAS-1\n' +
+'  severity : <span class="r">major</span>   lc: <span class="a">raised</span>   created: 10:18:44\n' +
+'  descr    : Fault delegate: invalid path binding\n' +
+'             <span class="a">Leaf-101 eth1/5 — vlan-1103 not resolved</span>\n' +
+'<span class="p">apic1#</span> _';
+var TERM2 =
+'<span class="p">jarvis@bridge</span>:~$ ssh admin@Leaf-101\n' +
+'<span class="p">Leaf-101#</span> show interface ethernet 1/5\n' +
+'Ethernet1/5 is <span class="r">down</span> (sfpAbsent)\n' +
+'  Hardware: 1000/10000 Ethernet, address: 00a3.8e21.b405\n' +
+'  Last link flapped: <span class="a">10:17:52</span>  (matches fault F0467)\n' +
+'<span class="p">Leaf-101#</span> show vlan id 1103\n' +
+'VLAN 1103 : <span class="r">not found in current port config</span>\n' +
+'<span class="p">Leaf-101#</span> _';
+
+var SCRIPT = [
+ {op:'hey jarvis facing issue in epg'},
+ {jarvis:'On it. Before I pull anyone in — three quick ones:', ask:['Which tenant / EPG — or just the app or IP that\'s affected?','What\'s failing — who can\'t reach what?','Since when? Any change around that time?'],
+  chips:['Tenant ACI-FIRST-TENENT, EPG APP-VIKAS-1 · app users can\'t reach it · started ~10:20, no change I know of']},
+ {jarvis:'That scopes it. Opening the bridge — I only need the fabric engineer for this.',
+  bridge:{on:['Router-Expert · ACI'],off:['Monitor-Eye','WAN-Watch','Config-Keeper']}},
+ {jarvis:'@Router-Expert — faults on APP-VIKAS-1 in ACI-FIRST-TENENT since ~10:20. What do you see?', task:true},
+ {finding:{agent:'Router-Expert',line:'Fault F0467 on that EPG — path binding down on Leaf-101 eth1/5, raised 10:18.',term:TERM1}},
+ {jarvis:'One fault, right EPG, right time. Cause is on Leaf-101 port eth1/5 — checking the port itself.'},
+ {finding:{agent:'Router-Expert',line:'eth1/5 is down (sfpAbsent), flapped 10:17 — and VLAN 1103 is gone from the port config.',term:TERM2}},
+ {verdict:'CAUSE FOUND — 2 rounds, 4 min. Leaf-101 eth1/5 went down at 10:17 (SFP not detected) and its VLAN binding dropped, so EPG APP-VIKAS-1 lost its path. Confidence: high — fault, port state and timeline all agree.'},
+ {chg:'FIX — HELD FOR CHANGE APPROVAL · CHG-20260820-014. (1) Reseat/replace SFP on Leaf-101 eth1/5. (2) Re-bind vlan-1103 static path on the EPG. Rollback ready. I don\'t touch anything until this is approved.'},
+ {jarvis:'Bridge summary posted to the incident. Say the word and I\'ll page change management.', end:true}
+];
+
+var chat = document.getElementById('chat');
+var stage = document.getElementById('stage');
+var sidePane = document.getElementById('sidePane');
+var sideTerm = document.getElementById('sideTerm');
+var step = 0, variant = 'v1', log = [];
+
+function el(h){var d=document.createElement('div');d.innerHTML=h;return d.firstElementChild;}
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;');}
+function termBlock(t){return '<div><div class="term-cap"><span class="dots"><i></i><i></i><i></i></span><span>ssh session · read-only</span></div><div class="term">'+t+'</div></div>';}
+
+function render(){
+  chat.innerHTML='';
+  var v3 = variant==='v3';
+  log.forEach(function(s,i){
+    var tt = '10:'+(21+i*2)+' ';
+    if(v3){
+      if(s.op) chat.appendChild(el('<div class="tickrow o"><span class="tt">'+tt+'</span><span class="ww">You</span><span>'+esc(s.op)+'</span></div>'));
+      if(s.jarvis) chat.appendChild(el('<div class="tickrow j"><span class="tt">'+tt+'</span><span class="ww">Jarvis</span><span>'+esc(s.jarvis)+(s.ask?'<ul>'+s.ask.map(function(q){return '<li>'+esc(q)+'</li>';}).join('')+'</ul>':'')+'</span></div>'));
+      if(s.bridge) chat.appendChild(el('<div class="tickrow j"><span class="tt">'+tt+'</span><span class="ww">Bridge</span><span class="roster">'+s.bridge.on.map(function(a){return '<span class="on">'+a+' ✓</span>';}).join('')+s.bridge.off.map(function(a){return '<span class="off">'+a+'</span>';}).join('')+'</span></div>'));
+      if(s.finding) chat.appendChild(el('<div class="tickrow"><span class="tt">'+tt+'</span><span class="ww">'+s.finding.agent+'</span><span><details class="finding"><summary style="padding:0"><span>'+esc(s.finding.line)+' <span style="color:var(--muted)">(expand CLI)</span></span></summary><div class="body">'+termBlock(s.finding.term)+'</div></details></span></div>'));
+      if(s.verdict) chat.appendChild(el('<div class="tickrow j"><span class="tt">'+tt+'</span><span class="ww">Verdict</span><span class="verdict" style="display:block">'+esc(s.verdict)+'</span></div>'));
+      if(s.chg) chat.appendChild(el('<div class="tickrow j"><span class="tt">'+tt+'</span><span class="ww">Change</span><span class="chg" style="display:block">'+esc(s.chg)+'</span></div>'));
+      return;
+    }
+    if(s.op) chat.appendChild(el('<div class="msg op"><span class="who">You · operator</span><div class="bub">'+esc(s.op)+'</div></div>'));
+    if(s.jarvis){
+      var extra = s.ask ? '<ul>'+s.ask.map(function(q){return '<li>'+esc(q)+'</li>';}).join('')+'</ul>' : '';
+      chat.appendChild(el('<div class="msg jarvis'+(s.ask?' ask':'')+'"><span class="who">Jarvis · call leader</span><div class="bub">'+esc(s.jarvis)+extra+'</div></div>'));
+    }
+    if(s.bridge) chat.appendChild(el('<div class="bridge"><div class="t">Bridge opened · P1 · roster</div><div class="roster">'+s.bridge.on.map(function(a){return '<span class="on">'+a+' ✓ engaged</span>';}).join('')+s.bridge.off.map(function(a){return '<span class="off">'+a+'</span>';}).join('')+'<span style="color:var(--muted);border:none">stood down — not relevant</span></div></div>'));
+    if(s.finding){
+      if(variant==='v2'){
+        chat.appendChild(el('<div class="msg"><span class="who">'+s.finding.agent+'</span><div class="bub">'+esc(s.finding.line)+' <span class="sys">→ live session, right pane</span></div></div>'));
+        sideTerm.innerHTML = s.finding.term;
+      } else {
+        chat.appendChild(el('<details class="finding"><summary><span class="agent">'+s.finding.agent+'</span><span>'+esc(s.finding.line)+'</span></summary><div class="body">'+termBlock(s.finding.term)+'</div></details>'));
+      }
+    }
+    if(s.verdict) chat.appendChild(el('<div class="verdict"><div class="t">✔ Cause found</div>'+esc(s.verdict)+'</div>'));
+    if(s.chg) chat.appendChild(el('<div class="chg"><div class="t">⏸ Fix drafted — held for approval</div>'+esc(s.chg)+'</div>'));
+  });
+  var last = log[log.length-1];
+  if(last && last.chips){
+    var c = el('<div class="chips"></div>');
+    last.chips.forEach(function(t){var b=document.createElement('button');b.textContent=t;b.onclick=advance;c.appendChild(b);});
+    chat.appendChild(c);
+  } else if(step < SCRIPT.length){
+    var b = el('<button class="next">▶ next</button>'); b.onclick=advance; chat.appendChild(b);
+  } else {
+    var r = el('<button class="next replay">↺ replay the call</button>');
+    r.onclick=function(){step=0;log=[];sideTerm.innerHTML='<span class="p">jarvis@bridge</span>:~$ <span style="opacity:.5">waiting for first command…</span>';render();advance();};
+    chat.appendChild(r);
+  }
+  chat.lastElementChild && chat.lastElementChild.scrollIntoView({block:'nearest'});
+}
+function advance(){ if(step<SCRIPT.length){ log.push(SCRIPT[step++]); render(); } }
+
+var bar = el('<div class="vbar"><button data-v="v1" class="on">V1 · bridge chat</button><button data-v="v2">V2 · split terminal</button><button data-v="v3">V3 · war-room ticker</button></div>');
+document.body.appendChild(bar);
+bar.addEventListener('click',function(e){
+  var v=e.target.getAttribute('data-v'); if(!v) return;
+  variant=v; stage.className='stage '+v+(v==='v2'?' sidechat':'');
+  sidePane.style.display = v==='v2' ? 'flex' : 'none';
+  bar.querySelectorAll('button').forEach(function(b){b.className=b.getAttribute('data-v')===v?'on':'';});
+  render();
+});
+advance(); // show the operator's opening message immediately
+</script>
+<script>
+/* ============================================================
+   Vikas review kit — feedback layer for every HTML review page.
+   Paste this <script> at the end of any artifact I hand him.
+
+   What it gives him:
+     - click any section marked data-fb="<label>" to attach a note
+     - thumbs up / down per section
+     - a floating panel listing everything he has said
+     - ONE button that copies it all as plain text to paste back
+
+   Why it exists: published artifacts cannot send data back into a
+   Claude session (no such capability). This turns "read a wall and
+   retype your thoughts" into "click, type, copy once".
+
+   Usage:
+     1. mark reviewable blocks:  <section data-fb="Option A — Slack True">
+     2. include this script once, at the end of the page.
+   ============================================================ */
+(function () {
+  "use strict";
+  var STORE = "vikas-fb-" + (document.title || location.pathname);
+  var notes = {};
+  try { notes = JSON.parse(localStorage.getItem(STORE) || "{}"); } catch (e) { notes = {}; }
+
+  function save() { try { localStorage.setItem(STORE, JSON.stringify(notes)); } catch (e) {} }
+
+  var css = document.createElement("style");
+  css.textContent = [
+    ':root{--fb-ink:#16232e;--fb-bg:#fff;--fb-line:#d8e0e8;--fb-accent:#2c7fc4;',
+    '--fb-yes:#1e7d4f;--fb-yes-bg:#e3f3ea;--fb-no:#b03535;--fb-no-bg:#fbe7e7;--fb-muted:#5a6b7a;}',
+    '@media (prefers-color-scheme:dark){:root{--fb-ink:#e6edf3;--fb-bg:#18232e;--fb-line:#2f3d4a;',
+    '--fb-accent:#5aa5dd;--fb-yes:#5cc78f;--fb-yes-bg:#14372a;--fb-no:#e07a7a;--fb-no-bg:#3d1d1d;--fb-muted:#93a4b3;}}',
+    '[data-fb]{position:relative;}',
+    '[data-fb].fb-has{outline:2px solid var(--fb-accent);outline-offset:3px;border-radius:8px;}',
+    '.fb-tools{position:absolute;top:.4rem;right:.4rem;display:flex;gap:.25rem;opacity:.45;',
+    'transition:opacity .15s;z-index:5;}',
+    '[data-fb]:hover .fb-tools,[data-fb]:focus-within .fb-tools{opacity:1;}',
+    '@media (prefers-reduced-motion:reduce){.fb-tools{transition:none;}}',
+    '.fb-tools button{font:600 .78rem/1 system-ui,sans-serif;border:1px solid var(--fb-line);',
+    'background:var(--fb-bg);color:var(--fb-ink);border-radius:99px;padding:.3rem .6rem;cursor:pointer;}',
+    '.fb-tools button:hover{border-color:var(--fb-accent);color:var(--fb-accent);}',
+    '.fb-tools button.on-yes{background:var(--fb-yes-bg);color:var(--fb-yes);border-color:var(--fb-yes);}',
+    '.fb-tools button.on-no{background:var(--fb-no-bg);color:var(--fb-no);border-color:var(--fb-no);}',
+    '.fb-note{margin-top:.6rem;width:100%;box-sizing:border-box;font:.92rem/1.5 system-ui,sans-serif;',
+    'color:var(--fb-ink);background:var(--fb-bg);border:1px dashed var(--fb-line);border-radius:8px;',
+    'padding:.55rem .7rem;resize:vertical;min-height:2.6rem;}',
+    '.fb-note:focus{outline:2px solid var(--fb-accent);outline-offset:1px;border-style:solid;}',
+    '.fb-bar{position:fixed;right:1rem;bottom:1rem;z-index:9999;display:flex;flex-direction:column;',
+    'align-items:flex-end;gap:.5rem;font:14px/1.5 system-ui,sans-serif;}',
+    '.fb-bar button{cursor:pointer;border-radius:99px;border:1px solid var(--fb-line);',
+    'background:var(--fb-bg);color:var(--fb-ink);padding:.55rem 1rem;font-weight:600;box-shadow:0 4px 14px rgba(0,0,0,.14);}',
+    '.fb-bar .fb-copy{background:var(--fb-accent);color:#fff;border-color:transparent;}',
+    '.fb-panel{background:var(--fb-bg);color:var(--fb-ink);border:1px solid var(--fb-line);border-radius:12px;',
+    'padding:.9rem 1rem;max-width:min(380px,90vw);max-height:50vh;overflow:auto;box-shadow:0 8px 30px rgba(0,0,0,.2);display:none;}',
+    '.fb-panel.open{display:block;}',
+    '.fb-panel h4{margin:0 0 .5rem;font-size:.95rem;}',
+    '.fb-panel li{margin-bottom:.5rem;font-size:.88rem;}',
+    '.fb-panel .lbl{font-weight:600;}',
+    '.fb-empty{color:var(--fb-muted);font-size:.88rem;margin:0;}',
+    '@media print{.fb-bar,.fb-tools{display:none;}}'
+  ].join("");
+  document.head.appendChild(css);
+
+  // The floating bar is built FIRST: per-section wiring calls render(), which
+  // needs these to exist. (Building it after the loop threw on the first
+  // section and left every later section without its buttons.)
+  var bar = document.createElement("div");
+  bar.className = "fb-bar";
+  var panel = document.createElement("div");
+  panel.className = "fb-panel";
+  var toggle = document.createElement("button");
+  toggle.type = "button";
+  var copy = document.createElement("button");
+  copy.type = "button"; copy.className = "fb-copy"; copy.textContent = "📋 Copy my feedback";
+  bar.appendChild(panel); bar.appendChild(toggle); bar.appendChild(copy);
+  document.body.appendChild(bar);
+
+  var blocks = [].slice.call(document.querySelectorAll("[data-fb]"));
+
+  // Standalone mode: a page with no marked-up blocks (e.g. a full-screen
+  // prototype we did not author) still gets a working note box, so the layer
+  // can be injected into ANY page rather than only pages we wrote.
+  if (!blocks.length) {
+    var solo = document.createElement("div");
+    solo.setAttribute("data-fb", document.title || "this page");
+    solo.setAttribute("data-fb-solo", "");
+    solo.style.cssText = "position:fixed;left:1rem;bottom:1rem;z-index:9998;width:min(320px,80vw);" +
+      "background:var(--fb-bg);color:var(--fb-ink);border:1px solid var(--fb-line);border-radius:12px;" +
+      "padding:2.2rem .8rem .8rem;box-shadow:0 8px 30px rgba(0,0,0,.2);font:14px/1.5 system-ui,sans-serif;";
+    var cap = document.createElement("div");
+    cap.textContent = "Notes on this page";
+    cap.style.cssText = "font-weight:600;font-size:.85rem;margin-bottom:.3rem;";
+    solo.appendChild(cap);
+    document.body.appendChild(solo);
+    blocks = [solo];
+  }
+  blocks.forEach(function (el) {
+    var key = el.getAttribute("data-fb");
+    if (!notes[key]) notes[key] = { verdict: "", text: "" };
+
+    var tools = document.createElement("div");
+    tools.className = "fb-tools";
+    var yes = document.createElement("button");
+    yes.type = "button"; yes.textContent = "👍 like"; yes.title = "I like this";
+    var no = document.createElement("button");
+    no.type = "button"; no.textContent = "👎 no"; no.title = "Not this";
+    var add = document.createElement("button");
+    add.type = "button"; add.textContent = "💬 note"; add.title = "Write a note";
+    tools.appendChild(yes); tools.appendChild(no); tools.appendChild(add);
+    el.appendChild(tools);
+
+    var note = document.createElement("textarea");
+    note.className = "fb-note";
+    note.placeholder = "Your note on “" + key + "”…";
+    note.value = notes[key].text || "";
+    // in standalone mode the box is the whole point — always show it
+    var solo = el.hasAttribute("data-fb-solo");
+    note.style.display = notes[key].text || solo ? "block" : "none";
+    el.appendChild(note);
+
+    function paint() {
+      yes.className = notes[key].verdict === "yes" ? "on-yes" : "";
+      no.className = notes[key].verdict === "no" ? "on-no" : "";
+      el.classList.toggle("fb-has", !!(notes[key].verdict || notes[key].text));
+      render();
+    }
+    yes.addEventListener("click", function () {
+      notes[key].verdict = notes[key].verdict === "yes" ? "" : "yes"; save(); paint();
+    });
+    no.addEventListener("click", function () {
+      notes[key].verdict = notes[key].verdict === "no" ? "" : "no"; save(); paint();
+    });
+    add.addEventListener("click", function () {
+      note.style.display = "block"; note.focus();
+    });
+    note.addEventListener("input", function () {
+      notes[key].text = note.value.trim(); save(); paint();
+    });
+    paint();
+  });
+
+  function collected() {
+    return Object.keys(notes)
+      .filter(function (k) { return notes[k].verdict || notes[k].text; })
+      .map(function (k) { return { key: k, v: notes[k].verdict, t: notes[k].text }; });
+  }
+
+  function asText() {
+    var items = collected();
+    if (!items.length) return "";
+    var out = ["FEEDBACK ON: " + (document.title || "this page"), ""];
+    items.forEach(function (i) {
+      var mark = i.v === "yes" ? "LIKE" : i.v === "no" ? "NO" : "NOTE";
+      out.push("- [" + mark + "] " + i.key + (i.t ? " — " + i.t : ""));
+    });
+    return out.join("\n");
+  }
+
+  function render() {
+    var items = collected();
+    toggle.textContent = items.length ? "🗒 " + items.length + " marked" : "🗒 no marks yet";
+    if (!items.length) { panel.innerHTML = '<p class="fb-empty">Hover any section, then use 👍 / 👎 / 💬.</p>'; return; }
+    var html = "<h4>What you've said</h4><ul>";
+    items.forEach(function (i) {
+      var mark = i.v === "yes" ? "👍" : i.v === "no" ? "👎" : "💬";
+      html += '<li>' + mark + ' <span class="lbl">' + escapeHtml(i.key) + "</span>" +
+        (i.t ? " — " + escapeHtml(i.t) : "") + "</li>";
+    });
+    panel.innerHTML = html + "</ul>";
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  toggle.addEventListener("click", function () { panel.classList.toggle("open"); });
+  copy.addEventListener("click", function () {
+    var text = asText();
+    if (!text) { copy.textContent = "nothing marked yet"; setTimeout(function () { copy.textContent = "📋 Copy my feedback"; }, 1600); return; }
+    var done = function () {
+      copy.textContent = "✅ copied — paste it to Claude";
+      setTimeout(function () { copy.textContent = "📋 Copy my feedback"; }, 2600);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else { fallback(); }
+    function fallback() {
+      var ta = document.createElement("textarea");
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); done(); } catch (e) { window.prompt("Copy this:", text); }
+      document.body.removeChild(ta);
+    }
+  });
+
+  render();
+})();
+
+</script>

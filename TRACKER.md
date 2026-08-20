@@ -379,3 +379,11 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - All honest-if-absent (need Batfish service / Nautobot creds). Credits out → deterministic verify + stub
   endpoints now; LLM path later. Each: build → adversarial review → merge → verify → TRACKER++.
 - Overnight autonomous; launcher armed. Vikas asleep. No blocking questions.
+
+## 2026-08-20 — Fable picked up after reboot; Vikas's bridge-call brief (HIS WORDS)
+- Vikas: understand-first "is not working" in CHAT — "i said 'i'm not able to access this epg'… it keeps on throwing me the same answer… not asking me any questions". EVIDENCE FOUND in squad/data/chat/chat-history.json: "hey jarvis facing issue in epg" → Jarvis planned 2 engineers, swept, dumped walls of text, asked "you didn't name the EPG" only at the END. Root class: ask-first landed on triage intake only, NOT the Jarvis chat path; raw agent dumps posted verbatim into chat.
+- Vikas wants the real NOC bridge experience: Jarvis = chief of staff / call leader — understands problem, asks until narrowed, engages only required teams round-by-round, then fix under change management. SHORT messages ("no one is going to read that chat"). Command output shown like an SSH session — black screen in the chat. Kill static-feeling lines ("i cannot do that…", "you did not name the epg…").
+- HIS PROCESS ORDER: prototype FIRST, his go-ahead + feedback, ONLY THEN build the real feature.
+- Prototype delivered (3 looks: bridge chat / split terminal / war-room ticker), replaying his EPG test:
+  https://claude.ai/code/artifact/3a0a9d67-634f-4d87-a20a-42227fcd426c — AWAITING HIS VERDICT. Do NOT build until he approves.
+- Pickup report page: https://claude.ai/code/artifact/9535c85a-e802-4583-9db9-54d5a718ffb0
