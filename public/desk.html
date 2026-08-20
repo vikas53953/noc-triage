@@ -458,6 +458,62 @@ pre.term{
   padding:.34rem .7rem;font-size:.74rem;font-weight:700;cursor:pointer}
 .inv-btn:hover{background:var(--purple-bg)}
 
+/* ============================================================
+   CW-9: bridge conduct — V2 SPLIT TERMINAL (approved prototype).
+   Chat on the left, a persistent SSH-style session pane on the
+   right. The CARDS and the black-screen blocks are styled once in
+   public/cw9-bridge.css (shared with the classic console) — only the
+   split layout, which needs the desk's room, lives here.
+   ============================================================ */
+.centersplit{
+  flex:1;min-height:0;display:grid;gap:.55rem;
+  /* the pane GROWS with the screen (the prototype's minmax(340px,480px) was a
+     fixed strip at every width in the first cut — an 80-column `show
+     interface` needed side-scrolling on a 2560px NOC monitor). */
+  grid-template-columns:minmax(0,1fr) minmax(340px,.6fr);
+  padding-right:.55rem;overflow:hidden
+}
+.centersplit.solo{grid-template-columns:minmax(0,1fr);padding-right:0}
+.centersplit.solo .termpane{display:none}
+.centersplit .chat{min-height:0;height:100%}
+.termpane{
+  display:flex;flex-direction:column;min-height:0;min-width:0;margin:.6rem 0 .1rem;
+  border:1px solid var(--line);border-radius:10px;background:var(--term-bg);overflow:hidden
+}
+.termpane-h{
+  display:flex;align-items:center;gap:.45rem;padding:.42rem .6rem;flex-shrink:0;
+  border-bottom:1px solid rgba(148,163,184,.25);background:rgba(148,163,184,.10);
+  font-family:var(--mono);font-size:.62rem;font-weight:800;letter-spacing:.08em;
+  text-transform:uppercase;color:#9fb6ce
+}
+.termpane-h .tdots{display:flex;gap:.25rem;flex-shrink:0}
+.termpane-h .tdots i{width:8px;height:8px;border-radius:50%;display:inline-block}
+.termpane-h .tdots i:nth-child(1){background:#ff5f57}
+.termpane-h .tdots i:nth-child(2){background:#febc2e}
+.termpane-h .tdots i:nth-child(3){background:#28c840}
+.termpane-h .tcount{margin-left:auto;color:#7e93ac;letter-spacing:.04em}
+.termbody{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:.5rem .55rem}
+.termidle{
+  font-family:var(--mono);font-size:.72rem;line-height:1.6;color:#7e93ac;padding:.4rem .2rem
+}
+.termidle .p{color:#58a6ff}
+
+/* an ask bubble wears the blue edge; the cards come from the shared sheet */
+.bubble.askq{border-left:3px solid var(--info)}
+/* the chat column is a flex column with its own scroll — cards must never be
+   squeezed to a hairline when the thread gets long. */
+.bridgecard,.findcard,.verdictcard,.changecard,.cw9-broken{flex-shrink:0;margin-top:.55rem}
+
+/* Stacking threshold. This desk is queue + chat + terminal + evidence board;
+   under ~1600px the side-by-side split leaves a chat card too narrow to read a
+   finding line in (measured: 322px at 1440). Below that the terminal goes
+   UNDER the chat, where it gets the full width instead of a 42-column strip. */
+@media (max-width:1599px){
+  .centersplit{display:flex;flex-direction:column;padding-right:0;overflow:hidden}
+  .centersplit .chat{flex:1;height:auto}
+  .termpane{flex:0 0 auto;max-height:38vh;margin:0 .55rem .45rem}
+}
+
 /* ---------- name gate ---------- */
 .gate{
   position:fixed;inset:0;z-index:400;background:rgba(6,10,18,.86);backdrop-filter:blur(6px);
@@ -694,7 +750,20 @@ pre.term{
   font-size:.68rem;color:var(--ink3);line-height:1.55
 }
 @media (max-width:760px){ .cap-drawer{width:100vw} }
+/* CW-9 on a phone: the conversation keeps the room, the session pane sits under
+   it as a shorter strip the operator can scroll — never the other way round. */
+@media (max-width:760px){
+  /* both panes keep a usable size and the column itself scrolls, so the session
+     pane can never be clipped off the bottom of the screen. */
+  .centersplit{overflow-y:auto}
+  .centersplit .chat{min-height:38vh}
+  .termpane{flex:0 0 auto;max-height:30vh}
+}
 </style>
+<!-- CW-9: one shared implementation of the bridge envelope — same cards, same
+     escaper, same caps on both this page and the classic console. -->
+<link rel="stylesheet" href="/cw9-bridge.css">
+<script src="/cw9-bridge.js"></script>
 </head>
 <body>
 
@@ -772,13 +841,28 @@ pre.term{
     <div class="ctx" id="ctxBar">
       <b id="ctxTitle">No incident selected</b>
       <span class="qsub" id="ctxSub" style="margin-left:auto">Pick one on the left, or ask Jarvis anything</span>
+      <button class="btn btn-ghost btn-sm" id="termToggle"
+              title="Show or hide the live session pane">⌨ Session</button>
     </div>
 
-    <div class="chat" id="chat">
-      <div class="chat-empty" id="chatEmpty">
-        Nothing said yet. Ask Jarvis a question below, or pick an incident on the left
-        to see its real bridge conversation.
+    <!-- CW-9 V2: chat left, the live SSH-style session pane right. -->
+    <div class="centersplit" id="centerSplit">
+      <div class="chat" id="chat">
+        <div class="chat-empty" id="chatEmpty">
+          Nothing said yet. Ask Jarvis a question below, or pick an incident on the left
+          to see its real bridge conversation.
+        </div>
       </div>
+      <aside class="termpane" id="termPane">
+        <div class="termpane-h">
+          <span class="tdots"><i></i><i></i><i></i></span>
+          <span>Live session</span>
+          <span class="tcount" id="termCount">read-only</span>
+        </div>
+        <div class="termbody" id="termBody">
+          <div class="termidle" id="termIdle"><span class="p">jarvis@bridge</span>:~$ waiting for the first real command…</div>
+        </div>
+      </aside>
     </div>
 
     <div class="capbar" id="capBar"></div>
@@ -1167,6 +1251,171 @@ $('chat').addEventListener('click', function(e){
   if(j) evTab(j.getAttribute('data-jump'));
 });
 
+/* ============================================================
+   CW-9 — BRIDGE CONDUCT (V2 split terminal)
+   Renders the PINNED message envelope (docs/copilot-cw9-bridge-contract.md):
+     kind 'ask'     → blue-edge bubble + the narrowing questions
+     kind 'roster'  → bridge card: engaged (green) / stood down (struck, why)
+     kind 'finding' → one-line collapsed card; expand = the CLI block inline,
+                      and the SAME block (built once) goes to the live pane
+     kind 'verdict' → green cause card
+     kind 'change'  → amber "held for approval" card (never applies anything)
+
+   ADDITIVE: a message with no `kind` (or kind 'say') renders exactly as it did
+   before this wave — old transcripts are untouched.
+
+   ALL the string work — escaping, the honest transport label, the output cap,
+   the card markup, the same-origin check on a resume route — lives in ONE
+   shared module, public/cw9-bridge.js (CW9B), which the classic console loads
+   too and which sources/desk.cw9.ui.test.js requires directly. This file only
+   puts what that module returns onto the desk's screen.
+
+   NEVER SILENT: every render runs inside a try/catch and every array-shaped
+   field is coerced, so a malformed envelope becomes an honest "message not
+   shown" card. On a P1 bridge a message that vanishes is worse than a message
+   that admits it arrived broken.
+   ============================================================ */
+
+var CW9 = { awaiting:null, blocks:0, persistWarned:false };
+var CW9B = window.CW9B;
+
+/* ---------- the live session pane ---------- */
+/* takes the ALREADY BUILT block html — a multi-MB read is escaped once, not
+   once per place it is shown. */
+function cw9TermAppendHtml(blockHtml){
+  var body = $('termBody');
+  if(!body || !blockHtml) return;
+  var idle = $('termIdle'); if(idle) idle.remove();
+  var prev = body.querySelector('.tblock.latest'); if(prev) prev.classList.remove('latest');
+  var wrap = document.createElement('div');
+  wrap.innerHTML = blockHtml;
+  var block = wrap.firstElementChild;
+  if(!block) return;
+  block.classList.add('latest');
+  body.appendChild(block);
+  body.scrollTop = body.scrollHeight;
+  CW9.blocks++;
+  cw9PaintCount();
+  cw9ShowPane();
+  persistWork();
+}
+function cw9PaintCount(){
+  var c = $('termCount');
+  if(c) c.textContent = CW9.blocks + (CW9.blocks === 1 ? ' read · read-only' : ' reads · read-only');
+}
+var cw9UserHidPane = false;
+function cw9ShowPane(){
+  var s = $('centerSplit');
+  if(s && s.classList.contains('solo') && !cw9UserHidPane) s.classList.remove('solo');
+}
+(function(){
+  var t = $('termToggle');
+  if(!t) return;
+  try{ if(localStorage.getItem('noc-desk-term') === 'off'){ $('centerSplit').classList.add('solo'); cw9UserHidPane = true; } }catch(e){}
+  t.addEventListener('click', function(){
+    var s = $('centerSplit'); if(!s) return;
+    var off = s.classList.toggle('solo');
+    cw9UserHidPane = off;
+    try{ localStorage.setItem('noc-desk-term', off ? 'off' : 'on'); }catch(e){}
+  });
+})();
+
+/* ---------- putting a card on screen ---------- */
+function cw9Card(html){
+  if(!html) return null;
+  var d = document.createElement('div');
+  d.innerHTML = html;
+  var node = d.firstElementChild;
+  if(node) push(node);
+  return node;
+}
+function cw9Broken(kind, why){
+  cw9Card(CW9B.placeholderHtml(kind, why));
+}
+/* Remember where an answer must go, and say so in the ask bar. Stored with the
+   thread so a reload does not quietly send the answer somewhere else. */
+function cw9SetAwaiting(d){
+  CW9.awaiting = { resume: CW9B.resolveResume(d, location.origin), at: Date.now() };
+  var box = $('ask');
+  if(box) box.placeholder = 'Answer Jarvis so it can scope this…';
+  persistWork();
+}
+function cw9ClearAwaiting(){
+  if(!CW9.awaiting) return;
+  CW9.awaiting = null;
+  var box = $('ask');
+  if(box) box.placeholder = 'Ask Jarvis anything about the network…';
+  persistWork();
+}
+
+/* One entry point. Returns true when the message was an envelope this wave
+   owns, so the caller does NOT also paint it as a plain bubble. */
+function cw9Render(d){
+  if(!CW9B || !CW9B.isEnvelope(d)) return false;
+  var kind = d.kind;
+  try{
+    if(kind !== 'ask') cw9ClearAwaiting();
+    if(kind === 'ask'){
+      var b = bubble('jv', (d.agentName || d.agent || 'Jarvis') + ' · ' + clockOf(d.timestamp),
+        md(d.text || 'Before I pull anyone in — a couple of quick ones:') + CW9B.askHtml(d), true);
+      var bub = b && b.querySelector('.bubble');
+      if(bub) bub.classList.add('askq');
+      cw9SetAwaiting(d);
+      return true;
+    }
+    /* a short jarvis line may travel with the card — paint it first, then the card */
+    if(d.text && String(d.text).trim() && kind !== 'finding'){
+      jvMsg(d.agentName || d.agent || 'Jarvis', d.text, d.timestamp);
+    }
+    var html = '';
+    if(kind === 'roster')  html = CW9B.rosterHtml(d);
+    if(kind === 'verdict') html = CW9B.verdictHtml(d);
+    if(kind === 'change')  html = CW9B.changeHtml(d);
+    if(kind === 'finding'){
+      var f = CW9B.findingHtml(d, clockOf(d.timestamp));
+      cw9Card(f.html);
+      if(f.blockHtml) cw9TermAppendHtml(f.blockHtml);
+      return true;
+    }
+    if(html) cw9Card(html);
+    /* a kind with nothing in it is still a message Jarvis sent — say so rather
+       than dropping it or leaving an empty bubble behind. */
+    else if(!(d.text && String(d.text).trim())) cw9Broken(kind, 'it arrived empty');
+    return true;
+  }catch(err){
+    try{ cw9Broken(kind, (err && err.message) ? String(err.message).slice(0,120) : 'unexpected shape'); }catch(e2){}
+    return true;
+  }
+}
+
+/* Replay the bridge-conduct part of the server's chat-store history, once, and
+   only when this browser had no saved thread of its own (see restoreWork).
+   Each message is replayed inside its own try — one bad stored message can
+   never abort the rest of the replay. */
+function cw9Hydrate(data){
+  if(!CW9.canHydrate || CW9.hydrated) return;
+  CW9.hydrated = true;
+  var hist = data && data.chatHistory;
+  if(!Array.isArray(hist) || !hist.length) return;
+  var envelopes = hist.filter(function(d){
+    return d && d.type !== 'outgoing' && CW9B.isEnvelope(d);
+  }).slice(-40);
+  if(!envelopes.length) return;
+  sysMsg('Restored from the bridge history — the ' + envelopes.length +
+         ' call message' + (envelopes.length === 1 ? '' : 's') + ' below, and the session pane, are what the server kept.');
+  var bad = 0;
+  envelopes.forEach(function(d){
+    try{ cw9Render(d); }
+    catch(e){ bad++; try{ cw9Broken(d && d.kind, 'stored message could not be replayed'); }catch(e2){} }
+  });
+  if(bad) sysMsg(bad + ' stored message' + (bad === 1 ? '' : 's') + ' could not be replayed — the rest of the call is above.');
+}
+
+/* DEV/TEST ONLY — nothing in the app calls this. It exists so the envelope can
+   be exercised in a browser without waiting on the backend branch. Fixtures:
+   test/cw9-envelope-fixture.js */
+window.__cw9DevInject = function(msg){ return cw9Render(msg); };
+
 /* ---------- ask Jarvis (REAL POST /api/command; reply on the WS) ---------- */
 function sendAsk(){
   var box = $('ask'), t = box.value.trim();
@@ -1174,6 +1423,36 @@ function sendAsk(){
   if(!OP){ $('whoTag').click(); return; }
   box.value = '';
   meMsg(t);
+  /* CW-9: the thread is paused on Jarvis's narrowing questions — this reply IS
+     the answer, so it goes to the resume route the envelope named (same-origin
+     only) instead of opening a fresh ask. If the envelope named no route, the
+     answer falls through to the normal ask path, where the conduct layer
+     remembers the conversation. */
+  if(CW9.awaiting && CW9.awaiting.resume){
+    var tgt = CW9.awaiting.resume;
+    cw9ClearAwaiting();
+    /* re-check the route at SEND time as well as at receive time: a restored
+       thread's route came out of localStorage, so it is checked again against
+       this page's origin before the operator's words are posted anywhere. */
+    var safe = CW9B.resolveResume({ resume: tgt }, location.origin);
+    if(!safe){
+      sysMsg('That answer was not sent — the reply route Jarvis gave does not belong to this console. Nothing left this machine. Ask again and it will go down the normal path.');
+      return;
+    }
+    var payload = {}; payload[safe.field || 'text'] = t;
+    api(safe.url, { method:'POST', body: JSON.stringify(payload) })
+      .then(function(r){
+        if(!r.ok) return r.json().catch(function(){ return {}; }).then(function(b){
+          sysMsg('Jarvis could not take that answer — ' + esc((b && b.error) || ('HTTP ' + r.status)) +
+                 '. Nothing was run.');
+        });
+      })
+      .catch(function(err){
+        sysMsg('Could not reach the server: ' + esc(err.message || err) + '. Nothing was run.');
+      });
+    return;
+  }
+  cw9ClearAwaiting();
   /* An ask that reads like a change gets a proposal card too. The ask itself
      still goes to Jarvis untouched — nothing is hijacked, and no change is
      fired by typing. The card is the only trigger, and it needs a press. */
@@ -3698,6 +3977,12 @@ function connectWS(){
   ws.onmessage = function(ev){
     var m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
     if(!m || !m.type) return;
+    /* CW-9: the server's init snapshot carries the chat-store history. When this
+       browser had nothing saved locally, replay the bridge-conduct messages from
+       it so a reload (or a fresh machine) still shows the call and its session
+       pane. Plain old messages are left out on purpose — they are restored by
+       the local working context, and replaying them would double the thread. */
+    if(m.type === 'init' && m.data){ cw9Hydrate(m.data); return; }
     if(m.type === 'chat_message' && m.data){ onChat(m.data); return; }
     if(m.type === 'command_share' && m.data){ onShare(m.data); return; }
     if(m.type === 'system_error' && m.data){ sysMsg(esc(m.data.message || 'System error')); return; }
@@ -3748,6 +4033,13 @@ function scheduleReconnect(){ wsRetry = Math.min(wsRetry + 1, 6); setTimeout(con
 
 function onChat(d){
   if(d.type === 'outgoing') return;   // our own asks are already on screen
+  /* CW-9: an envelope kind paints itself (ask / roster / finding / verdict /
+     change). Anything without a kind falls through and renders as before. */
+  if(cw9Render(d)){
+    var p0 = d.proposal || d.changeProposal;
+    if(p0 && typeof p0 === 'object') proposalCard(p0, 'jarvis');
+    return;
+  }
   jvMsg(d.agentName || d.agent || 'Jarvis', d.text || '', d.timestamp);
   /* A reply may carry a drafted change. It is still only a PROPOSAL —
      the engine is not called until the operator presses go. */
@@ -3772,6 +4064,12 @@ function onTriage(type, d){
   switch(type){
     case 'triage_message':
       if(d.operator) bubble('me', esc(d.agentName || 'Operator') + ' · ' + clockOf(d.ts), md(d.text||''));
+      /* CW-9: a bridge message may carry an envelope kind. It paints itself;
+         anything without a kind keeps the old rendering exactly. */
+      else if(cw9Render({ kind:d.kind, text:d.text, questions:d.questions, roster:d.roster,
+                          finding:d.finding, verdict:d.verdict, change:d.change,
+                          agent:d.agent, agentName:d.agentName, timestamp:d.ts,
+                          triageId:d.triageId, resume:d.resume })){ /* painted */ }
       else if(!(d.tier === 'L4' && d.round === 2)) jvMsg(d.agentName || d.agent || 'Engineer', d.text || '', d.ts);
       break;
     case 'triage_verdict':
@@ -3836,15 +4134,50 @@ $('mobtabs').addEventListener('click', function(e){
    reading is restored so nothing they had on screen is lost.
    ============================================================ */
 function workKey(){ return 'noc-desk-working:' + (OP || '_'); }
+var PERSIST_CAP = 250000;
+/* Trim a container's HTML to fit a budget by DROPPING WHOLE OLDEST ELEMENTS —
+   never by cutting a string mid-tag, which would store broken markup. Returns
+   what fits, newest kept, plus whether anything was dropped. */
+function cw9FitHtml(container, budget){
+  if(!container) return { html:'', dropped:0 };
+  var kids = [].slice.call(container.children);
+  var out = [], used = 0, dropped = 0;
+  for(var i = kids.length - 1; i >= 0; i--){
+    var h = kids[i].outerHTML || '';
+    if(used + h.length > budget){ dropped = i + 1; break; }
+    out.unshift(h); used += h.length;
+  }
+  return { html: out.join(''), dropped: dropped };
+}
 var persistT = null;
 function persistWork(){
   clearTimeout(persistT);
   persistT = setTimeout(function(){
     try{
-      var html = $('chat').innerHTML || '';
-      /* guard: never let a runaway thread bloat localStorage */
-      if(html.length > 250000) return;
-      localStorage.setItem(workKey(), JSON.stringify({ v:1, selId:SELID, chat:html, ts:Date.now() }));
+      /* CW-9: the live session pane is part of what the operator had on screen,
+         so it is kept with the thread. Every block in it was built by
+         CW9B.termBlockHtml(), which escapes device text before it is stored.
+
+         A single `show tech-support` can be megabytes. The old guard simply
+         STOPPED SAVING when the thread got big — the operator kept working
+         against a store that was silently minutes stale, and lost it all on
+         reload. Now the thread is trimmed to the newest messages that fit, the
+         trim is recorded, and the operator is told once. A short honest thread
+         beats a complete one that was never written. */
+      var tb = $('termBody');
+      var hasTerm = tb && !tb.querySelector('#termIdle');
+      var termFit = hasTerm ? cw9FitHtml(tb, Math.floor(PERSIST_CAP * 0.4)) : { html:'', dropped:0 };
+      var chatFit = cw9FitHtml($('chat'), PERSIST_CAP - termFit.html.length);
+      localStorage.setItem(workKey(), JSON.stringify({
+        v:1, selId:SELID, chat:chatFit.html, term:termFit.html, termBlocks:CW9.blocks,
+        trimmed: (chatFit.dropped + termFit.dropped) || 0,
+        awaiting: (CW9.awaiting && CW9.awaiting.resume) ? CW9.awaiting.resume : null,
+        ts:Date.now()
+      }));
+      if((chatFit.dropped || termFit.dropped) && !CW9.persistWarned){
+        CW9.persistWarned = true;
+        sysMsg('This conversation is now larger than this browser can keep. The newest messages are still saved for a reload; the oldest ones are only in the incident record from here on.');
+      }
     }catch(e){}
   }, 300);
 }
@@ -3852,8 +4185,34 @@ function restoreWork(){
   var raw = null; try{ raw = localStorage.getItem(workKey()); }catch(e){}
   if(!raw) return false;
   var st = null; try{ st = JSON.parse(raw); }catch(e){ st = null; }
-  if(!st || (!st.chat && !st.selId)) return false;
+  if(!st || (!st.chat && !st.selId && !st.term)) return false;
   var did = false;
+  /* CW-9: bring the live session pane back exactly as it was. Every block in
+     this string was produced by CW9B.termBlockHtml() — device text was escaped
+     before it was ever stored — so re-inserting it opens no new sink. */
+  if(typeof st.term === 'string' && st.term.trim()){
+    var tb = $('termBody');
+    if(tb){
+      tb.innerHTML = st.term;
+      tb.scrollTop = tb.scrollHeight;
+      CW9.blocks = Number(st.termBlocks) || tb.querySelectorAll('.tblock').length;
+      cw9PaintCount();
+      CW9.restored = true;
+      did = true;
+    }
+  }
+  /* CW-9: the thread was paused on Jarvis's questions — come back still paused,
+     so the answer goes to the same route and the ask bar still says so. The
+     stored route is re-checked against THIS page's origin before it is trusted;
+     localStorage is not a trusted source. */
+  if(st.awaiting){
+    var back = CW9B.resolveResume({ resume: st.awaiting }, location.origin);
+    if(back){
+      CW9.awaiting = { resume: back, at: Date.now() };
+      var abox = $('ask');
+      if(abox) abox.placeholder = 'Answer Jarvis so it can scope this…';
+    }
+  }
   if(typeof st.chat === 'string' && st.chat.trim()){
     /* This transcript was built entirely by this page through esc()/md(), so
        every value in it is already escaped — re-inserting it introduces no new
@@ -3861,6 +4220,16 @@ function restoreWork(){
     $('chat').innerHTML = st.chat;
     $('chat').scrollTop = $('chat').scrollHeight;
     did = true;
+  }
+  /* ORDER MATTERS: this notice goes on AFTER the transcript is put back.
+     It used to be painted first and then wiped by the innerHTML above, so an
+     operator reloaded into a silently shortened thread — the exact honesty gap
+     the trim was meant to close. */
+  if(st.trimmed){
+    CW9.persistWarned = true;
+    sysMsg('Part of this conversation was too large for this browser to keep — ' + esc(String(st.trimmed)) +
+           ' older item' + (Number(st.trimmed) === 1 ? '' : 's') + ' are not in the restored thread. They are still in the incident record.');
+    $('chat').scrollTop = $('chat').scrollHeight;
   }
   if(st.selId){
     /* Don't blindly re-fetch — the incident may be gone (server restarted,
@@ -3930,7 +4299,7 @@ function boot(){
   connectWS();
   /* Re-attach the incident + conversation from before the reload; only greet
      fresh when there was nothing to restore. */
-  if(!restoreWork()) showGreeting();
+  if(!restoreWork()){ CW9.canHydrate = true; showGreeting(); }
 }
 (function(){
   var saved = null; try{ saved = localStorage.getItem('noc-desk-operator'); }catch(e){}
