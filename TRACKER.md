@@ -624,3 +624,14 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   empty state, 7b fix, both delta transports accepted. 27 suites green, browser-verified on :3121.
 - Adversarial reviews launched (rev74 :3115 behavior-parity focus; rev75 :3116 stream-abuse focus).
   Merge order BE→FE on approve, then restart :3000, live verify, then CW-11 build.
+
+## 2026-08-20 ~17:15 — CW-10 reviews: both FIX-FIRST, builders fixing in parallel
+- BE #74: parity PROVEN (conduct/guardrails zero-diff, EPG + reload byte-identical vs master baseline
+  server; live cache hit; spend store attack-clean; web answer honest). 2 blockers: interrupted stream
+  orphans a partial preview (fix: aborted:true closing delta) + delta preview exceeds the 280 cap (stream
+  must be strict prefix of capped final). 6 minors (tool-rejection detection, 529 kills compaction, spend
+  edge cases).
+- FE #75: mid-review fixes held under attack; XSS clean everywhere. 3 blockers: empty-text final DELETES
+  the streamed answer; Spend panel pushes incident queue out of the column at small shells; unreadable
+  spend shapes render as honest-zero (false). +1 should-fix (post-done claim deletes answer).
+- Both builders on fixes; FE also adopting the aborted:true contract. Re-reviews after push; BE merges first.
