@@ -437,3 +437,11 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   per-round evidence diffs; per-delegation evidence tagging at write time; ONE gate first on every entry;
   LLM-judged resume/abandon; fail-safe planner; shared truncation convention with the FE fix; IOS scrubber
   class fix). Both PRs now in fix cycles; re-reviews before any merge.
+
+## 2026-08-20 — Vikas verdict on architecture page (HIS WORDS)
+- LIKED all sections. Ask: "i really think reflexion is the most important thing when it comes to the
+  networking kind of stuff wherein it is going to reflect on its own work. if there is any problem with
+  what it is doing, it automatically gets reflected... i really want reflexion to be part of jarvis"
+- CW-10 "production plumbing" (SDK+caching+streaming+token accounting) = APPROVED (liked recommendation).
+- NEW wave CW-11 "Reflexion" — design page sent for his sign-off before build. Sequence: CW-9 fixes →
+  CW-10 plumbing → CW-11 reflexion.
