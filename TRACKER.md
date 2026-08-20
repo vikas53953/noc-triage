@@ -667,3 +667,10 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   passthrough; claim corrected; fixture race). 1687 assertions. Field-name pinning to #77 in flight.
 - BE adversarial review launched (guardrails-as-laws focus incl. lesson-as-instruction injection attack).
   Then: FE re-verify → merge #77 → #76 → restart :3000 → live verify → Vikas's combined 23:30 page.
+
+## 2026-08-20 ~23:05 — CW-11 MERGED (PRs #77 + #76); live verify in progress
+- Final BE fixes verified (confirmed/reopened flags, NAMED_WRITE_SURFACES gate class fix, lookFirst routed
+  into the probe planner as a first-round bias + mustChange now in the real prompt). Master: 33 suites,
+  159+ per-suite assertions all green, exit 0.
+- Live verify running on :3000 (Sonnet): packet-loss problem → ask-first → answer → investigation rounds
+  live (Round 1: 3 new checks + findings). Awaiting repeated-round reflection + verdict split + lesson.
