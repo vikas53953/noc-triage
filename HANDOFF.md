@@ -33,6 +33,10 @@ Real data or an honest "not connected/unread/unreachable" — NEVER fabricate. P
 wire calls, writes blocked BEFORE the gate. Read-only guardrail (only show/ping/traceroute/dir/more).
 Secrets scrubbed from everything persisted. XSS-escape every DOM sink. Timezone: bare clock times anchored
 in the operator's tz (sent as `operatorTz`), most-recent-past, never a future window.
+**Adopt, don't hand-write, integrations** (Vikas, 2026-08-20): new external integrations arrive as
+security-vetted MCP servers through the CW-8 connector (gate + read-only posture unchanged), not as
+hand-written adapters. Hand-write only when no trustworthy MCP server exists. Prefer Anthropic server-side
+features (web search/fetch, compaction) over building equivalents.
 
 ## What's BUILT + MERGED (on master)
 Evidence Split Console UI (its own identity, not mission-control). Triage brain: symptom window/scope

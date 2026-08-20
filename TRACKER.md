@@ -463,3 +463,19 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   awaiting restored on reload + helpers deduped into shared module. 100 checks green, live-verified :3111.
 - Independent reviewer re-attacking (fresh bypasses, tampered localStorage, degenerate shapes). BE builder
   still fixing PR #73.
+
+## 2026-08-20 — Vikas LIKED "Adopt instead of build" → standing rule installed
+- HANDOFF.md law added: new integrations = security-vetted MCP servers via CW-8 connector, hand-write only
+  when no trustworthy server exists; prefer Anthropic server-side features (web search/fetch, compaction).
+- CW-10 scope now: official SDK + Tool Runner, prompt caching, streaming, token accounting, web search/fetch,
+  server-side compaction.
+
+## 2026-08-20 — CW-9 backend fixes pushed (5c02cdb), re-review in flight
+- All findings fixed: AGENT_SOURCES roster truth (stand-down only when systems untouched, overlap named,
+  honest correction on violation); narration diffed per-round by source|command (repeats say "nothing new");
+  per-delegation evidenceId tagging, watermark sweep DELETED (concurrent + race test green); gate now first
+  on every entry (capability screen behind it); LLM-judged replyIntent (answer/new-topic/abandon); thin
+  proceed states its assumption; planner fails safe; cli.output 4000 cap; IOS scrubber forms; intake 4th
+  question restored. 24 suites 966 assertions green; live Sonnet EPG replay clean.
+- Both re-reviews now running (UI reviewer re-attacking 8700cce; BE reviewer re-attacking 5c02cdb).
+  Merge order on double-approve: #73 then #72 → restart :3000 → my own live verify → evidence page to Vikas.
