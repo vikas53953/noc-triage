@@ -479,3 +479,16 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   question restored. 24 suites 966 assertions green; live Sonnet EPG replay clean.
 - Both re-reviews now running (UI reviewer re-attacking 8700cce; BE reviewer re-attacking 5c02cdb).
   Merge order on double-approve: #73 then #72 → restart :3000 → my own live verify → evidence page to Vikas.
+
+## 2026-08-20 — Vikas standing order re-affirmed (HIS WORDS, he's at the office)
+- "make sure you are fully in autonomous mode. if my quota is going to get full... agents and you will
+  automatically pick up that work... rather than waiting for me to come and jump in and tell you 'quota
+  has been reset, now start working.' i really don't want that."
+- MECHANISM (verified live 2026-08-20 12:0x): Windows task "noc-triage-autoresume" is ARMED and running
+  (every 30 min, survived the reboot; last run 11:48, absolute-path claude launch, work-product liveness
+  check). If this session dies at the quota wall, a fresh session auto-launches, reads this TRACKER +
+  the CLI task list, and resumes the top in-flight item WITHOUT waiting for Vikas. Never ask him to
+  announce a reset.
+- CLI task list created (7 tasks): #1 PR73 re-review→merge, #2 PR72 re-review→merge, #3 live verify +
+  evidence page, #4 CW-10, #5 CW-11, #6 launch video v3 (open), #7 waiting-on-Vikas creds.
+- CW naming for any resumer: CW = "Copilot Wave" — OUR feature-wave numbering (CW-1..CW-11), NOT PR numbers.
