@@ -406,3 +406,18 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - Independent adversarial reviews IN FLIGHT: rev of #73 (clone noc-rev73, :3113, incl. #72 seam check) and
   rev of #72 (clone noc-rev72, :3112). Report-only; Fable merges on approve. MERGE ORDER: #73 then #72,
   then restart :3000, integrated live verify (EPG replay), visual evidence page to Vikas.
+
+## 2026-08-20 — CW-9 UI review verdict: FIX-FIRST (builder fixing)
+- PR #72 review (live, Playwright, own clone): 1 HIGH — same-origin resume guard bypassable via backslash
+  (`/\evil/` treated as protocol-relative; live cross-origin exfil of operator's typed answer proven).
+  4 MEDIUM: malformed-envelope renders vanish/kill hydrate replay; classic console still paints empty
+  bubbles; 2.79MB cli output blocks main thread 1.5s + silently breaks the 250k persist cap; terminal pane
+  stuck 340px (prototype says minmax(340,480)) + 1240px stack threshold too low. 2 LOW (awaiting not
+  restored on reload; duplicated helpers w/ divergent escapers).
+- XSS held everywhere; transport honesty, reload, one-shot resume, mobile, regressions all clean.
+- UI builder resumed with class-level fix orders (URL-origin resolution not char blocklists; shared
+  fallback-bubble render/hydrate guard; render+persist caps with honest truncation; prototype minmax).
+- CW-10 "production plumbing" wave PROPOSED to Vikas (official Anthropic SDK + prompt caching + streaming
+  + token accounting; NO LangChain/LangGraph/Agent-SDK): verdict page
+  https://claude.ai/code/artifact/7988f6d1-6f24-4b23-a9cc-5ddd86158bbd — awaiting his yes/no.
+- Backend review (PR #73) still running.
