@@ -4213,11 +4213,6 @@ function restoreWork(){
       if(abox) abox.placeholder = 'Answer Jarvis so it can scope this…';
     }
   }
-  if(st.trimmed){
-    CW9.persistWarned = true;
-    sysMsg('Part of this conversation was too large for this browser to keep — ' + esc(String(st.trimmed)) +
-           ' older item' + (Number(st.trimmed) === 1 ? '' : 's') + ' are not in the restored thread. They are still in the incident record.');
-  }
   if(typeof st.chat === 'string' && st.chat.trim()){
     /* This transcript was built entirely by this page through esc()/md(), so
        every value in it is already escaped — re-inserting it introduces no new
@@ -4225,6 +4220,16 @@ function restoreWork(){
     $('chat').innerHTML = st.chat;
     $('chat').scrollTop = $('chat').scrollHeight;
     did = true;
+  }
+  /* ORDER MATTERS: this notice goes on AFTER the transcript is put back.
+     It used to be painted first and then wiped by the innerHTML above, so an
+     operator reloaded into a silently shortened thread — the exact honesty gap
+     the trim was meant to close. */
+  if(st.trimmed){
+    CW9.persistWarned = true;
+    sysMsg('Part of this conversation was too large for this browser to keep — ' + esc(String(st.trimmed)) +
+           ' older item' + (Number(st.trimmed) === 1 ? '' : 's') + ' are not in the restored thread. They are still in the incident record.');
+    $('chat').scrollTop = $('chat').scrollHeight;
   }
   if(st.selId){
     /* Don't blindly re-fetch — the incident may be gone (server restarted,

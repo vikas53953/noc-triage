@@ -106,6 +106,26 @@ ok('a triage id falls back to the stable bridge route',
 ok('a path-shaped id can never escape the route', CW9B.resolveResume({ triageId: '../../etc' }, ORIGIN) === null);
 ok('no stated route and no id → the normal ask path', CW9B.resolveResume({}, ORIGIN) === null);
 ok('a non-string route is refused', R({}) === null && R(42) === null && R(null) === null);
+// F2 — the function promises an origin-local path, so it must never hand back a
+// protocol-relative one: "/..//evil.example" resolves same-origin but NORMALISES
+// to "//evil.example", which is another host to any caller that does not re-resolve.
+ok('a path that normalises to protocol-relative is refused (/..//evil)', R('/..//evil.example') === null);
+ok('a deeper dot-segment protocol-relative path is refused', R('/a/b/../..//evil.example/x') === null);
+ok('no accepted route can ever start with //', ['/api/x', '/a/../b', '/./x', '/api//x'].every((u) => {
+  const got = R(u);
+  return got === null || (got.url.charAt(0) === '/' && got.url.charAt(1) !== '/');
+}));
+// F3 — the body key is a field name, not free text. A bad key silently posted an
+// empty body (__proto__) or one keyed "[object Object]" — the answer went nowhere.
+ok('a normal field name is kept', CW9B.safeField('answer') === 'answer');
+ok('__proto__ is refused and falls back to text', CW9B.safeField('__proto__') === 'text');
+ok('constructor / prototype are refused', CW9B.safeField('constructor') === 'text' && CW9B.safeField('prototype') === 'text');
+ok('a non-string field is refused', CW9B.safeField({ a: 1 }) === 'text' && CW9B.safeField(7) === 'text' && CW9B.safeField(null) === 'text');
+ok('a field with punctuation or spaces is refused', CW9B.safeField('a b') === 'text' && CW9B.safeField('a.b') === 'text' && CW9B.safeField('') === 'text');
+ok('an over-long field is refused', CW9B.safeField('a'.repeat(80)) === 'text');
+ok('the resolved route carries the validated field',
+  CW9B.resolveResume({ resume: { url: '/api/x', field: '__proto__' } }, ORIGIN).field === 'text' &&
+  CW9B.resolveResume({ resume: { url: '/api/x', field: 'answer' } }, ORIGIN).field === 'answer');
 ok('desk.html no longer character-checks a route', !/charAt\(1\) !== '\/'/.test(desk));
 ok('desk.html resolves the route through the shared guard',
   /CW9B\.resolveResume\(/.test(desk) && /location\.origin/.test(desk));
@@ -242,6 +262,12 @@ ok('the change card is held for approval, never applied',
 ok('the session pane is persisted with the thread', /term:termFit\.html, termBlocks:CW9\.blocks/.test(desk));
 ok('the session pane is restored on reload', /if\(typeof st\.term === 'string'/.test(desk));
 ok('the pending question survives a reload', /if\(st\.awaiting\)\{/.test(desk));
+// F1 — the trim notice used to be painted and then wiped by the chat restore
+// seven lines later, so a reload landed the operator in a silently shortened
+// thread. The notice must go on AFTER the transcript is put back.
+ok('the trim notice is painted after the chat is restored, not before',
+  desk.indexOf("$('chat').innerHTML = st.chat") < desk.indexOf('if(st.trimmed){'));
+ok('the ordering is spelled out so it is not undone later', /ORDER MATTERS/.test(desk));
 ok('the restored route is re-checked against this origin',
   /CW9B\.resolveResume\(\{ resume: st\.awaiting \}, location\.origin\)/.test(desk));
 ok('chat-store history rehydrates the call', /function cw9Hydrate/.test(desk) && /data\.chatHistory/.test(desk));

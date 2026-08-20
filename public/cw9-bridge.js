@@ -233,18 +233,33 @@
      inspected character by character. "/\evil.example/steal" passes a
      first-character check and resolves to another host; this cannot.
      Returns an origin-local path, so what is fetched is what was checked. */
+  /* A body key must be a plain field name. `field:'__proto__'` silently posted an
+     EMPTY body (the assignment is a no-op on a literal) and `field:{a:1}` posted
+     under "[object Object]" — both are an operator's answer quietly going
+     nowhere. Anything not a simple name falls back to the default key. */
+  var FIELD_OK = /^[A-Za-z][\w-]{0,63}$/;
+  function safeField(f) {
+    return (typeof f === 'string' && FIELD_OK.test(f) && f !== '__proto__' && f !== 'constructor' && f !== 'prototype')
+      ? f : 'text';
+  }
+
   function resolveResume(d, origin) {
     function local(u) {
       if (typeof u !== 'string' || !u) return null;
       var parsed;
       try { parsed = new URL(u, origin); } catch (e) { return null; }
       if (!parsed || parsed.origin !== origin) return null;
+      /* `/..//evil.example` resolves same-origin but NORMALISES to
+         "//evil.example" — a protocol-relative path, which is another host to
+         anything that later uses it without re-resolving. This function
+         promises an origin-local path, so it must never hand one back. */
+      if (parsed.pathname.charAt(0) !== '/' || parsed.pathname.charAt(1) === '/') return null;
       return parsed.pathname + parsed.search;
     }
     var r = d && (d.resume || d.resumeEndpoint);
     var path = null, field = 'text';
     if (typeof r === 'string') path = local(r);
-    else if (r && typeof r === 'object' && typeof r.url === 'string') { path = local(r.url); field = r.field || 'text'; }
+    else if (r && typeof r === 'object' && typeof r.url === 'string') { path = local(r.url); field = safeField(r.field); }
     if (path) return { url: path, field: field };
     var tid = d && (d.triageId || d.threadId);
     if (tid && /^[A-Za-z0-9_.:-]+$/.test(String(tid))) {
@@ -260,6 +275,6 @@
     outputHtml: outputHtml, termBlockHtml: termBlockHtml,
     askHtml: askHtml, rosterHtml: rosterHtml, findingHtml: findingHtml,
     verdictHtml: verdictHtml, changeHtml: changeHtml, placeholderHtml: placeholderHtml,
-    isEnvelope: isEnvelope, resolveResume: resolveResume,
+    isEnvelope: isEnvelope, resolveResume: resolveResume, safeField: safeField,
   };
 }));
