@@ -99,6 +99,8 @@ function snapshot(rec) {
     operatorTz: rec.operatorTz || null,
     // CW-9: the engaged set the bridge announced (null = the whole roster).
     agents: rec.agents ? rec.agents.slice() : null,
+    // CW-11: the past lesson biasing where this run looked first (null = none).
+    lesson: rec.lesson ? { ...rec.lesson } : null,
     who: rec.who || null,
     status: rec.status,
     understood: rec.understood || null,
@@ -152,7 +154,7 @@ function audit(rec, what, result, detail, device) {
 // ── Create (synchronous) ─────────────────────────────────────────────────────
 // The route calls this to get an id back immediately, then run(id) drives the
 // (async, LLM-backed) understand + probe loop in the background, streaming rounds.
-function create({ problem, operatorTz, who, agents, observer, understood, hypotheses } = {}) {
+function create({ problem, operatorTz, who, agents, observer, understood, hypotheses, lesson } = {}) {
   const id = nextId();
   const rec = {
     id,
@@ -179,6 +181,14 @@ function create({ problem, operatorTz, who, agents, observer, understood, hypoth
     rounds: [],
     rootCause: null,
     fixPlan: null,
+    // CW-11 Part 4 (optional): the past lesson the caller matched to this problem.
+    // It is a BIAS carried to the probe planner — "somebody looked here first last
+    // time" — and NOTHING here acts on it: the engine never picks a probe from a
+    // lesson, never skips a question, and never runs anything because of one.
+    // Absent → the loop behaves exactly as it did before CW-11.
+    lesson: (lesson && typeof lesson === 'object' && lesson.id)
+      ? { id: String(lesson.id), lookFirst: lesson.lookFirst || null, why: lesson.why || null }
+      : null,
     // CW-11: filled in at verdict time only.
     selfCheck: null,
     prediction: null,
@@ -309,6 +319,13 @@ async function probeLoop(rec) {
           hypotheses: rec.hypotheses.map((h) => ({ ...h })),
           rounds: rec.rounds.map((r) => ({ ...r })),
           roster,
+          // CW-11 Part 4: where a past incident says to look FIRST. A BIAS, never
+          // a rule — the planner is told outright it may ignore it, the engine
+          // never checks whether the pick followed it, and no probe is ever
+          // chosen here. The ask-first gate ran long before this point and is
+          // untouched. Dropped after the first round: once real readings are in,
+          // THIS incident's evidence outranks a memory of another one.
+          lesson: (rec.lesson && !rec.rounds.length) ? { ...rec.lesson } : null,
           // Additive: a planner that ignores these behaves exactly as before.
           mustChange: mustChange ? {
             why: mustChange.line,

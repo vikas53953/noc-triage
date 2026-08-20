@@ -536,6 +536,11 @@ async function runFollowThrough(id, { who } = {}) {
   // nothingNew is false here: a follow-through always reports a real result.
   const reflection = {
     nothingNew: false,
+    // The two markers the desk actually renders on a follow-through message.
+    // Mutually exclusive by construction, and BOTH false when the check settled
+    // nothing — an inconclusive result must never light a confirm or a reopen.
+    confirmed: p.state === 'held',
+    reopened: p.state === 'failed',
     line: p.result.line,
     nextAngle: p.state === 'failed'
       ? 'reopening the investigation with the falsified hypothesis ruled out'

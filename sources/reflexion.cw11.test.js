@@ -521,6 +521,74 @@ function scriptedInvestigation(probeImpl, rosterIds = ['config-keeper', 'monitor
       JSON.stringify(heard[0].extra.reflection));
     ok('the route result carries the same reflection shape', res.reflection === heard[0].extra.reflection
       || (res.reflection && res.reflection.nextAngle === heard[0].extra.reflection.nextAngle));
+
+    // The two markers the desk renders on a follow-through message. Without these
+    // a failed/held follow-through rendered as an empty marker (review blocker).
+    ok('a FAILED follow-through sets reopened, not confirmed',
+      heard[0].extra.reflection.reopened === true && heard[0].extra.reflection.confirmed === false,
+      JSON.stringify(heard[0].extra.reflection));
+
+    heard.length = 0;
+    reflexion.init({
+      probe: async () => ({ stance: 'evidence', text: 'it is up', cli: [ev('show ip int brief', 'up up')] }),
+      say: (line, extra) => heard.push({ line, extra }), audit: () => {},
+      reopen: async () => { throw new Error('a held prediction must never reopen'); },
+    });
+    reflexion.setPlanner({ available: () => true, judge: async () => ({ held: true, line: 'Prediction held.' }) });
+    const held = reflexion.registerPrediction({ key: 'env3', hypothesis: 'h', then: 't',
+      check: { agentId: 'config-keeper', question: 'q', device: 'sw2' } });
+    await reflexion.runFollowThrough(held.id, {});
+    ok('a HELD follow-through sets confirmed, not reopened',
+      heard[0].extra.reflection.confirmed === true && heard[0].extra.reflection.reopened === false,
+      JSON.stringify(heard[0].extra.reflection));
+
+    heard.length = 0;
+    reflexion.init({ probe: async () => ({ stance: 'unreachable', text: '', cli: [] }),
+      say: (line, extra) => heard.push({ line, extra }), audit: () => {} });
+    const inc = reflexion.registerPrediction({ key: 'env4', hypothesis: 'h', then: 't',
+      check: { agentId: 'config-keeper', question: 'q', device: 'sw2' } });
+    await reflexion.runFollowThrough(inc.id, {});
+    ok('an INCONCLUSIVE follow-through lights NEITHER marker',
+      heard[0].extra.reflection.confirmed === false && heard[0].extra.reflection.reopened === false);
+
+    // A round reflection is not a confirm or a reopen — one shape, no bleed.
+    ok('a round reflection never claims confirmed/reopened',
+      marked[0].env.reflection.confirmed === false && marked[0].env.reflection.reopened === false);
+  }
+
+  section('PART 4 — lookFirst is ROUTED to the probe planner, as a bias not a rule:');
+  {
+    lessons.setPlanner(null);
+    reflexion.setPlanner(null);
+    scriptedInvestigation(async () => ({ agentId: 'config-keeper', name: 'config-keeper',
+      stance: 'evidence', text: 't', cli: [] }));
+    const seen = [];
+    investigation.setPlanner({
+      available: () => true,
+      understand: async () => ({ specific: true, understood: 'u', hypotheses: [] }),
+      probe: async (a) => { seen.push(a); return { stuck: 'nothing would narrow this' }; },
+      assess: async ({ hypotheses }) => ({ hypotheses, confidence: 0 }),
+    });
+    const withLesson = investigation.create({ problem: 'p', understood: 'u', who: 'tester',
+      lesson: { id: 'INC-20260101-001', lookFirst: 'show ip int brief on the branch uplink', why: 'same symptom' } });
+    await investigation.run(withLesson.id);
+    ok('the lesson reaches the probe planner — it is ROUTED, not merely announced',
+      seen[0] && seen[0].lesson && seen[0].lesson.lookFirst === 'show ip int brief on the branch uplink',
+      JSON.stringify(seen[0] && seen[0].lesson));
+    ok('and it carries the id so the planner knows it is ANOTHER incident',
+      seen[0].lesson.id === 'INC-20260101-001');
+    ok('a BIAS, not a rule: the planner still decided, and its "stuck" stands',
+      investigation.get(withLesson.id).status === 'stuck');
+    ok('the engine never turns a lesson into a probe of its own',
+      seen.length === 1 && investigation.get(withLesson.id).rounds.length === 0);
+    ok('the lesson is on the record for the desk', investigation.get(withLesson.id).lesson.id === 'INC-20260101-001');
+
+    // No lesson → the pre-CW-11 call shape, unchanged.
+    seen.length = 0;
+    const plain = investigation.create({ problem: 'p', understood: 'u', who: 'tester' });
+    await investigation.run(plain.id);
+    ok('with no lesson the planner is told so explicitly (null, never a guess)', seen[0].lesson === null);
+    ok('and the record carries no lesson', investigation.get(plain.id).lesson === null);
   }
 
   section('PART 4 — a lesson id can never write outside squad/lessons:');
@@ -530,6 +598,56 @@ function scriptedInvestigation(probeImpl, rosterIds = ['config-keeper', 'monitor
     ok('an empty id is refused', lessons.safeId('   ') === null);
     ok('a real incident id is accepted', lessons.safeId('INC-20260820-001') === 'INC-20260820-001');
     ok('write() refuses a bad id outright', lessons.write({ incidentId: '../evil', cause: 'x' }) === null);
+  }
+
+  // ═══ THE LESSONS ROUTES ARE GATED LIKE ANY OTHER OPERATOR ACTION ═══════════
+  // DELETE /api/lessons/:id sits OUTSIDE /api/copilot/, so it used to slip the
+  // 428 name gate for any caller without a desk Referer (curl, a script) and be
+  // audited as who:"unknown" (CW-11 review #2). The fix names the surface, so the
+  // gate covers it without moving the path the desk pinned.
+  section('GATE — deleting a lesson needs an operator name, like any other action:');
+  {
+    const { spawn } = require('child_process');
+    const http = require('http');
+    const PORT = 3901;
+    const ORIGIN = `http://127.0.0.1:${PORT}`;
+    const srv = spawn(process.execPath, [require('path').join(__dirname, '..', 'server.js')], {
+      env: { ...process.env, PORT: String(PORT), ANTHROPIC_API_KEY: '' },
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    const call = (method, path, headers = {}) => new Promise((resolve) => {
+      const req = http.request({ host: '127.0.0.1', port: PORT, path, method,
+        headers: { Origin: ORIGIN, ...headers } }, (res) => {
+        let d = ''; res.on('data', (c) => { d += c; }); res.on('end', () => resolve({ status: res.statusCode, body: d }));
+      });
+      req.on('error', () => resolve({ status: 0, body: '' }));
+      req.end();
+    });
+    // Wait for it to answer rather than sleeping blind.
+    let up = false;
+    for (let i = 0; i < 60 && !up; i++) {
+      const r = await call('GET', '/api/lessons');
+      up = r.status === 200;
+      if (!up) await new Promise((r2) => setTimeout(r2, 300));
+    }
+    ok('the server came up for the gate check', up);
+    if (up) {
+      const unnamed = await call('DELETE', '/api/lessons/INC-GATE-TEST');
+      ok('an UNNAMED delete is refused 428 — never audited as who:"unknown"',
+        unnamed.status === 428, `${unnamed.status} ${unnamed.body.slice(0, 80)}`);
+      ok('and it says plainly what is missing', /name/i.test(unnamed.body), unnamed.body.slice(0, 80));
+      const named = await call('DELETE', '/api/lessons/INC-GATE-TEST', { 'X-Operator-Name': 'Vikas' });
+      ok('a NAMED delete passes the gate and gets the honest 404',
+        named.status === 404, `${named.status} ${named.body.slice(0, 80)}`);
+      const traversal = await call('DELETE', '/api/lessons/..%2f..%2fserver', { 'X-Operator-Name': 'Vikas' });
+      ok('a traversal id is still refused at the route', traversal.status === 400);
+      const read = await call('GET', '/api/lessons');
+      ok('READS stay open — the gate is on the action, not the panel', read.status === 200);
+      const preds = await call('GET', '/api/copilot/predictions');
+      ok('the predictions list is served', preds.status === 200 && /"predictions"/.test(preds.body));
+    }
+    srv.kill();
+    await new Promise((r) => setTimeout(r, 200));
   }
 
   console.log(`\nCW-11 reflexion: ${pass} passed, ${fail} failed`);

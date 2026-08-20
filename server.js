@@ -295,8 +295,18 @@ function normalizePath(p) {
   return s;
 }
 
+// Operator-named surfaces that do NOT live under /api/copilot/. A state-changing
+// call here needs a name exactly like a copilot action does — otherwise a
+// non-browser caller (curl, a script, anything without a desk Referer) slips past
+// the 428 and its action is audited as who:"unknown". Kept as a LIST rather than
+// fixed at one route, so the next surface added outside the prefix is covered by
+// naming it here instead of by remembering to re-add a guard (CW-11 review #2).
+const NAMED_WRITE_SURFACES = ['/api/lessons'];
+
 function isCopilotSurface(req) {
-  if (normalizePath(req.path).startsWith('/api/copilot/')) return true;
+  const p = normalizePath(req.path);
+  if (p.startsWith('/api/copilot/')) return true;
+  if (NAMED_WRITE_SURFACES.some((base) => p === base || p.startsWith(`${base}/`))) return true;
   const ref = req.headers.referer || req.headers.referrer || '';
   if (!ref) return false;
   try {

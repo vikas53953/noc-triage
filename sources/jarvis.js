@@ -890,6 +890,11 @@ async function runBridge(q, gate, opts) {
     hypotheses: gate.hypotheses,
     operatorTz: (opts && opts.operatorTz) || null,
     agents: engagedIds.map((e) => e.agentId),
+    // CW-11 Part 4: the matched lesson goes to the LOOP, not just to the chat
+    // line. Saying "checking X first" and then not routing it is the very class
+    // of defect this wave exists to kill. It stays a bias: the planner may ignore
+    // it, and nothing in the engine acts on it.
+    lesson: lesson ? { id: lesson.id, lookFirst: lesson.lookFirst, why: lesson.why } : null,
     observer,
   });
   ctx.log(`[Jarvis] Bridge ${rec.id} opened from chat — engaged ${engagedIds.map((e) => e.agentId).join(', ')} — "${q.slice(0, 50)}"`);
@@ -906,13 +911,17 @@ async function runBridge(q, gate, opts) {
 // produced, diffed against every earlier round: a round that turned up nothing
 // new says so in plain words, and its repeated evidence is not posted again.
 // CW-11 — the ONE flag shape the desk reads off a chat message to mark a
-// reflection: { nothingNew, line, nextAngle }. Built in one place so the bridge,
-// the follow-through and any later path can never post three different shapes.
-// null in, null out — a clean round posts no marker at all (silent when clean).
+// reflection: { nothingNew, confirmed, reopened, line, nextAngle }. Built in one
+// place so the bridge, the follow-through and any later path can never post three
+// different shapes. null in, null out — a clean round posts no marker at all
+// (silent when clean). A round reflection is never a confirm or a reopen; those
+// two belong to the prediction follow-through and are set there.
 function reflectionFlag(r) {
   if (!r || !r.line) return null;
   return {
     nothingNew: r.nothingNew === true,
+    confirmed: r.confirmed === true,
+    reopened: r.reopened === true,
     line: conduct.capText(r.line),
     nextAngle: r.nextAngle ? conduct.capLine(r.nextAngle) : null,
   };
@@ -1813,7 +1822,7 @@ async function invUnderstand({ problem, operatorTz, answers, reply }) {
   };
 }
 
-async function invProbe({ problem, understood, hypotheses, rounds, roster }) {
+async function invProbe({ problem, understood, hypotheses, rounds, roster, mustChange, lesson }) {
   const format = { type: 'json_schema', schema: {
     type: 'object', additionalProperties: false,
     required: ['stuck', 'agentId', 'question', 'device', 'rationale'],
