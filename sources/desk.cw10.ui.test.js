@@ -413,8 +413,12 @@ ok('the wording for a settled preview lives in the module, not in two pages',
   /stopped mid-answer/.test(sharedJs) && !/stopped mid-answer/.test(desk) && !/stopped mid-answer/.test(idx));
 ok('a settled preview keeps its text on both pages (innerHTML from the module, never emptied)',
   /body\.innerHTML = html;/.test(desk) && /body\.innerHTML = html;/.test(idx));
+// CW-11 wraps this call in cw11Decorate(), which only ADDS an optional
+// reflection glyph / lesson chip to the node jvMsg returns — the author, the
+// text and the timestamp still reach jvMsg unchanged, which is what this line
+// has always been guarding.
 ok('old messages with no deltas render exactly as before (nothing was removed)',
-  /jvMsg\(d\.agentName \|\| d\.agent \|\| 'Jarvis', d\.text \|\| '', d\.timestamp\);/.test(desk));
+  /(?:cw11Decorate\()?jvMsg\(d\.agentName \|\| d\.agent \|\| 'Jarvis', d\.text \|\| '', d\.timestamp\)/.test(desk));
 
 // ── 9. the spend panel is wired to the real endpoint, honestly ─────────────
 ok('the desk has a collapsible Spend panel', /<details class="spendpanel"/.test(desk));

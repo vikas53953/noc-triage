@@ -250,8 +250,13 @@ ok('the module owns the list of kinds', CW9B.KINDS.join(',') === 'ask,roster,fin
 ok('a message with no kind is not an envelope', CW9B.isEnvelope({ text: 'hi' }) === false);
 ok('an unknown kind is not an envelope', CW9B.isEnvelope({ kind: 'say' }) === false);
 ok('null / a bare string are not envelopes', CW9B.isEnvelope(null) === false && CW9B.isEnvelope('x') === false);
+// CW-11 wrapped this call in cw11Decorate(), which only ADDS an optional
+// reflection glyph / lesson chip to the node jvMsg returns. The text, the
+// author and the timestamp still reach jvMsg exactly as they did — that is
+// what this assertion has always been guarding, so the wrapper is allowed and
+// the arguments are still pinned.
 ok('onChat still paints plain replies exactly as before',
-  /if\(cw9Render\(d\)\)\{[\s\S]*?\}\s*jvMsg\(d\.agentName \|\| d\.agent \|\| 'Jarvis', d\.text \|\| '', d\.timestamp\);/.test(desk));
+  /if\(cw9Render\(d\)\)\{[\s\S]*?\}\s*(?:\/\*[\s\S]*?\*\/\s*)?(?:cw11Decorate\()?jvMsg\(d\.agentName \|\| d\.agent \|\| 'Jarvis', d\.text \|\| '', d\.timestamp\)/.test(desk));
 ok('stood-down agents are struck through', /\.rpill\.off\{[^}]*line-through/.test(sharedCss));
 ok('engaged agents are green', /\.rpill\.on\{[^}]*var\(--ok\)/.test(sharedCss));
 ok('the change card is held for approval, never applied',

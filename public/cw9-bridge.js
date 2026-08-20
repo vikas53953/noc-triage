@@ -219,16 +219,128 @@
     return { html: html, blockHtml: block };
   }
 
+  /* ============================================================
+     CW-11 part 2 — THE VERDICT SELF-CHECK, ON SCREEN
+     ============================================================
+     Before Jarvis commits a verdict it walks every claim back to a real
+     evidence record from THIS incident. Claims that trace become
+     `verified`; claims that do not are downgraded to `suspected` rather
+     than dropped silently. The card must show the two apart, because a
+     suspected claim sitting inside the green cause block reads as proven
+     — which is the exact fabrication this wave exists to stop.
+
+     ADDITIVE: an old verdict envelope carries neither array and renders
+     byte-for-byte as it did before this wave.
+
+     TONE: "suspected — unverified" is honest, not alarming. It does not
+     shout, it does not use the red/warning colour of a broken message; it
+     is a quieter block under the green one that says plainly what is not
+     yet backed by a read. */
+
+  var CLAIM_MAX = 12;
+
+  /* One list of claims: coerced, made readable, trimmed, capped — with the
+     original length kept so the card can say how many it is not showing. */
+  function claims(v) {
+    var all = textList(v);
+    return { shown: all.slice(0, CLAIM_MAX), total: all.length };
+  }
+
+  function claimsBlock(cls, label, c, wrong, note) {
+    if (!c.shown.length && !wrong) return '';
+    var more = c.total > c.shown.length
+      ? '<div class="vcnote">' + esc(String(c.total - c.shown.length)) +
+        ' more not shown here — the incident record holds all ' + esc(String(c.total)) + '.</div>'
+      : '';
+    return '<div class="vclaims ' + cls + '">' +
+      '<span class="vch">' + label + '</span>' +
+      (c.shown.length ? '<ul>' + c.shown.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ul>' : '') +
+      more +
+      (wrong ? '<div class="vcnote">Part of this list arrived in a shape this screen cannot read — it is not being guessed at. Open the incident record.</div>' : '') +
+      (note && c.shown.length ? '<div class="vcnote">' + note + '</div>' : '') +
+      '</div>';
+  }
+
   function verdictHtml(d) {
     var v = (d && d.verdict) || {};
     var cause = v.cause || (d && d.text) || '';
-    if (!cause) return '';
+    /* the fields may sit on the verdict object or on the envelope itself —
+       either way they are the same two lists, so both are read. */
+    var vRaw = v.verified !== undefined ? v.verified : (d && d.verified);
+    var sRaw = v.suspected !== undefined ? v.suspected : (d && d.suspected);
+    var ver = claims(vRaw), sus = claims(sRaw);
+    var badVer = badList(vRaw), badSus = badList(sRaw);
+    var anyClaims = ver.shown.length || sus.shown.length || badVer || badSus;
+    if (!cause && !anyClaims) return '';
     var meta = '';
     if (v.confidence) meta += '<span class="conf">confidence ' + esc(v.confidence) + '</span>';
     if (v.rounds != null) meta += '<span class="pill grey">' + esc(v.rounds) + ' round' + (Number(v.rounds) === 1 ? '' : 's') + '</span>';
+    if (ver.total || sus.total) {
+      meta += '<span class="pill grey">' + esc(String(ver.total)) + ' verified · ' +
+        esc(String(sus.total)) + ' suspected</span>';
+    }
     return '<div class="verdictcard"><span class="r-lbl">✔ Cause found</span>' +
-      '<div class="vcause">' + esc(cause) + '</div>' +
+      (cause ? '<div class="vcause">' + esc(cause) + '</div>' : '') +
+      claimsBlock('verified', '✔ Verified — traced to a read from this incident', ver, badVer, '') +
+      claimsBlock('suspected', 'Suspected — unverified', sus, badSus,
+        'Nothing read on this incident backs these yet. They are kept here so they are not lost, and they are not part of the cause above.') +
       (meta ? '<div class="vmeta">' + meta + '</div>' : '') + '</div>';
+  }
+
+  /* ============================================================
+     CW-11 part 1 & 3 — REFLECTION MARKERS
+     ============================================================
+     A round that found nothing new, and a prediction that turned out
+     wrong, are ORDINARY chat messages — there is no new envelope kind and
+     nothing about them renders differently in an old client. What this
+     adds is one optional field, `reflection:{type:…}`, which the page
+     turns into a small glyph and a quiet tint on that message so an
+     operator scanning a long thread can see where Jarvis changed its mind
+     without reading every line. Absent field = a plain message. */
+
+  var REFLECTIONS = {
+    'nothing-new': { glyph: '↻', label: 'nothing new this round — changing approach' },
+    'reopened':    { glyph: '⟲', label: 'the hypothesis was wrong — reopened' },
+    'confirmed':   { glyph: '✔', label: 'the prediction held — confirmed' },
+  };
+
+  /* '' when the message carries no usable reflection field. Accepts either
+     reflection:'confirmed' or reflection:{type:'confirmed'}. */
+  function reflectionOf(d) {
+    var r = d && d.reflection;
+    var t = (r && typeof r === 'object' && !Array.isArray(r)) ? r.type : r;
+    t = (typeof t === 'string') ? t.trim().toLowerCase() : '';
+    return Object.prototype.hasOwnProperty.call(REFLECTIONS, t) ? t : '';
+  }
+
+  function reflectionGlyphHtml(type) {
+    var t = (typeof type === 'string') ? type.trim().toLowerCase() : '';
+    if (!Object.prototype.hasOwnProperty.call(REFLECTIONS, t)) return '';
+    var m = REFLECTIONS[t];
+    return '<span class="cw11-refl ' + t + '" title="' + esc(m.label) + '">' +
+      '<span class="rg" aria-hidden="true">' + m.glyph + '</span>' +
+      '<span class="rt">' + esc(m.label) + '</span></span>';
+  }
+
+  /* ============================================================
+     CW-11 part 4 (message half) — "using lesson from INC-…"
+     ============================================================
+     When Jarvis leans on a past incident it says so on the message that
+     used it. The chip is a statement about where it looked FIRST — never
+     a claim that the old cause is this cause. */
+  function lessonRefChipHtml(ref) {
+    var inc = '';
+    if (typeof ref === 'string' || typeof ref === 'number') inc = String(ref);
+    else if (ref && typeof ref === 'object' && !Array.isArray(ref)) {
+      inc = ref.incident || ref.id || ref.inc || ref.incidentId || '';
+    }
+    inc = itemText(inc).trim();
+    if (!inc) return '';
+    if (inc.length > 60) inc = inc.slice(0, 60) + '…';
+    var why = (ref && typeof ref === 'object' && ref.why) ? itemText(ref.why).slice(0, 200) : '';
+    return '<span class="cw11-lref" title="' +
+      esc(why || 'A past incident is biasing where Jarvis looks first. It decides nothing on its own.') + '">' +
+      '<span aria-hidden="true">📓</span> using lesson from ' + esc(inc) + '</span>';
   }
 
   function changeHtml(d) {
@@ -737,8 +849,130 @@
     return html;
   }
 
+  /* ============================================================
+     CW-11 part 4 (panel half) — LESSONS MEMORY
+     ============================================================
+     Reads GET /api/lessons. A lesson is a FACT about a past incident —
+     what the cause turned out to be, which check found it fastest, what
+     wasted time — and it biases where Jarvis looks first. It is never a
+     rule: nothing here runs anything, approves anything, or skips the
+     ask-first gate.
+
+     The two honest states are kept APART, exactly as the Spend panel
+     keeps them apart, and for the same reason: "no lessons recorded yet"
+     is a claim about the server's record and may only be made when a list
+     was actually understood and really was empty. A body that is not a
+     list, and names no list, was NOT understood — that is unreadable, and
+     it says so instead.
+
+     Every field below is STORED TEXT written from model output, so every
+     one of them is escaped at the sink like device output is. */
+
+  var LESSON_LIST_KEYS = ['lessons', 'items', 'list', 'data', 'results'];
+  var LESSON_MAX = 200;
+  /* An id becomes a URL path segment on DELETE. Anything that is not a plain
+     name gets no delete button rather than a guessed route. */
+  var LESSON_ID_OK = /^[A-Za-z0-9_.:-]{1,80}$/;
+
+  function lessonField(v, max) {
+    var s = itemText(v).trim();
+    if (max && s.length > max) s = s.slice(0, max) + '…';
+    return s;
+  }
+
+  function lessonRow(row) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      /* a bare string in the list is still a lesson someone wrote */
+      var s = lessonField(row, 300);
+      return s ? { id: '', incident: '', cause: s, fastestCheck: '', wasted: '', keywords: [], date: '', deletable: false } : null;
+    }
+    var id = lessonField(row.id !== undefined ? row.id : (row.file !== undefined ? row.file : row.incident), 100);
+    var incident = lessonField(row.incident !== undefined ? row.incident : (row.incidentId !== undefined ? row.incidentId : row.id), 80);
+    var out = {
+      id: id,
+      incident: incident,
+      cause: lessonField(row.cause, 300),
+      fastestCheck: lessonField(row.fastestCheck !== undefined ? row.fastestCheck : row.fastest_check, 220),
+      wasted: lessonField(row.wasted !== undefined ? row.wasted : (row.wastedTime !== undefined ? row.wastedTime : row.wasted_time), 220),
+      keywords: textList(row.keywords !== undefined ? row.keywords : row.symptomKeywords)
+        .map(function (k) { return lessonField(k, 40); }).filter(Boolean).slice(0, 8),
+      date: lessonField(row.date !== undefined ? row.date : (row.closedAt !== undefined ? row.closedAt : row.at), 40),
+      deletable: LESSON_ID_OK.test(id),
+    };
+    if (!out.incident && !out.cause && !out.fastestCheck && !out.keywords.length) return null;
+    return out;
+  }
+
+  function normalizeLessons(raw) {
+    var rows = null;
+    if (Array.isArray(raw)) rows = raw;
+    else if (raw && typeof raw === 'object') {
+      for (var i = 0; i < LESSON_LIST_KEYS.length; i++) {
+        if (Array.isArray(raw[LESSON_LIST_KEYS[i]])) { rows = raw[LESSON_LIST_KEYS[i]]; break; }
+      }
+    }
+    if (!rows) return { list: [], empty: false, unreadable: true, total: 0 };
+    var list = rows.map(lessonRow).filter(Boolean);
+    return { list: list.slice(0, LESSON_MAX), empty: !list.length, unreadable: false, total: list.length };
+  }
+
+  function lessonHtml(l) {
+    var head = l.incident ? esc(l.incident) : '<span class="ls-noinc">incident not stated</span>';
+    var del = l.deletable
+      ? '<button type="button" class="ls-del" data-lesson-id="' + esc(l.id) + '" data-lesson-name="' +
+        esc(l.incident || l.id) + '" title="Delete this lesson">Delete</button>'
+      : '<span class="ls-nodel" title="This lesson has no id the server would accept on a delete route — nothing is being guessed at.">no id</span>';
+    var rows = '';
+    if (l.cause) rows += '<div class="ls-row"><span class="ls-k">cause</span><span class="ls-v">' + esc(l.cause) + '</span></div>';
+    if (l.fastestCheck) rows += '<div class="ls-row"><span class="ls-k">found fastest by</span><span class="ls-v">' + esc(l.fastestCheck) + '</span></div>';
+    if (l.wasted) rows += '<div class="ls-row"><span class="ls-k">wasted time</span><span class="ls-v">' + esc(l.wasted) + '</span></div>';
+    var kw = l.keywords.length
+      ? '<div class="ls-kws">' + l.keywords.map(function (k) { return '<span class="ls-kw">' + esc(k) + '</span>'; }).join('') + '</div>'
+      : '';
+    return '<div class="ls-item" data-lesson-row="' + esc(l.id) + '">' +
+      '<div class="ls-top"><span class="ls-inc">' + head + '</span>' +
+      (l.date ? '<span class="ls-date">' + esc(l.date) + '</span>' : '') + del + '</div>' +
+      rows + kw + '</div>';
+  }
+
+  function lessonsHtml(raw) {
+    var s;
+    try { s = normalizeLessons(raw); }
+    catch (e) { return lessonsUnreadableHtml('reading the list threw: ' + (e && e.message ? e.message : 'unexpected shape')); }
+    if (s.unreadable) return lessonsUnreadableHtml('');
+    if (s.empty) return lessonsEmptyHtml();
+    return s.list.map(lessonHtml).join('') +
+      '<div class="ls-fine">A lesson only biases where Jarvis looks first. It never runs a check, never approves a change, and never overrides a question it should be asking you.</div>';
+  }
+
+  /* The record was read and it really is empty. */
+  function lessonsEmptyHtml() {
+    return '<div class="ls-note"><b>No lessons recorded yet</b>' +
+      '<div class="ls-fine">Jarvis writes one short lesson when an incident is closed — the cause, the check that found it fastest, and what wasted time. Close an incident and the first one appears here.</div></div>';
+  }
+
+  /* The endpoint is not there, or is unreachable. Different claim from empty. */
+  function lessonsNoteHtml(reason) {
+    return '<div class="ls-note"><b>Lessons aren\'t available</b>' +
+      (reason ? ' — ' + esc(reason) : '') +
+      '<div class="ls-fine">This says nothing about whether lessons exist. Nothing is being invented here.</div></div>';
+  }
+
+  /* The answer came back in a shape this panel cannot read. */
+  function lessonsUnreadableHtml(reason) {
+    return '<div class="ls-note"><b>Lessons can\'t be read</b>' +
+      (reason ? ' — ' + esc(reason) : ' — the server answered with something that is not a list of lessons') +
+      '<div class="ls-fine">There may or may not be lessons recorded; this panel will not guess either way. The server\'s files are the truth — this is a display problem, and it is worth reporting.</div></div>';
+  }
+
   return {
     MAX_LINES: MAX_LINES, MAX_CHARS: MAX_CHARS, MAX_STREAM_CHARS: MAX_STREAM_CHARS, KINDS: KINDS,
+    CLAIM_MAX: CLAIM_MAX, LESSON_MAX: LESSON_MAX,
+    reflectionOf: reflectionOf, reflectionGlyphHtml: reflectionGlyphHtml,
+    lessonRefChipHtml: lessonRefChipHtml,
+    normalizeLessons: normalizeLessons, lessonsHtml: lessonsHtml,
+    lessonsEmptyHtml: lessonsEmptyHtml, lessonsNoteHtml: lessonsNoteHtml,
+    lessonsUnreadableHtml: lessonsUnreadableHtml,
     itemText: itemText, textList: textList,
     isDelta: isDelta, streamId: streamId, createStream: createStream,
     streamPreviewHtml: streamPreviewHtml, streamSettledHtml: streamSettledHtml,
