@@ -239,10 +239,45 @@
 
   var CLAIM_MAX = 12;
 
-  /* One list of claims: coerced, made readable, trimmed, capped — with the
-     original length kept so the card can say how many it is not showing. */
+  /* PINNED TO THE BACKEND (PR #77, sources/conduct.js verdictMsg):
+       verified:  [{ claim, evidenceIds[] }]
+       suspected: [{ claim, why }]
+     A claim is an OBJECT, not a string. Reading these with the plain text
+     coercion printed the whole JSON blob into the bullet — technically
+     readable, but it buried the sentence an operator has to act on inside
+     punctuation. So `claim` is the line, and the rest is the supporting
+     detail under it: which evidence records back a verified claim, and why a
+     suspected one is not backed.
+     A plain STRING is still accepted — old transcripts hold those, and this
+     module must never lose a claim because its shape changed. */
+  function oneClaim(v) {
+    if (v == null) return null;
+    if (typeof v === 'object' && !Array.isArray(v)) {
+      var text = itemText(v.claim !== undefined ? v.claim : (v.text !== undefined ? v.text : v.line)).trim();
+      if (!text) {
+        /* an object with no claim in it: fall back to the readable dump rather
+           than dropping a line the verdict actually contained */
+        text = itemText(v).trim();
+        if (!text) return null;
+        return { text: text, detail: '' };
+      }
+      var ids = textList(v.evidenceIds !== undefined ? v.evidenceIds : v.evidence);
+      var why = itemText(v.why !== undefined ? v.why : v.reason).trim();
+      var detail = '';
+      if (ids.length) {
+        detail = 'from ' + ids.slice(0, 6).join(', ') +
+          (ids.length > 6 ? ' and ' + (ids.length - 6) + ' more' : '');
+      } else if (why) {
+        detail = why;
+      }
+      return { text: text, detail: detail };
+    }
+    var s = itemText(v).trim();
+    return s ? { text: s, detail: '' } : null;
+  }
+
   function claims(v) {
-    var all = textList(v);
+    var all = arr(v).map(oneClaim).filter(Boolean);
     return { shown: all.slice(0, CLAIM_MAX), total: all.length };
   }
 
@@ -254,11 +289,28 @@
       : '';
     return '<div class="vclaims ' + cls + '">' +
       '<span class="vch">' + label + '</span>' +
-      (c.shown.length ? '<ul>' + c.shown.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ul>' : '') +
+      (c.shown.length ? '<ul>' + c.shown.map(function (s) {
+        return '<li>' + esc(s.text) +
+          (s.detail ? '<span class="vcsrc">' + esc(s.detail) + '</span>' : '') + '</li>';
+      }).join('') + '</ul>' : '') +
       more +
       (wrong ? '<div class="vcnote">Part of this list arrived in a shape this screen cannot read — it is not being guessed at. Open the incident record.</div>' : '') +
       (note && c.shown.length ? '<div class="vcnote">' + note + '</div>' : '') +
       '</div>';
+  }
+
+  /* PINNED (PR #77): confidence is a NUMBER 0..1, or null when it was never
+     measured — it is NOT the word "high". Two bugs came out of assuming the
+     word: `confidence 0.82` printed raw at an operator, and a confidence of
+     EXACTLY 0 — the most alarming value there is — vanished from the card,
+     because 0 is falsy. A string is still rendered as-is for old transcripts. */
+  function confidenceLabel(c) {
+    if (typeof c === 'number' && isFinite(c)) {
+      var pct = Math.round(Math.max(0, Math.min(1, c)) * 100);
+      return pct + '%';
+    }
+    if (typeof c === 'string' && c.trim()) return c.trim();
+    return '';
   }
 
   function verdictHtml(d) {
@@ -272,15 +324,31 @@
     var badVer = badList(vRaw), badSus = badList(sRaw);
     var anyClaims = ver.shown.length || sus.shown.length || badVer || badSus;
     if (!cause && !anyClaims) return '';
+
+    /* PINNED (PR #77): causeSupported is true / false / null, where null means
+       the self-check never ran. FALSE is the one that matters most on this
+       screen: the backend has decided that no reading from this incident backs
+       THE CAUSE ITSELF. Printing that under a green "✔ Cause found" heading
+       would undo the whole self-check — the operator would read a downgraded
+       guess as a proven finding. So the card changes its heading, its colour
+       and its wording, and says what it is: a lead, not a cause. */
+    var supported = (v.causeSupported === true || v.causeSupported === false) ? v.causeSupported : null;
+    var unsupported = supported === false;
+
     var meta = '';
-    if (v.confidence) meta += '<span class="conf">confidence ' + esc(v.confidence) + '</span>';
+    var conf = confidenceLabel(v.confidence);
+    if (conf) meta += '<span class="conf">confidence ' + esc(conf) + '</span>';
     if (v.rounds != null) meta += '<span class="pill grey">' + esc(v.rounds) + ' round' + (Number(v.rounds) === 1 ? '' : 's') + '</span>';
     if (ver.total || sus.total) {
       meta += '<span class="pill grey">' + esc(String(ver.total)) + ' verified · ' +
         esc(String(sus.total)) + ' suspected</span>';
     }
-    return '<div class="verdictcard"><span class="r-lbl">✔ Cause found</span>' +
+    return '<div class="verdictcard' + (unsupported ? ' unsupported' : '') + '">' +
+      '<span class="r-lbl">' + (unsupported ? 'Suspected — unverified' : '✔ Cause found') + '</span>' +
       (cause ? '<div class="vcause">' + esc(cause) + '</div>' : '') +
+      (unsupported
+        ? '<div class="vcnote">Jarvis checked this against the readings from this incident and <b>none of them back it</b>. It is the best lead it has, not a cause — treat it as somewhere to look, and confirm it before acting on it.</div>'
+        : '') +
       claimsBlock('verified', '✔ Verified — traced to a read from this incident', ver, badVer, '') +
       claimsBlock('suspected', 'Suspected — unverified', sus, badSus,
         'Nothing read on this incident backs these yet. They are kept here so they are not lost, and they are not part of the cause above.') +
@@ -304,10 +372,22 @@
     'confirmed':   { glyph: '✔', label: 'the prediction held — confirmed' },
   };
 
-  /* '' when the message carries no usable reflection field. Accepts either
-     reflection:'confirmed' or reflection:{type:'confirmed'}. */
+  /* '' when the message carries no usable reflection field.
+     PINNED (PR #77): the backend's round reflection is
+         reflection: { nothingNew: true, line, nextAngle }   — no `type` at all.
+     Reading only `type` meant every real backend reflection rendered nothing,
+     so the flag shape is read too. `reflection:'confirmed'` and
+     `reflection:{type:'confirmed'}` still work — old fixtures and any future
+     shape that names the type outright. */
   function reflectionOf(d) {
     var r = d && d.reflection;
+    if (r && typeof r === 'object' && !Array.isArray(r)) {
+      if (r.type === undefined) {
+        if (r.nothingNew === true) return 'nothing-new';
+        if (r.reopened === true || r.falsified === true) return 'reopened';
+        if (r.confirmed === true) return 'confirmed';
+      }
+    }
     var t = (r && typeof r === 'object' && !Array.isArray(r)) ? r.type : r;
     t = (typeof t === 'string') ? t.trim().toLowerCase() : '';
     return Object.prototype.hasOwnProperty.call(REFLECTIONS, t) ? t : '';
@@ -332,12 +412,20 @@
     var inc = '';
     if (typeof ref === 'string' || typeof ref === 'number') inc = String(ref);
     else if (ref && typeof ref === 'object' && !Array.isArray(ref)) {
-      inc = ref.incident || ref.id || ref.inc || ref.incidentId || '';
+      /* PINNED (PR #77): the backend's lesson hit is {id, lookFirst, why} —
+         `id` IS the incident id, and `lookFirst` is where it says to look. */
+      inc = ref.id || ref.incident || ref.inc || ref.incidentId || '';
     }
     inc = itemText(inc).trim();
     if (!inc) return '';
     if (inc.length > 60) inc = inc.slice(0, 60) + '…';
-    var why = (ref && typeof ref === 'object' && ref.why) ? itemText(ref.why).slice(0, 200) : '';
+    var why = '';
+    if (ref && typeof ref === 'object' && !Array.isArray(ref)) {
+      why = itemText(ref.why || '').trim();
+      var look = itemText(ref.lookFirst || '').trim();
+      if (look) why = why ? (why + ' — looking first at: ' + look) : ('Looking first at: ' + look);
+      why = why.slice(0, 200);
+    }
     return '<span class="cw11-lref" title="' +
       esc(why || 'A past incident is biasing where Jarvis looks first. It decides nothing on its own.') + '">' +
       '<span aria-hidden="true">📓</span> using lesson from ' + esc(inc) + '</span>';
@@ -868,18 +956,25 @@
      Every field below is STORED TEXT written from model output, so every
      one of them is escaped at the sink like device output is. */
 
-  /* The field names below are the ones a reasonable backend would use; the
-     CW-11 backend branch has not opened a PR yet, so they are NOT pinned to a
-     real seam. That is exactly why the per-row verdict above matters: when the
-     real names differ, the panel says "N lessons can't be read" — it never
-     reports data it cannot read as data that does not exist. Pin these to the
-     backend's actual names when that PR lands, and keep the per-row check for
-     the drift after that. */
+  /* PINNED TO THE BACKEND (PR #77, sources/lessons.js + GET /api/lessons).
+     The route answers {lessons:[…], dir:'squad/lessons'} and one lesson is:
+         { id, closedAt, problem, cause, fastestCheck, wastedTime, keywords[] }
+     Those exact names are read FIRST below. The other names stay as fallbacks
+     for old files and for drift after this pin — and the per-row verdict above
+     is what makes drift safe: when a name changes, the panel says "N lessons
+     can't be read" instead of reporting data it cannot read as data that does
+     not exist. Re-pin here if that route's shape ever changes. */
   var LESSON_LIST_KEYS = ['lessons', 'items', 'list', 'data', 'results'];
   var LESSON_MAX = 200;
-  /* An id becomes a URL path segment on DELETE. Anything that is not a plain
-     name gets no delete button rather than a guessed route. */
-  var LESSON_ID_OK = /^[A-Za-z0-9_.:-]{1,80}$/;
+  /* An id becomes a URL path segment on DELETE, so it must be a shape the
+     backend will actually accept. PINNED to lessons.safeId in PR #77:
+     starts alphanumeric, then alphanumeric / . / _ / -, at most 64, and never
+     containing "..". A lesson whose id fails this gets NO delete button rather
+     than a button that posts a route the server will refuse with a 400. */
+  var LESSON_ID_OK = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+  function lessonIdOk(id) {
+    return LESSON_ID_OK.test(id) && id.indexOf('..') === -1;
+  }
 
   function lessonField(v, max) {
     var s = itemText(v).trim();
@@ -897,6 +992,17 @@
      So every ROW gets the same three-way verdict the container gets: read, or
      not read. A row we cannot read is COUNTED and reported, never dropped.
      Returns a lesson object, or null meaning "this row could not be read". */
+  /* PINNED (PR #77): closedAt is a full ISO timestamp. Printed raw it reads
+     "2026-07-14T09:12:00.000Z" in a narrow column — noise where a date should
+     be. The date and minute are kept; the seconds, milliseconds and the Z go.
+     No timezone is guessed and nothing is reformatted that is not clearly an
+     ISO stamp — an unrecognised string is shown exactly as it arrived. */
+  var ISO_STAMP = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/;
+  function lessonDate(s) {
+    var m = ISO_STAMP.exec(s);
+    return m ? (m[1] + ' ' + m[2] + ' UTC') : s;
+  }
+
   function lessonRow(row) {
     if (row == null) return null;
     if (typeof row !== 'object' || Array.isArray(row)) {
@@ -909,15 +1015,20 @@
     var out = {
       id: id,
       incident: incident,
+      /* `problem` is the symptom AS REPORTED. The backend records it on every
+         lesson and this panel was dropping it — which left an operator reading
+         a cause with no idea what the incident had looked like from the desk,
+         the one field that makes a past lesson recognisable. */
+      problem: lessonField(pick(row, ['problem', 'symptom', 'reported']), 300),
       cause: lessonField(pick(row, ['cause', 'rootCause', 'root_cause']), 300),
       fastestCheck: lessonField(pick(row, ['fastestCheck', 'fastest_check', 'check', 'fastest']), 220),
-      wasted: lessonField(pick(row, ['wasted', 'wastedTime', 'wasted_time', 'timeWasted']), 220),
+      wasted: lessonField(pick(row, ['wastedTime', 'wasted', 'wasted_time', 'timeWasted']), 220),
       keywords: textList(pick(row, ['keywords', 'symptomKeywords', 'symptom_keywords', 'symptoms']))
         .map(function (k) { return lessonField(k, 40); }).filter(Boolean).slice(0, 8),
-      date: lessonField(pick(row, ['date', 'closedAt', 'closed_at', 'at', 'when']), 40),
-      deletable: LESSON_ID_OK.test(id),
+      date: lessonDate(lessonField(pick(row, ['closedAt', 'date', 'closed_at', 'at', 'when']), 40)),
+      deletable: lessonIdOk(id),
     };
-    if (!out.incident && !out.cause && !out.fastestCheck && !out.keywords.length) return null;
+    if (!out.incident && !out.problem && !out.cause && !out.fastestCheck && !out.keywords.length) return null;
     return out;
   }
 
@@ -952,6 +1063,7 @@
         esc(l.incident || l.id) + '" title="Delete this lesson">Delete</button>'
       : '<span class="ls-nodel" title="This lesson has no id the server would accept on a delete route — nothing is being guessed at.">no id</span>';
     var rows = '';
+    if (l.problem) rows += '<div class="ls-row"><span class="ls-k">looked like</span><span class="ls-v">' + esc(l.problem) + '</span></div>';
     if (l.cause) rows += '<div class="ls-row"><span class="ls-k">cause</span><span class="ls-v">' + esc(l.cause) + '</span></div>';
     if (l.fastestCheck) rows += '<div class="ls-row"><span class="ls-k">found fastest by</span><span class="ls-v">' + esc(l.fastestCheck) + '</span></div>';
     if (l.wasted) rows += '<div class="ls-row"><span class="ls-k">wasted time</span><span class="ls-v">' + esc(l.wasted) + '</span></div>';

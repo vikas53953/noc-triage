@@ -1766,7 +1766,14 @@ function lessonDelete(btn){
   btn.disabled = true; btn.textContent = 'Deleting…';
   api('/api/lessons/' + encodeURIComponent(id), { method:'DELETE' })
     .then(function(r){
-      if(!r.ok) throw new Error('HTTP ' + r.status);
+      if(!r.ok){
+        /* PINNED (PR #77): the route answers {error:'…'} in plain words on a
+           400 / 404 / 500. "HTTP 404" tells an operator nothing; the server's
+           own sentence tells them what actually happened. */
+        return r.json().catch(function(){ return null; }).then(function(body){
+          throw new Error((body && body.error) ? body.error : ('HTTP ' + r.status));
+        });
+      }
       var row = btn.closest('.ls-item');
       if(row) row.remove();
       sysMsg('Deleted the lesson from <b>' + esc(name) + '</b>. Jarvis will not look there first any more.');
@@ -1828,7 +1835,10 @@ function cw11Decorate(node, d){
       var g = CW9B.reflectionGlyphHtml(t);
       if(g){ if(lbl) lbl.insertAdjacentHTML('afterend', g); else b.insertAdjacentHTML('afterbegin', g); }
     }
-    var chip = CW9B.lessonRefChipHtml(d.lessonRef || d.lesson_ref);
+    /* PINNED (PR #77): the backend names its lesson hit `lesson` ({id,
+       lookFirst, why}) — `lessonRef` was this branch's guess. Both are read so
+       whichever a message carries lights the chip. */
+    var chip = CW9B.lessonRefChipHtml(d.lessonRef || d.lesson_ref || d.lesson);
     if(chip) b.insertAdjacentHTML('beforeend', chip);
   }catch(e){}
   return node;
@@ -4549,7 +4559,8 @@ function onTriage(type, d){
                              silently loses. A review found the plain path kept
                              the reflection marker while the bridge path — the
                              one an actual P1 call runs on — dropped it. */
-                          reflection:d.reflection, lessonRef:d.lessonRef || d.lesson_ref })){ /* painted */ }
+                          reflection:d.reflection,
+                          lessonRef:d.lessonRef || d.lesson_ref || d.lesson })){ /* painted */ }
       /* CW-11: the bridge path carries the same additive reflection /
          lessonRef fields, so it decorates the same way. */
       else if(!(d.tier === 'L4' && d.round === 2)) cw11Decorate(jvMsg(d.agentName || d.agent || 'Engineer', d.text || '', d.ts), d);

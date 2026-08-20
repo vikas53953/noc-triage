@@ -132,6 +132,66 @@ console.log('\nCW-11 UI — the verdict split, reflection markers, and the lesso
     !/\[object Object\]/.test(h) && /nested/.test(h));
 }
 
+// ── 1b. PINNED TO THE REAL BACKEND (PR #77, conduct.verdictMsg) ────────────
+// A claim is an OBJECT, not a string: verified [{claim, evidenceIds[]}] and
+// suspected [{claim, why}]. `confidence` is a NUMBER 0..1 or null — not the
+// word "high". `causeSupported` is true / false / null. Every one of those was
+// guessed differently on this branch, and each wrong guess showed something
+// false or unreadable to an operator.
+{
+  const real = CW9B.verdictHtml({
+    kind: 'verdict',
+    verdict: {
+      cause: 'Failing optic on Gi1/0/24', confidence: 0.82, rounds: 3, causeSupported: true,
+      verified: [{ claim: '412 CRC errors since the last clear', evidenceIds: ['ev-14', 'ev-17'] }],
+      suspected: [{ claim: 'the patch was disturbed at 10:15', why: 'no reading from this incident backs it' }],
+    },
+  });
+  ok('a claim OBJECT renders its sentence, not its JSON',
+    /412 CRC errors since the last clear/.test(real) && !/"claim"/.test(real) && !/evidenceIds"/.test(real));
+  ok('a verified claim names the evidence records behind it',
+    /from ev-14, ev-17/.test(real));
+  ok('a suspected claim says WHY it is not backed',
+    /no reading from this incident backs it/.test(real));
+  ok('the supporting detail is set apart from the claim itself', /class="vcsrc"/.test(real));
+  ok('a numeric confidence is shown as a percentage, not as a raw 0.82',
+    /confidence 82%/.test(real) && !/0\.82/.test(real));
+}
+{
+  // confidence 0 is the most alarming value there is, and it is FALSY — the
+  // first cut dropped it off the card entirely.
+  const zero = CW9B.verdictHtml({ verdict: { cause: 'c', confidence: 0, verified: [{ claim: 'a' }] } });
+  ok('a confidence of exactly 0 is shown, not silently dropped', /confidence 0%/.test(zero));
+  ok('a null confidence shows nothing rather than "null"',
+    !/confidence/.test(CW9B.verdictHtml({ verdict: { cause: 'c', confidence: null } })));
+  ok('an out-of-range number is clamped rather than printed as 420%',
+    /confidence 100%/.test(CW9B.verdictHtml({ verdict: { cause: 'c', confidence: 4.2 } })));
+  ok('an old string confidence still renders as it did',
+    /confidence high/.test(CW9B.verdictHtml({ verdict: { cause: 'c', confidence: 'high' } })));
+}
+// causeSupported:false — the self-check found nothing backing THE CAUSE.
+{
+  const down = CW9B.verdictHtml({
+    verdict: { cause: 'Probably the optic', causeSupported: false, confidence: 0,
+      suspected: [{ claim: 'a guess', why: 'nothing read backs it' }] },
+  });
+  ok('an unsupported cause does NOT claim "Cause found"', !/Cause found/.test(down));
+  ok('it is labelled suspected — unverified at the top of the card',
+    /class="r-lbl">Suspected — unverified/.test(down));
+  ok('the card stops looking like a found cause', /class="verdictcard unsupported"/.test(down));
+  ok('and it says plainly that nothing read backs it',
+    /none of them back it/.test(down) && /not a cause/.test(down));
+  ok('it tells the operator to confirm before acting', /confirm it before acting/.test(down));
+  ok('the downgraded card is amber, not the green of a finding',
+    /\.verdictcard\.unsupported\{border-color:var\(--warn\)/.test(sharedCss));
+  // the other direction: supported / not-run must be untouched
+  ok('causeSupported:true still reads "Cause found"',
+    /Cause found/.test(CW9B.verdictHtml({ verdict: { cause: 'c', causeSupported: true } })));
+  ok('causeSupported null (the self-check never ran) reads exactly as before',
+    CW9B.verdictHtml({ verdict: { cause: 'c', causeSupported: null } }) === CW9B.verdictHtml({ verdict: { cause: 'c' } }));
+  ok('a non-boolean causeSupported is not treated as false',
+    /Cause found/.test(CW9B.verdictHtml({ verdict: { cause: 'c', causeSupported: 'no' } })));
+}
 // The lists also work when the backend puts them on the envelope, not the verdict.
 {
   const h = CW9B.verdictHtml({ kind: 'verdict', verdict: { cause: 'c' }, verified: ['a read'], suspected: ['a guess'] });
@@ -139,6 +199,19 @@ console.log('\nCW-11 UI — the verdict split, reflection markers, and the lesso
 }
 
 // ── 2. reflection markers ───────────────────────────────────────────────────
+// PINNED (PR #77): the backend's round reflection is {nothingNew, line,
+// nextAngle} — there is NO `type` field on a real one. Reading only `type`
+// meant every reflection the backend actually sends rendered nothing at all.
+ok('the real backend shape {nothingNew:true} lights the nothing-new marker',
+  CW9B.reflectionOf({ reflection: { nothingNew: true, line: 'nothing new', nextAngle: 'the optic' } }) === 'nothing-new');
+ok('nothingNew:false is a CLEAN round and must stay unmarked',
+  CW9B.reflectionOf({ reflection: { nothingNew: false, line: '' } }) === '');
+ok('reflection:null (every clean round) is unmarked',
+  CW9B.reflectionOf({ reflection: null }) === '');
+ok('an explicit type still wins over the flags, for any future shape',
+  CW9B.reflectionOf({ reflection: { type: 'confirmed', nothingNew: true } }) === 'confirmed');
+ok('an explicit BAD type is refused rather than falling back to a flag',
+  CW9B.reflectionOf({ reflection: { type: 'exploded', nothingNew: true } }) === '');
 ok('reflection:{type} is read', CW9B.reflectionOf({ reflection: { type: 'nothing-new' } }) === 'nothing-new');
 ok('the plain string form is read too', CW9B.reflectionOf({ reflection: 'reopened' }) === 'reopened');
 ok('case and stray space do not matter', CW9B.reflectionOf({ reflection: ' Confirmed ' }) === 'confirmed');
@@ -171,6 +244,16 @@ ok('a reflection message is NOT treated as an envelope',
 
 // ── 3. the "using lesson from INC-…" chip ───────────────────────────────────
 {
+  // PINNED (PR #77): the backend's lesson hit is {id, lookFirst, why} and it
+  // names the field `lesson`. `lessonRef`/`incident` were this branch's guess.
+  const realHit = CW9B.lessonRefChipHtml({ id: 'INC-2041', why: 'the same thing happening on the network',
+    lookFirst: 'the optic levels on the complaining port' });
+  ok('the real backend hit {id, lookFirst, why} names the incident',
+    /using lesson from INC-2041/.test(realHit));
+  ok('and it carries what that lesson says to look at first',
+    /looking first at: the optic levels/i.test(realHit));
+  ok('the desk reads the backend\'s `lesson` field, not only its own guess',
+    /d\.lessonRef \|\| d\.lesson_ref \|\| d\.lesson/.test(desk));
   const c = CW9B.lessonRefChipHtml({ incident: 'INC-2041', why: 'same symptom words' });
   ok('the chip names the incident it is leaning on', /using lesson from INC-2041/.test(c));
   ok('the chip explains itself on hover', /same symptom words/.test(c));
@@ -256,16 +339,25 @@ ok('a reflection message is NOT treated as an envelope',
   // The stronger promise: an id only ever reaches the button (and therefore the
   // DELETE route) when it is a plain name. Anything else gets no button at all,
   // so there is no attribute to break out of and no route to guess.
-  const hostileIds = ['"><b>x', '../../etc/passwd', XSS, 'a b', 'INC-1?x=1', '', 'INC_2041.v2:1'];
-  const rendered = hostileIds.map((id) => CW9B.lessonsHtml({ lessons: [{ id, incident: 'x', cause: 'c' }] }));
-  ok('only a plain-name id ever reaches a delete button',
+  // PINNED to lessons.safeId in PR #77: starts alphanumeric, then
+  // alphanumeric / . / _ / -, at most 64, never containing "..". Anything the
+  // SERVER would refuse must get no button here — a button that posts a route
+  // the server answers with 400 is a button that lies about what it does.
+  const hostileIds = ['"><b>x', '../../etc/passwd', XSS, 'a b', 'INC-1?x=1', '',
+    'INC_2041.v2:1',        // ':' — legal on the old guess, refused by the server
+    '.hidden',              // must start alphanumeric
+    'a..b',                 // the ".." the server bars outright
+    'X'.repeat(65),         // over the server's 64-char limit
+    'INC-2041.v2'];         // the one the server WOULD accept
+  const rendered = hostileIds.map((id) => CW9B.lessonsHtml({ lessons: [{ id, problem: 'x', cause: 'c' }] }));
+  ok('only an id the SERVER would accept ever reaches a delete button',
     rendered.every((r) => {
       const m = /data-lesson-id="([^"]*)"/.exec(r);
-      return m === null || /^[A-Za-z0-9_.:-]{1,80}$/.test(m[1]);
+      return m === null || (/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(m[1]) && m[1].indexOf('..') === -1);
     }));
-  ok('the one legitimate id in that set DID get a button',
-    /data-lesson-id="INC_2041\.v2:1"/.test(rendered[6]));
-  ok('the hostile ones got none', rendered.slice(0, 6).every((r) => !/ls-del/.test(r)));
+  ok('the one server-legal id in that set DID get a button',
+    /data-lesson-id="INC-2041\.v2"/.test(rendered[10]));
+  ok('every id the server would refuse got none', rendered.slice(0, 10).every((r) => !/ls-del/.test(r)));
 }
 {
   const h = CW9B.lessonsHtml({ lessons: [{ id: 'i', incident: 'x', cause: { deep: 'an object' } }] });
@@ -325,18 +417,60 @@ ok('a reflection message is NOT treated as an envelope',
     CW9B.normalizeLessons({ lessons: [{}, null, ''] }).badRows === 3 &&
     CW9B.normalizeLessons({ lessons: [{}, null, ''] }).empty === false);
 }
-// The aliases are a GUESS until the backend PR pins them — which is precisely
-// why the per-row verdict has to hold. These are the shapes we do read today.
+// ── 4c. PINNED TO THE REAL BACKEND (PR #77) ────────────────────────────────
+// GET /api/lessons answers {lessons:[…], dir}, and one lesson really is
+// { id, closedAt, problem, cause, fastestCheck, wastedTime, keywords[] }.
+// Note what this branch had GUESSED wrong: `wasted` (really `wastedTime`),
+// `date` (really `closedAt`), an `incident` field that does not exist, and
+// `problem` — a real field that was being dropped entirely.
+{
+  const real = {
+    dir: 'squad/lessons',
+    lessons: [{
+      id: 'INC-2041', closedAt: '2026-07-14T09:12:00.000Z',
+      problem: 'users on sw1-hyd seeing packet loss since 2pm',
+      cause: 'Failing optic on sw1-hyd Gi1/0/24.',
+      fastestCheck: 'show interface transceiver detail',
+      wastedTime: '40 minutes on BGP state that was never involved',
+      keywords: ['packet loss', 'CRC'],
+    }],
+  };
+  const s = CW9B.normalizeLessons(real);
+  ok('the real backend payload is read — no unreadable rows',
+    s.list.length === 1 && s.badRows === 0 && s.unreadable === false);
+  const l = s.list[0];
+  ok('the id doubles as the incident, since the record has no `incident` field',
+    l.id === 'INC-2041' && l.incident === 'INC-2041');
+  ok('`wastedTime` is read (this branch had guessed `wasted`)',
+    /40 minutes on BGP/.test(l.wasted));
+  ok('`closedAt` is read (this branch had guessed `date`)', /2026-07-14/.test(l.date));
+  ok('the ISO stamp is tidied to a date and a minute, not printed raw',
+    l.date === '2026-07-14 09:12 UTC');
+  ok('a date we do not recognise is shown exactly as it arrived, not reformatted',
+    CW9B.normalizeLessons({ lessons: [{ id: 'i', problem: 'x', date: 'last Tuesday' }] }).list[0].date === 'last Tuesday');
+  ok('`problem` is read — a real field the panel used to drop', /packet loss since 2pm/.test(l.problem));
+  const h = CW9B.lessonsHtml(real);
+  ok('and the problem is on screen, labelled in plain words',
+    /looked like/.test(h) && /users on sw1-hyd seeing packet loss/.test(h));
+  ok('every other real field lands too',
+    /INC-2041/.test(h) && /Failing optic/.test(h) && /show interface transceiver detail/.test(h) &&
+    /40 minutes on BGP/.test(h) && /ls-kw">packet loss/.test(h));
+  ok('the delete button carries the id the server will accept',
+    /data-lesson-id="INC-2041"/.test(h));
+  ok('the pin is written down where the next person will see it',
+    /PINNED TO THE BACKEND \(PR #77, sources\/lessons\.js/.test(sharedJs));
+  // the per-row honesty must SURVIVE the pin — that is what covers future drift
+  ok('a row under names the pin does not cover is still counted, not dropped',
+    CW9B.normalizeLessons({ lessons: [real.lessons[0], { totally: 'different' }] }).badRows === 1);
+}
+// The fallback names stay, for older files and for drift after this pin.
 {
   const alt = { lessons: [{ lesson_id: 'INC-7', root_cause: 'a root cause', check: 'show optics', symptoms: ['loss'] }] };
-  const s = CW9B.normalizeLessons(alt);
-  ok('a snake_case payload is read rather than reported unreadable',
-    s.list.length === 1 && s.badRows === 0);
+  ok('a snake_case payload is still read rather than reported unreadable',
+    CW9B.normalizeLessons(alt).list.length === 1);
   const h = CW9B.lessonsHtml(alt);
   ok('and every field of it lands on screen',
     /INC-7/.test(h) && /a root cause/.test(h) && /show optics/.test(h) && /ls-kw">loss/.test(h));
-  ok('the guessed-alias risk is written down where the next person will see it',
-    /NOT pinned to a[\s\S]{0,12}real seam/.test(sharedJs));
 }
 // The collapsed hint must not read "none yet" over data it could not read.
 ok('the panel hint counts the unreadable rows too, so a collapsed panel cannot lie',
@@ -356,6 +490,10 @@ ok('a 404 is reported as "not kept yet", never as "no lessons"',
   /r\.status === 404[\s\S]{0,300}does not keep lessons yet/.test(desk));
 ok('a failed delete says the lesson is STILL on the server',
   /still on the server/.test(desk));
+// PINNED (PR #77): the route answers {error:'…'} in plain words on 400/404/500.
+// "HTTP 404" tells an operator nothing; the server's own sentence does.
+ok('a failed delete shows the server\'s own words, not just a status number',
+  /body && body\.error\) \? body\.error : \('HTTP ' \+ r\.status\)/.test(desk));
 ok('delete takes two clicks — the first only arms it',
   /Click again to delete/.test(desk) && /LESSONS\.armed/.test(desk));
 ok('the arming lapses on its own so a stray click later cannot delete',

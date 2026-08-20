@@ -171,6 +171,16 @@
 /* the explanation under the suspected list has to be READABLE — a browser pass
    found it disappearing into the green card at --ink3 */
 .verdictcard .vcnote{font-size:.68rem;color:var(--ink2);line-height:1.5;margin-top:.32rem}
+/* which evidence records back a verified claim, or why a suspected one is not
+   backed — supporting detail, set under the claim it belongs to */
+.verdictcard .vclaims .vcsrc{display:block;font-size:.63rem;color:var(--ink3);
+  line-height:1.4;margin-top:.1rem;overflow-wrap:anywhere}
+/* causeSupported:false — the self-check found NOTHING backing the cause itself.
+   The card stops looking like a finding: no green, no tick, and it says what it
+   is. Amber, not red: this is an honest downgrade, not a failure. */
+.verdictcard.unsupported{border-color:var(--warn);background:var(--warn-bg)}
+.verdictcard.unsupported .r-lbl{color:var(--warn)}
+.verdictcard.unsupported .vcause{font-weight:700}
 
 /* ---------- CW-11 reflection marker on an ordinary message ---------- */
 /* Small, inline, and quiet. It marks WHERE Jarvis changed its mind in a
