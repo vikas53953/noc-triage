@@ -147,3 +147,116 @@
 .sp-fill{display:block;height:100%;background:var(--info);border-radius:99px}
 .sp-note{font-size:.75rem;line-height:1.5;color:var(--ink2)}
 .sp-fine{font-size:.63rem;color:var(--ink3);line-height:1.45;margin-top:.3rem}
+
+/* ============================================================
+   CW-11 — the verdict split: verified vs suspected
+   ============================================================
+   The green card keeps its meaning: what is under "Verified" traces to a
+   read from this incident. The suspected block sits INSIDE the same card
+   but visually apart — neutral border, no green, no warning red. It is a
+   quieter shelf under the finding, not an alarm: these are lines Jarvis
+   would have stated as fact before this wave, now labelled honestly. */
+.verdictcard .vclaims{margin-top:.5rem;border-radius:8px;padding:.4rem .55rem}
+.verdictcard .vclaims .vch{
+  display:block;font-size:.6rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+  margin-bottom:.25rem
+}
+.verdictcard .vclaims ul{list-style:disc;margin:.2rem 0 0 1rem;padding:0}
+.verdictcard .vclaims li{font-size:.78rem;line-height:1.5;margin-bottom:.18rem;overflow-wrap:anywhere}
+.verdictcard .vclaims.verified{background:rgba(34,197,94,.10);border:1px solid rgba(34,197,94,.32)}
+.verdictcard .vclaims.verified .vch{color:var(--ok)}
+.verdictcard .vclaims.suspected{background:rgba(148,163,184,.13);border:1px dashed var(--line)}
+.verdictcard .vclaims.suspected .vch{color:var(--ink2)}
+.verdictcard .vclaims.suspected li{color:var(--ink2)}
+/* the explanation under the suspected list has to be READABLE — a browser pass
+   found it disappearing into the green card at --ink3 */
+.verdictcard .vcnote{font-size:.68rem;color:var(--ink2);line-height:1.5;margin-top:.32rem}
+/* which evidence records back a verified claim, or why a suspected one is not
+   backed — supporting detail, set under the claim it belongs to */
+.verdictcard .vclaims .vcsrc{display:block;font-size:.63rem;color:var(--ink3);
+  line-height:1.4;margin-top:.1rem;overflow-wrap:anywhere}
+/* causeSupported:false — the self-check found NOTHING backing the cause itself.
+   The card stops looking like a finding: no green, no tick, and it says what it
+   is. Amber, not red: this is an honest downgrade, not a failure. */
+.verdictcard.unsupported{border-color:var(--warn);background:var(--warn-bg)}
+.verdictcard.unsupported .r-lbl{color:var(--warn)}
+.verdictcard.unsupported .vcause{font-weight:700}
+
+/* ---------- CW-11 reflection marker on an ordinary message ---------- */
+/* Small, inline, and quiet. It marks WHERE Jarvis changed its mind in a
+   long thread; it is never the message itself. */
+.cw11-refl{
+  display:inline-flex;align-items:baseline;gap:.28rem;margin:0 .35rem .15rem 0;
+  padding:.08rem .38rem;border-radius:999px;font-size:.6rem;font-weight:800;
+  letter-spacing:.04em;text-transform:uppercase;white-space:nowrap;
+  border:1px solid var(--line);color:var(--ink3);vertical-align:baseline
+}
+.cw11-refl .rg{font-family:var(--mono);font-size:.72rem;font-weight:800}
+.cw11-refl.nothing-new{color:var(--ink2);background:rgba(148,163,184,.14)}
+.cw11-refl.reopened{color:var(--warn);background:var(--warn-bg);border-color:var(--warn)}
+.cw11-refl.confirmed{color:var(--ok);background:var(--ok-bg);border-color:var(--ok)}
+/* the whole bubble takes the faintest matching tint, so the eye finds it
+   while scrolling — deliberately weaker than any card colour. */
+.bubble.cw11-tint-nothing-new{box-shadow:inset 3px 0 0 rgba(148,163,184,.55)}
+.bubble.cw11-tint-reopened{box-shadow:inset 3px 0 0 var(--warn)}
+.bubble.cw11-tint-confirmed{box-shadow:inset 3px 0 0 var(--ok)}
+
+/* ---------- CW-11 "using lesson from INC-…" chip ---------- */
+.cw11-lref{
+  display:inline-flex;align-items:baseline;gap:.3rem;margin-top:.4rem;
+  padding:.1rem .42rem;border-radius:999px;border:1px dashed var(--line);
+  background:var(--purple-bg,rgba(148,163,184,.12));color:var(--ink3);
+  font-size:.63rem;font-weight:700;line-height:1.5;overflow-wrap:anywhere
+}
+
+/* ============================================================
+   CW-11 — the Lessons panel (desk, collapsible, queue footer)
+   ============================================================
+   Same shape and same scroll containment as the Spend panel. The body
+   scrolls INSIDE the panel so an open panel can never push the incident
+   queue — or the "Open a new triage" button — out of a column that clips
+   its overflow (the 620px / 760px rule the .qfoot backstop enforces). */
+.lessonpanel{border:1px solid var(--line);border-radius:10px;background:var(--panel);margin-bottom:.45rem}
+.lessonpanel>summary{
+  cursor:pointer;list-style:none;padding:.42rem .6rem;display:flex;gap:.4rem;align-items:baseline;
+  font-size:.74rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2)
+}
+.lessonpanel>summary::-webkit-details-marker{display:none}
+.lessonpanel>summary::before{content:"▸";color:var(--ink3);font-family:var(--mono);flex-shrink:0}
+.lessonpanel[open]>summary::before{content:"▾"}
+.lessonpanel>summary .ls-hint{margin-left:auto;font-size:.63rem;font-weight:600;letter-spacing:0;
+  text-transform:none;color:var(--ink3);white-space:nowrap}
+.ls-body{
+  border-top:1px solid var(--line);padding:.5rem .6rem;
+  max-height:clamp(96px, 26vh, 300px);overflow-y:auto;overscroll-behavior:contain
+}
+.ls-item{border:1px solid var(--line);border-radius:8px;padding:.4rem .5rem;margin-bottom:.4rem}
+.ls-item:last-of-type{margin-bottom:.2rem}
+.ls-top{display:flex;gap:.4rem;align-items:baseline}
+.ls-inc{font-family:var(--mono);font-size:.68rem;font-weight:800;color:var(--info);overflow-wrap:anywhere}
+.ls-noinc{color:var(--ink3);font-weight:600;font-style:italic}
+.ls-date{font-size:.6rem;color:var(--ink3);white-space:nowrap;margin-left:auto}
+.ls-del{
+  border:1px solid var(--line);background:transparent;color:var(--ink3);border-radius:6px;
+  padding:.1rem .4rem;font-size:.6rem;font-weight:800;cursor:pointer;white-space:nowrap;
+  margin-left:.3rem;transition:.14s
+}
+.ls-del:hover{border-color:var(--bad);color:var(--bad)}
+.ls-del.arm{border-color:var(--bad);color:var(--bad);background:var(--bad-bg)}
+.ls-del[disabled]{opacity:.5;cursor:not-allowed}
+.ls-nodel{font-size:.58rem;color:var(--ink3);margin-left:auto;white-space:nowrap}
+.ls-row{display:flex;gap:.4rem;font-size:.7rem;line-height:1.45;margin-top:.22rem}
+.ls-k{flex:0 0 auto;min-width:92px;font-size:.58rem;font-weight:800;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--ink3);padding-top:.1rem}
+.ls-v{min-width:0;color:var(--ink2);overflow-wrap:anywhere}
+.ls-kws{display:flex;flex-wrap:wrap;gap:.25rem;margin-top:.3rem}
+.ls-kw{font-family:var(--mono);font-size:.58rem;color:var(--ink3);border:1px solid var(--line);
+  border-radius:999px;padding:.05rem .34rem;overflow-wrap:anywhere}
+/* rows the panel could not read, reported beside the ones it could. Marked
+   like a caveat, not like a failure — the readable lessons above are real. */
+.ls-mixed{border:1px dashed var(--warn);border-radius:8px;background:var(--warn-bg);
+  padding:.35rem .5rem;font-size:.66rem;line-height:1.5;color:var(--ink2);margin-top:.2rem}
+.ls-mixed b{color:var(--warn)}
+.ls-note{font-size:.75rem;line-height:1.5;color:var(--ink2)}
+.ls-fine{font-size:.63rem;color:var(--ink3);line-height:1.45;margin-top:.3rem}
+.ls-err{font-size:.66rem;color:var(--bad);line-height:1.45;margin-top:.3rem}

@@ -174,6 +174,13 @@ button,input,select,textarea{font-family:inherit}
   padding:.6rem;border-top:1px solid var(--line);flex-shrink:0;background:var(--panel);
   max-height:50%;overflow-y:auto;overscroll-behavior:contain
 }
+/* CW-11: a SECOND panel now lives here (Lessons, beside Spend). The cap above
+   already stops the footer growing, but with both panels open the footer
+   scrolls — and a browser pass at 620px found "Open a new triage" scrolled out
+   of sight (true at the CW-10 baseline too, with Spend alone). Pinning it to
+   the bottom of the footer keeps the one ACTION in the column always reachable,
+   however many panels are open. */
+.qfoot #newToggle{position:sticky;bottom:0;background:var(--panel);z-index:1}
 .newform{display:none;flex-direction:column;gap:.4rem;margin-bottom:.5rem}
 .newform.on{display:flex}
 .newform select,.newform textarea{
@@ -832,6 +839,15 @@ pre.term{
           <div class="sp-note">Reading the usage record…</div>
         </div>
       </details>
+      <!-- CW-11: what past incidents taught. Collapsed by default — it is
+           context, not the job. Same scroll containment as Spend, so an open
+           panel never pushes the queue out of the column (.qfoot backstop). -->
+      <details class="lessonpanel" id="lessonPanel">
+        <summary>📓 Lessons<span class="ls-hint" id="lessonHint">from closed incidents</span></summary>
+        <div class="ls-body" id="lessonBody">
+          <div class="ls-note">Reading the lessons the server kept…</div>
+        </div>
+      </details>
       <div class="newform" id="newForm">
         <select id="newSev">
           <option value="P1">P1 — major, everyone on it</option>
@@ -1380,7 +1396,9 @@ function cw9Render(d){
     }
     /* a short jarvis line may travel with the card — paint it first, then the card */
     if(d.text && String(d.text).trim() && kind !== 'finding'){
-      jvMsg(d.agentName || d.agent || 'Jarvis', d.text, d.timestamp);
+      /* CW-11: the same additive reflection / lessonRef markers apply to the
+         line that travels with a card. */
+      cw11Decorate(jvMsg(d.agentName || d.agent || 'Jarvis', d.text, d.timestamp), d);
     }
     var html = '';
     if(kind === 'roster')  html = CW9B.rosterHtml(d);
@@ -1665,6 +1683,186 @@ function loadSpend(force){
 
 /* DEV/TEST ONLY — draw the panel from a fixture, no backend. */
 window.__cw10DevSpend = function(d){ var p=$('spendPanel'); if(p) p.open = true; spendPaint(CW9B.spendHtml(d), 'model tokens'); };
+
+/* ============================================================
+   CW-11 — LESSONS PANEL (GET /api/lessons, DELETE /api/lessons/:id)
+   ============================================================
+   What past incidents taught: the cause, the check that found it fastest,
+   what wasted time, the symptom words. A lesson biases where Jarvis looks
+   FIRST and nothing more — it never runs a check, never approves a change
+   and never replaces a question it should be asking the operator.
+
+   Three states, kept apart on purpose (the Spend panel's rule, same
+   reason): the list was read and is EMPTY; the endpoint is NOT THERE or
+   unreachable; the answer came back in a shape we CANNOT READ. Saying
+   "no lessons yet" when we simply failed to read is a lie about the
+   server's memory, so each one gets its own words.
+
+   Delete is two clicks — the first arms the button and says so, the
+   second sends the DELETE. There is no dialog to dismiss by accident and
+   no undo, so the arming step is the safety.
+
+   All the reading and drawing lives in the shared module, so the suite
+   proves the states and the escaping without a browser. This block owns
+   the panel node, the poll and the two clicks. */
+var LESSONS = { state:'idle', at:0, inflight:false, armed:null, armT:null };
+var LESSONS_FRESH_MS = 60000;
+
+function lessonPaint(html, hint){
+  var b = $('lessonBody'); if(b) b.innerHTML = html;
+  var h = $('lessonHint'); if(h) h.textContent = hint || 'from closed incidents';
+}
+function lessonCount(raw){
+  try{
+    var s = CW9B.normalizeLessons(raw);
+    if(s.unreadable) return 'unreadable';
+    /* rows we could not read are counted in the hint too — a collapsed panel
+       must not read "none yet" when the server sent lessons we cannot show. */
+    if(!s.total) return s.badRows ? (s.badRows + ' unreadable') : 'none yet';
+    return s.total + (s.total === 1 ? ' lesson' : ' lessons') +
+           (s.badRows ? ' · ' + s.badRows + ' unreadable' : '');
+  }catch(e){ return 'unreadable'; }
+}
+function loadLessons(force){
+  var p = $('lessonPanel'); if(!p || !CW9B) return;
+  if(!p.open) return;                                   /* closed: don't poll for nothing */
+  if(LESSONS.inflight) return;
+  if(!force && Date.now() - LESSONS.at < LESSONS_FRESH_MS) return;
+  LESSONS.inflight = true;
+  api('/api/lessons')
+    .then(function(r){
+      if(r.status === 404){
+        /* the honest one: this server build does not keep lessons yet */
+        LESSONS.state = 'absent';
+        lessonPaint(CW9B.lessonsNoteHtml('this server does not keep lessons yet'), 'not kept');
+        return null;
+      }
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function(d){
+      if(d === null) return;
+      LESSONS.state = 'ok';
+      lessonPaint(CW9B.lessonsHtml(d), lessonCount(d));
+    })
+    .catch(function(err){
+      LESSONS.state = 'error';
+      lessonPaint(CW9B.lessonsNoteHtml('the lessons could not be read — ' + (err && err.message ? err.message : String(err))),
+        'unavailable');
+    })
+    .then(function(){ LESSONS.inflight = false; LESSONS.at = Date.now(); });
+}
+function lessonDisarm(){
+  clearTimeout(LESSONS.armT);
+  var b = $('lessonBody'); if(!b) return;
+  var armed = b.querySelector('.ls-del.arm');
+  if(armed){ armed.classList.remove('arm'); armed.textContent = 'Delete'; }
+  LESSONS.armed = null;
+}
+function lessonDelete(btn){
+  var id = btn.getAttribute('data-lesson-id') || '';
+  var name = btn.getAttribute('data-lesson-name') || id;
+  if(!id) return;
+  btn.disabled = true; btn.textContent = 'Deleting…';
+  api('/api/lessons/' + encodeURIComponent(id), { method:'DELETE' })
+    .then(function(r){
+      if(!r.ok){
+        /* PINNED (PR #77): the route answers {error:'…'} in plain words on a
+           400 / 404 / 500. "HTTP 404" tells an operator nothing; the server's
+           own sentence tells them what actually happened. */
+        return r.json().catch(function(){ return null; }).then(function(body){
+          throw new Error((body && body.error) ? body.error : ('HTTP ' + r.status));
+        });
+      }
+      var row = btn.closest('.ls-item');
+      if(row) row.remove();
+      sysMsg('Deleted the lesson from <b>' + esc(name) + '</b>. Jarvis will not look there first any more.');
+      LESSONS.at = 0;
+      loadLessons(true);
+    })
+    .catch(function(err){
+      btn.disabled = false; btn.textContent = 'Delete';
+      var row = btn.closest('.ls-item');
+      if(row && !row.querySelector('.ls-err')){
+        var e = document.createElement('div');
+        e.className = 'ls-err';
+        e.textContent = 'Not deleted — ' + (err && err.message ? err.message : String(err)) +
+                        '. The lesson is still on the server.';
+        row.appendChild(e);
+      }
+    });
+}
+(function(){
+  var p = $('lessonPanel'); if(!p) return;
+  try{ if(localStorage.getItem('noc-desk-lessons') === 'open') p.open = true; }catch(e){}
+  p.addEventListener('toggle', function(){
+    try{ localStorage.setItem('noc-desk-lessons', p.open ? 'open' : 'closed'); }catch(e){}
+    lessonDisarm();
+    if(p.open) loadLessons(true);
+  });
+  var body = $('lessonBody');
+  if(body) body.addEventListener('click', function(e){
+    var btn = e.target.closest && e.target.closest('.ls-del');
+    if(!btn) { lessonDisarm(); return; }
+    var id = btn.getAttribute('data-lesson-id') || '';
+    if(LESSONS.armed === id && btn.classList.contains('arm')){ lessonDisarm(); lessonDelete(btn); return; }
+    lessonDisarm();
+    LESSONS.armed = id;
+    btn.classList.add('arm');
+    btn.textContent = 'Click again to delete';
+    LESSONS.armT = setTimeout(lessonDisarm, 5000);
+  });
+  setInterval(function(){ loadLessons(false); }, LESSONS_FRESH_MS);
+  /* restored open → read it once now, so the operator does not open the desk to
+     a panel that says "Reading…" until the first poll. */
+  if(p.open) setTimeout(function(){ loadLessons(true); }, 0);
+})();
+
+/* ---------- CW-11: reflection marker + "using lesson" chip on a message ----
+   Both are OPTIONAL, ADDITIVE envelope fields on an ordinary chat message.
+   A message without them is painted exactly as it was before this wave —
+   there is no new kind, and an old transcript is untouched. All the string
+   work is in the shared module; this only puts it on the node. */
+function cw11Decorate(node, d){
+  try{
+    if(!node || !d || !CW9B) return node;
+    var b = node.querySelector ? node.querySelector('.bubble') : null;
+    if(!b) return node;
+    var t = CW9B.reflectionOf(d);
+    if(t){
+      b.classList.add('cw11-tint-' + t);
+      var lbl = b.querySelector('.lbl');
+      var g = CW9B.reflectionGlyphHtml(t);
+      if(g){ if(lbl) lbl.insertAdjacentHTML('afterend', g); else b.insertAdjacentHTML('afterbegin', g); }
+    }
+    /* PINNED (PR #77): the backend names its lesson hit `lesson` ({id,
+       lookFirst, why}) — `lessonRef` was this branch's guess. Both are read so
+       whichever a message carries lights the chip. */
+    var chip = CW9B.lessonRefChipHtml(d.lessonRef || d.lesson_ref || d.lesson);
+    if(chip) b.insertAdjacentHTML('beforeend', chip);
+  }catch(e){}
+  return node;
+}
+
+/* DEV/TEST ONLY — nothing in the app calls these. They draw the CW-11 pieces
+   from a fixture so the screen can be reviewed without the backend branch.
+   Fixtures: test/cw11-fixture.js */
+window.__cw11DevLessons = function(d){
+  /* Opening the panel fires its `toggle`, which starts a REAL read of
+     /api/lessons — and that read's answer lands a moment later and paints over
+     the fixture we just drew. A reviewer watched the fixture appear and vanish.
+     So the hook opens the panel, lets that read finish, and paints LAST. The
+     minimum wait is there because the toggle event is queued, not synchronous:
+     without it we could check `inflight` before the read has even started. */
+  var p=$('lessonPanel'); if(p) p.open = true;
+  var start = Date.now();
+  (function settle(){
+    var early = Date.now() - start < 300;
+    if((LESSONS.inflight || early) && Date.now() - start < 8000) return setTimeout(settle, 60);
+    lessonPaint(CW9B.lessonsHtml(d), lessonCount(d));
+  })();
+};
+window.__cw11DevSay = function(msg){ return onChat(msg); };
 
 /* ---------- ask Jarvis (REAL POST /api/command; reply on the WS) ---------- */
 function sendAsk(){
@@ -4315,7 +4513,9 @@ function onChatPaint(d){
     if(p0 && typeof p0 === 'object') proposalCard(p0, 'jarvis');
     return;
   }
-  jvMsg(d.agentName || d.agent || 'Jarvis', d.text || '', d.timestamp);
+  /* CW-11: an ordinary message may carry a reflection marker and/or a
+     "using lesson from INC-…" chip. Both are additive — absent = plain. */
+  cw11Decorate(jvMsg(d.agentName || d.agent || 'Jarvis', d.text || '', d.timestamp), d);
   /* A reply may carry a drafted change. It is still only a PROPOSAL —
      the engine is not called until the operator presses go. */
   var p = d.proposal || d.changeProposal;
@@ -4352,8 +4552,18 @@ function onTriage(type, d){
       else if(cw9Render({ kind:d.kind, text:d.text, questions:d.questions, roster:d.roster,
                           finding:d.finding, verdict:d.verdict, change:d.change,
                           agent:d.agent, agentName:d.agentName, timestamp:d.ts,
-                          triageId:d.triageId, resume:d.resume })){ /* painted */ }
-      else if(!(d.tier === 'L4' && d.round === 2)) jvMsg(d.agentName || d.agent || 'Engineer', d.text || '', d.ts);
+                          triageId:d.triageId, resume:d.resume,
+                          verified:d.verified, suspected:d.suspected,
+                          /* CW-11: this object is REBUILT field by field, so a
+                             field left out here is a field the bridge path
+                             silently loses. A review found the plain path kept
+                             the reflection marker while the bridge path — the
+                             one an actual P1 call runs on — dropped it. */
+                          reflection:d.reflection,
+                          lessonRef:d.lessonRef || d.lesson_ref || d.lesson })){ /* painted */ }
+      /* CW-11: the bridge path carries the same additive reflection /
+         lessonRef fields, so it decorates the same way. */
+      else if(!(d.tier === 'L4' && d.round === 2)) cw11Decorate(jvMsg(d.agentName || d.agent || 'Engineer', d.text || '', d.ts), d);
       }finally{ sayTakeSlot(tslot, tfrom, String(d.text || '').length); }
       break;
     case 'triage_verdict':
