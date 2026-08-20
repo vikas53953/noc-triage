@@ -603,3 +603,13 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - Evidence page to Vikas: https://claude.ai/code/artifact/033ae37f-aaf6-41f1-a607-aa885b010a2c
 - Tasks #1-3 complete. NEXT: await Vikas's hands-on confirm → CW-10 (contract first). Two LOW review
   leftovers ride along in CW-10 (short-device-error prose over-scrub; FE cosmetic F4).
+
+## 2026-08-20 ~16:00 — CW-10 BUILD LAUNCHED (Vikas: "don't wait for me... do all the remaining work",
+## reviews everything ~23:30 IST)
+- Contract pinned: docs/copilot-cw10-plumbing-contract.md. BE builder (feat/cw10-plumbing-be: SDK swap
+  keeping wrapper surface, prompt caching, spend store + /api/spend/summary, web search/fetch on reasoning
+  calls w/ honest web-source labeling, compaction w/ silent fallback, say-delta streaming, scrubber LOW)
+  + FE builder (feat/cw10-plumbing-fe: delta rendering, Spend panel, [object Object] LOW) running in
+  parallel clones. Review axis = BEHAVIOR PARITY with pre-CW-10 master. BE merges first.
+- After CW-10: CW-11 Reflexion (contract already pinned). Evidence for both folds into ONE 23:30 review
+  page for Vikas.
