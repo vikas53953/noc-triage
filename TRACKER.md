@@ -613,3 +613,14 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   parallel clones. Review axis = BEHAVIOR PARITY with pre-CW-10 master. BE merges first.
 - After CW-10: CW-11 Reflexion (contract already pinned). Evidence for both folds into ONE 23:30 review
   page for Vikas.
+
+## 2026-08-20 ~16:30 — CW-10 both halves BUILT, reviews in flight
+- BE PR #74: sources/claude.js rewritten on @anthropic-ai/sdk (same wrapper surface), spend-store +
+  /api/spend/summary, web search/fetch on reasoning only (live: web answer cited bst.cisco.com and said
+  "WEB-only answer — nothing here is a reading from our live devices"), compaction plumbed w/ fallback,
+  say_delta streaming (own WS type — NOT chat_message; FE informed). 30 suites green, 26 pre-existing
+  UNTOUCHED. Live: 7 deltas ✅, cache_read 2802 tokens ✅.
+- FE PR #75: createStream in shared cw9-bridge.js (accumulate/dup/gap/settle), Spend panel w/ honest
+  empty state, 7b fix, both delta transports accepted. 27 suites green, browser-verified on :3121.
+- Adversarial reviews launched (rev74 :3115 behavior-parity focus; rev75 :3116 stream-abuse focus).
+  Merge order BE→FE on approve, then restart :3000, live verify, then CW-11 build.
