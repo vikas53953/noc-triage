@@ -3240,8 +3240,131 @@ function cw9RenderClassic(d){
   }
 }
 
+/* ============================================================
+   CW-10 — STREAMED ANSWERS (envelope kind:'say-delta')
+   ============================================================
+   Same contract as the desk, same shared state machine: the pieces are a
+   PREVIEW, the ordinary recorded message replaces it. This console only
+   owns the bubble — accumulating, capping, spotting a hole and deciding
+   which preview a final message replaces all live in
+   public/cw9-bridge.js, so the two pages cannot drift apart. */
+var SAYC = window.CW9B ? CW9B.createStream() : null;
+var SAYC_NODES = Object.create(null);
+var SAYC_STALE_MS = 45000;
+
+function sayClassicBubble(st, html){
+  var host = $('chatStream'); if(!host) return null;
+  var empty = host.querySelector('.chat-empty'); if(empty) empty.remove();
+  var who = (st && st.who) || 'Jarvis';
+  var el = document.createElement('div');
+  el.className = 'msg';
+  el.setAttribute('data-say-preview', st.id);
+  el.innerHTML = '<div class="msg-ico">🤖</div><div class="msg-main">' +
+    '<div class="msg-top"><span class="msg-who">' + escapeHtml(who) + '</span>' +
+    '<span class="msg-time">' + escapeHtml(tsClock(st.timestamp || new Date().toISOString())) + '</span></div>' +
+    '<div class="msg-text cw9-saybody">' + html + '</div></div>';
+  host.appendChild(el);
+  var sc = findScroller(host) || host; sc.scrollTop = sc.scrollHeight;
+  return el;
+}
+function onSayDeltaClassic(d){
+  if(!SAYC) return false;
+  var r; try{ r = SAYC.accept(d); }catch(e){ return false; }
+  if(!r) return false;
+  try{
+    if(r.first){
+      var node = sayClassicBubble(SAYC.get(r.id), r.html);
+      if(node) SAYC_NODES[r.id] = node;
+    } else {
+      var n = SAYC_NODES[r.id];
+      if(!n || !n.parentNode){ delete SAYC_NODES[r.id]; SAYC.drop(r.id); return true; }
+      var body = n.querySelector('.cw9-saybody');
+      if(body){                       /* module output — every value escaped there */
+        body.innerHTML = r.html;
+        var host = $('chatStream'), sc = host && (findScroller(host) || host);
+        if(sc && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 200) sc.scrollTop = sc.scrollHeight;
+      }
+    }
+    /* CW-10: an interrupted stream (done+aborted). The partial text stays,
+       labelled as partial, and stops being live at once — nothing is coming.
+       The node stays in the map so a late record can still replace it.
+       With discard:true (the safety check refused the draft) the module returns
+       no text at all, so the same line below removes it from the screen. This
+       console keeps no local copy of the thread, so there is nothing else to
+       clear — the desk, which does, flushes its saved copy. */
+    if(r.settled){
+      var sn = SAYC_NODES[r.id];
+      if(sn && sn.parentNode){
+        sn.removeAttribute('data-say-preview');
+        sn.setAttribute('data-say-settled', r.id);
+        var sb = sn.querySelector('.cw9-saybody');
+        if(sb) sb.innerHTML = r.html;
+      }
+    }
+  }catch(e){ /* a preview must never break the thread */ }
+  return true;
+}
+/* The recorded answer landed — its preview goes before anything is painted, in
+   the SAME turn, so the browser paints once and nothing flickers. A marker is
+   left where the preview stood so the recorded message takes its place in the
+   thread instead of jumping to the bottom, and how long the preview got is
+   returned so a shorter recorded answer can be explained rather than just
+   silently shrinking. */
+function saySettleClassic(d){
+  if(!SAYC) return null;
+  var m = null; try{ m = SAYC.settleFor(d); }catch(e){ m = null; }
+  if(!m) return null;
+  var n = SAYC_NODES[m.id];
+  /* A recorded copy with NO text must never delete what the operator already
+     read: the preview's text stays and is relabelled instead. */
+  if(m.empty){
+    if(n && n.parentNode){
+      n.removeAttribute('data-say-preview');
+      n.setAttribute('data-say-settled', m.id);
+      var eb = n.querySelector('.cw9-saybody');
+      if(eb) eb.innerHTML = m.html;
+    }
+    return { empty:true };
+  }
+  delete SAYC_NODES[m.id];
+  if(!n || !n.parentNode) return null;
+  var mark = document.createComment('say-slot');
+  n.parentNode.replaceChild(mark, n);
+  return { mark: mark, shown: m.shown };
+}
+function sayDropSlot(slot){
+  if(slot && slot.mark && slot.mark.parentNode) slot.mark.parentNode.removeChild(slot.mark);
+}
+/* A preview whose recorded message never came. Never deleted, never left
+   pretending to be live. */
+setInterval(function(){
+  if(!SAYC || !SAYC.size()) return;
+  SAYC.stale(SAYC_STALE_MS).forEach(function(id){
+    var st = SAYC.get(id);
+    var html = st ? CW9B.streamSettledHtml(st, 'orphan') : '';
+    SAYC.drop(id);
+    var n = SAYC_NODES[id]; delete SAYC_NODES[id];
+    if(!n || !n.parentNode || !html) return;
+    n.removeAttribute('data-say-preview');
+    n.setAttribute('data-say-settled', id);
+    var body = n.querySelector('.cw9-saybody');
+    if(body) body.innerHTML = html;     /* text kept, caret gone, reason said */
+  });
+}, 5000);
+/* DEV/TEST ONLY — nothing in the app calls these. They feed the pieces, and the
+   recorded message that replaces them, without waiting on the backend branch.
+   Fixtures: test/cw10-say-delta-fixture.js */
+window.__cw10DevDelta = function(msg){ return onSayDeltaClassic(msg); };
+window.__cw10DevSay = function(msg){ return renderChat(msg); };
+
 function renderChat(d){
   var host = $('chatStream'); if(!host) return;
+  /* CW-10: the recorded version of an answer we were previewing clears that
+     preview first — one answer, one bubble, whatever the network did. */
+  var sayslot = (d && d.type !== 'outgoing') ? saySettleClassic(d) : null;
+  /* An empty recorded copy is already reported on the preview itself — nothing
+     is painted in its place, and nothing the operator read is removed. */
+  if(sayslot && sayslot.empty) return;
   var empty = host.querySelector('.chat-empty'); if(empty) empty.remove();
   var outgoing = d.type === 'outgoing';
   var id = d.agent;
@@ -3279,6 +3402,7 @@ function renderChat(d){
     } else if(!hasText){
       /* no envelope and no text at all — nothing to paint, so paint nothing
          rather than an empty bubble. */
+      sayDropSlot(sayslot);
       return;
     } else {
       bodyHtml = '<div class="msg-text">'+mdToHtml(d.text)+'</div>';
@@ -3294,7 +3418,18 @@ function renderChat(d){
   // scrolling up to read history isn't yanked away).
   var sc0 = findScroller(host);
   var nearBottom = !sc0 || (sc0.scrollHeight - sc0.scrollTop - sc0.clientHeight < 160);
-  host.appendChild(el);
+  /* CW-10: a recorded answer goes back where its preview was — and says so when
+     the record is materially shorter than what was on screen, so a bubble that
+     shrinks never reads as text quietly lost. */
+  if(sayslot && sayslot.mark.parentNode){
+    if(sayslot.shown - String(d.text || '').length > 40){
+      var m = el.querySelector('.msg-text');
+      if(m) m.insertAdjacentHTML('beforeend',
+        '<span class="cw9-stream-note">The recorded answer is shorter than the live preview — this short form is what the server kept.</span>');
+    }
+    sayslot.mark.parentNode.insertBefore(el, sayslot.mark);
+    sayDropSlot(sayslot);
+  } else host.appendChild(el);
   if(outgoing || nearBottom){ var sc = findScroller(host) || host; sc.scrollTop = sc.scrollHeight; }
 }
 
@@ -4290,7 +4425,14 @@ function connectWS(){
     if(m.type === 'approval_mode'){ if(m.data && m.data.mode){ APPR.mode = m.data.mode; renderApprovals(); } return; }
     if(m.type.indexOf('triage_') === 0){ dispatchTriageEvent(m.type, m.data); return; }
     // Direct-conversation replies (message-any-agent) come back as chat_message.
-    if(m.type === 'chat_message' && m.data){ renderChat(m.data); return; }
+    // CW-10: a piece of an answer still being written — as its own WS type or
+    // inside a chat_message carrying kind:'say-delta'. Both accepted; anything
+    // that is not a delta takes the path it took before this wave.
+    if((m.type === 'say_delta' || m.type === 'say-delta') && m.data){ onSayDeltaClassic(m.data); return; }
+    if(m.type === 'chat_message' && m.data){
+      if(window.CW9B && CW9B.isDelta(m.data)){ onSayDeltaClassic(m.data); return; }
+      renderChat(m.data); return;
+    }
     if(m.type === 'system_error' && m.data){
       renderChat({type:'incoming', agent:'system', agentName:'NOC Triage', agentIcon:'⚠️',
         text:(m.data.message||'System error'), timestamp:new Date().toISOString()});

@@ -166,7 +166,14 @@ button,input,select,textarea{font-family:inherit}
 .sla.ok{color:var(--ok);background:var(--ok-bg)}
 .sla.late{color:var(--bad);background:var(--bad-bg)}
 .sla.unk{color:var(--ink3);background:rgba(148,163,184,.14)}
-.qfoot{padding:.6rem;border-top:1px solid var(--line);flex-shrink:0;background:var(--panel)}
+/* The queue footer holds the Spend panel and "Open a new triage". Opening a
+   panel here must never push the work queue — or the button itself — out of a
+   column that clips its overflow. So the footer can never take more than half
+   the column, and scrolls inside itself if it somehow still needs to. */
+.qfoot{
+  padding:.6rem;border-top:1px solid var(--line);flex-shrink:0;background:var(--panel);
+  max-height:50%;overflow-y:auto;overscroll-behavior:contain
+}
 .newform{display:none;flex-direction:column;gap:.4rem;margin-bottom:.5rem}
 .newform.on{display:flex}
 .newform select,.newform textarea{
@@ -817,6 +824,14 @@ pre.term{
       <div class="empty"><span class="big">⏳</span>Loading the real incident queue…</div>
     </div>
     <div class="qfoot">
+      <!-- CW-10: what Jarvis's thinking has cost, in tokens the server actually
+           recorded. Collapsed by default — it is context, not the job. -->
+      <details class="spendpanel" id="spendPanel">
+        <summary>🧮 Spend<span class="sp-hint" id="spendHint">model tokens</span></summary>
+        <div class="sp-body" id="spendBody">
+          <div class="sp-note">Reading the usage record…</div>
+        </div>
+      </details>
       <div class="newform" id="newForm">
         <select id="newSev">
           <option value="P1">P1 — major, everyone on it</option>
@@ -1415,6 +1430,241 @@ function cw9Hydrate(data){
    be exercised in a browser without waiting on the backend branch. Fixtures:
    test/cw9-envelope-fixture.js */
 window.__cw9DevInject = function(msg){ return cw9Render(msg); };
+
+/* ============================================================
+   CW-10 — STREAMED ANSWERS (envelope kind:'say-delta')
+   ============================================================
+   Jarvis's answer now arrives twice: in pieces while it is being written,
+   then once more as the ordinary chat message the server RECORDED.
+
+   The pieces are a preview and nothing more. They exist so the operator is
+   not watching a dead screen for fifteen seconds. The recorded message
+   always wins: when it lands, the preview bubble is REPLACED, never left
+   beside it — one answer, one bubble, no matter what the network did with
+   the pieces.
+
+   All the state (accumulate, cap, spot a hole, decide which preview a final
+   message replaces) lives in the shared module, so this page and the classic
+   console behave identically and the suite can test it without a browser.
+   This block only owns the bubble on screen. */
+var SAY = CW9B ? CW9B.createStream() : null;
+var SAYNODES = Object.create(null);
+var SAY_STALE_MS = 45000;
+
+function sayNodeFor(id){
+  var n = SAYNODES[id];
+  if(n && n.isConnected !== false && n.parentNode) return n;
+  return null;
+}
+
+/* One piece arrived. First piece paints the bubble; the rest update it. */
+function onSayDelta(d){
+  if(!SAY) return false;
+  var r;
+  try{ r = SAY.accept(d); }catch(e){ return false; }
+  if(!r) return false;
+  try{
+    if(r.first){
+      var st = SAY.get(r.id);
+      var node = bubble('jv', ((st && st.who) || 'Jarvis') + ' · ' + clockOf((st && st.timestamp) || new Date().toISOString()),
+        '<span class="cw9-saybody">' + r.html + '</span>', true);
+      if(node){
+        node.setAttribute('data-say-preview', r.id);
+        SAYNODES[r.id] = node;
+      }
+    } else {
+      var n = sayNodeFor(r.id);
+      if(!n){ delete SAYNODES[r.id]; SAY.drop(r.id); return true; }
+      var body = n.querySelector('.cw9-saybody');
+      if(body){
+        body.innerHTML = r.html;          /* module output — every value escaped there */
+        if(atBottom()) $('chat').scrollTop = $('chat').scrollHeight;
+      }
+    }
+    /* CW-10: the backend flagged a stream it could not finish (done+aborted).
+       The partial text stays on screen, labelled as partial, and this stops
+       being a live preview at once — no recorded message is coming, so the
+       caret must not blink at the operator waiting for one. The node is KEPT
+       in the map so a late record can still replace it. */
+    if(r.settled){
+      var sn = sayNodeFor(r.id);
+      if(sn){
+        sn.removeAttribute('data-say-preview');
+        sn.setAttribute('data-say-settled', r.id);
+        var sb = sn.querySelector('.cw9-saybody');
+        if(sb) sb.innerHTML = r.html;   /* discarded → the module returns no text at all */
+      }
+      /* A withdrawn draft must not survive anywhere: the module has already
+         dropped it from the state, the line above takes it off the screen, and
+         this writes the saved thread IMMEDIATELY rather than in 300ms — a
+         reload must never bring back what the safety check refused. */
+      if(r.discard) persistNow(); else persistWork();
+    }
+  }catch(e){ /* a preview must never break the thread */ }
+  return true;
+}
+
+/* The recorded message landed. Its preview goes BEFORE the message is painted,
+   so the two are never on screen together — both DOM changes happen in one
+   turn, so the browser paints once and there is no flicker.
+
+   It leaves a MARKER where the preview stood and returns it. The recorded
+   message is then painted into that slot rather than appended to the bottom:
+   while an answer streams, findings and roster cards keep arriving, and an
+   answer that jumped to the end of the thread would be an answer the operator
+   has to go looking for.
+
+   The recorded message is also allowed to be SHORTER than the preview — the
+   backend caps what it records. The bubble visibly shrinking with no
+   explanation reads like lost text, so how long the preview got is returned
+   with the marker and the caller says so plainly. */
+function saySettle(d){
+  if(!SAY) return null;
+  var m = null;
+  try{ m = SAY.settleFor(d); }catch(e){ m = null; }
+  if(!m) return null;
+  var n = SAYNODES[m.id];
+  /* CW-10 BLOCKER fix: a recorded copy with NO text must never delete what the
+     operator already read. The preview's text stays exactly where it is and is
+     relabelled — the empty record is reported, not obeyed. */
+  if(m.empty){
+    if(n && n.parentNode){
+      n.removeAttribute('data-say-preview');
+      n.setAttribute('data-say-settled', m.id);
+      var eb = n.querySelector('.cw9-saybody');
+      if(eb) eb.innerHTML = m.html;
+      persistWork();
+    }
+    return { empty:true };             /* nothing is painted in its place */
+  }
+  delete SAYNODES[m.id];
+  if(!n || !n.parentNode) return null;
+  var mark = document.createComment('say-slot');
+  n.parentNode.replaceChild(mark, n);
+  return { mark: mark, shown: m.shown };
+}
+
+/* Move whatever the paint just appended into the slot the preview held, and
+   say so when the record is materially shorter than what was on screen. */
+function sayTakeSlot(slot, from, finalLen){
+  if(!slot) return;
+  var chat = $('chat');
+  try{
+    var moved = [].slice.call(chat.children, from);
+    for(var i = 0; i < moved.length; i++) chat.insertBefore(moved[i], slot.mark);
+    if(moved.length && slot.shown - finalLen > 40){
+      var bub = moved[0].querySelector('.bubble');
+      if(bub) bub.insertAdjacentHTML('beforeend',
+        '<span class="cw9-stream-note">The recorded answer is shorter than the live preview — this short form is what the server kept.</span>');
+    }
+  }catch(e){}
+  if(slot.mark.parentNode) slot.mark.parentNode.removeChild(slot.mark);
+  persistWork();
+}
+
+/* A preview whose recorded message never arrived (the server died mid-answer,
+   the socket dropped). It is not deleted and it is not left pretending to be
+   live — it says what happened. */
+function saySweep(){
+  if(!SAY || !SAY.size()) return;
+  SAY.stale(SAY_STALE_MS).forEach(function(id){
+    var st = SAY.get(id);
+    var html = st ? CW9B.streamSettledHtml(st, 'orphan') : '';
+    SAY.drop(id);
+    var n = SAYNODES[id]; delete SAYNODES[id];
+    if(!n || !n.parentNode || !html) return;
+    n.removeAttribute('data-say-preview');
+    n.setAttribute('data-say-settled', id);
+    var body = n.querySelector('.cw9-saybody');
+    if(body) body.innerHTML = html;     /* text kept, caret gone, reason said */
+  });
+}
+setInterval(saySweep, 5000);
+
+/* A preview restored from localStorage is not a record of anything — the page
+   was closed before the real message landed. Say so rather than showing a
+   blinking caret for an answer nobody is writing. */
+function cw10SweepRestoredPreviews(){
+  var stale = document.querySelectorAll('#chat [data-say-preview]');
+  for(var i=0;i<stale.length;i++){
+    var n = stale[i];
+    n.removeAttribute('data-say-preview');
+    var c = n.querySelector('.cw9-caret'); if(c) c.remove();
+    var body = n.querySelector('.cw9-saybody');
+    if(body) body.insertAdjacentHTML('beforeend',
+      '<span class="cw9-stream-note">This answer was still being written when this page was last closed — it was never recorded. Ask again if you need it.</span>');
+  }
+}
+
+/* DEV/TEST ONLY — nothing in the app calls these. They feed the pieces, and the
+   recorded message that replaces them, without waiting on the backend branch.
+   Fixtures: test/cw10-say-delta-fixture.js */
+window.__cw10DevDelta = function(msg){ return onSayDelta(msg); };
+window.__cw10DevSay = function(msg){ return onChat(msg); };
+
+/* ============================================================
+   CW-10 — SPEND PANEL (GET /api/spend/summary)
+   ============================================================
+   What Jarvis's thinking has cost, in tokens the server measured. It is a
+   READ of the server's own usage record and nothing else: if the endpoint
+   is not there yet (the backend half of this wave has not merged), or the
+   server cannot be reached, or the answer is a shape this panel cannot
+   read, the panel SAYS SO. It never shows a zero, an estimate, or a price
+   — a spend figure nobody measured is worse than no spend figure.
+
+   All the reading and drawing lives in the shared module (CW9B.spendHtml),
+   so the suite can prove the empty state and the bars without a browser. */
+var SPEND = { state:'idle', at:0, inflight:false };
+var SPEND_FRESH_MS = 60000;
+
+function spendPaint(html, hint){
+  var b = $('spendBody'); if(b) b.innerHTML = html;
+  var h = $('spendHint'); if(h) h.textContent = hint || 'model tokens';
+}
+function loadSpend(force){
+  var p = $('spendPanel'); if(!p || !CW9B) return;
+  if(!p.open) return;                                   /* closed: don't poll the server for nothing */
+  if(SPEND.inflight) return;
+  if(!force && Date.now() - SPEND.at < SPEND_FRESH_MS) return;
+  SPEND.inflight = true;
+  api('/api/spend/summary')
+    .then(function(r){
+      if(r.status === 404){
+        /* The honest one: this server build does not record spend yet. */
+        SPEND.state = 'absent';
+        spendPaint(CW9B.spendNoteHtml('this server does not record model usage yet'), 'not recorded');
+        return null;
+      }
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function(d){
+      if(d === null) return;
+      SPEND.state = 'ok';
+      spendPaint(CW9B.spendHtml(d), 'model tokens');
+    })
+    .catch(function(err){
+      SPEND.state = 'error';
+      spendPaint(CW9B.spendNoteHtml('the usage record could not be read — ' + (err && err.message ? err.message : String(err))),
+        'unavailable');
+    })
+    .then(function(){ SPEND.inflight = false; SPEND.at = Date.now(); });
+}
+(function(){
+  var p = $('spendPanel'); if(!p) return;
+  try{ if(localStorage.getItem('noc-desk-spend') === 'open') p.open = true; }catch(e){}
+  p.addEventListener('toggle', function(){
+    try{ localStorage.setItem('noc-desk-spend', p.open ? 'open' : 'closed'); }catch(e){}
+    if(p.open) loadSpend(true);
+  });
+  setInterval(function(){ loadSpend(false); }, SPEND_FRESH_MS);
+  /* restored open → read it once now, so the operator does not open the desk to
+     a panel that says "Reading…" until the first poll. */
+  if(p.open) setTimeout(function(){ loadSpend(true); }, 0);
+})();
+
+/* DEV/TEST ONLY — draw the panel from a fixture, no backend. */
+window.__cw10DevSpend = function(d){ var p=$('spendPanel'); if(p) p.open = true; spendPaint(CW9B.spendHtml(d), 'model tokens'); };
 
 /* ---------- ask Jarvis (REAL POST /api/command; reply on the WS) ---------- */
 function sendAsk(){
@@ -3983,7 +4233,16 @@ function connectWS(){
        pane. Plain old messages are left out on purpose — they are restored by
        the local working context, and replaying them would double the thread. */
     if(m.type === 'init' && m.data){ cw9Hydrate(m.data); return; }
-    if(m.type === 'chat_message' && m.data){ onChat(m.data); return; }
+    /* CW-10: a piece of an answer still being written. It may travel as its own
+       WS type or inside a chat_message carrying kind:'say-delta' — both are
+       accepted, because a preview is not worth a coupling argument with the
+       backend. Anything that is not a delta falls straight through to the
+       message paths that existed before this wave. */
+    if((m.type === 'say_delta' || m.type === 'say-delta') && m.data){ onSayDelta(m.data); return; }
+    if(m.type === 'chat_message' && m.data){
+      if(CW9B && CW9B.isDelta(m.data)){ onSayDelta(m.data); return; }
+      onChat(m.data); return;
+    }
     if(m.type === 'command_share' && m.data){ onShare(m.data); return; }
     if(m.type === 'system_error' && m.data){ sysMsg(esc(m.data.message || 'System error')); return; }
     if(m.type === 'approval_new' && m.data && m.data.state === 'pending'){
@@ -4031,7 +4290,23 @@ function connectWS(){
 }
 function scheduleReconnect(){ wsRetry = Math.min(wsRetry + 1, 6); setTimeout(connectWS, 500 * wsRetry); }
 
+/* CW-10: if this message is the recorded version of an answer we were
+   previewing, the preview goes NOW — before anything is painted — and the
+   recorded message is painted into the slot the preview held. One bubble, in
+   the place the operator was already reading, in a single browser paint. */
 function onChat(d){
+  if(d && d.type === 'outgoing') return;
+  var slot = saySettle(d);
+  /* An empty recorded copy is already reported on the preview itself — there is
+     no text to paint, and an empty bubble under it would say nothing. */
+  if(slot && slot.empty) return;
+  if(!slot) return onChatPaint(d);
+  var from = $('chat').children.length;
+  try{ onChatPaint(d); }
+  finally{ sayTakeSlot(slot, from, String((d && d.text) || '').length); }
+}
+
+function onChatPaint(d){
   if(d.type === 'outgoing') return;   // our own asks are already on screen
   /* CW-9: an envelope kind paints itself (ask / roster / finding / verdict /
      change). Anything without a kind falls through and renders as before. */
@@ -4063,6 +4338,14 @@ function onTriage(type, d){
   if(!SELID || !d.triageId || d.triageId !== SELID) return;
   switch(type){
     case 'triage_message':
+      /* CW-10: same rule on the bridge path — the recorded message clears the
+         preview it belongs to before anything else is painted. */
+      /* CW-10: same rule on the bridge path — the recorded message clears the
+         preview it belongs to and is painted into its slot. */
+      var tslot = d.operator ? null : saySettle(d);
+      if(tslot && tslot.empty) break;
+      var tfrom = $('chat').children.length;
+      try{
       if(d.operator) bubble('me', esc(d.agentName || 'Operator') + ' · ' + clockOf(d.ts), md(d.text||''));
       /* CW-9: a bridge message may carry an envelope kind. It paints itself;
          anything without a kind keeps the old rendering exactly. */
@@ -4071,6 +4354,7 @@ function onTriage(type, d){
                           agent:d.agent, agentName:d.agentName, timestamp:d.ts,
                           triageId:d.triageId, resume:d.resume })){ /* painted */ }
       else if(!(d.tier === 'L4' && d.round === 2)) jvMsg(d.agentName || d.agent || 'Engineer', d.text || '', d.ts);
+      }finally{ sayTakeSlot(tslot, tfrom, String(d.text || '').length); }
       break;
     case 'triage_verdict':
       jvMsg('Jarvis · verdict', d.verdict || 'Verdict posted.', d.ts, jumpBtn('ev-find','See the findings behind it'));
@@ -4150,9 +4434,17 @@ function cw9FitHtml(container, budget){
   return { html: out.join(''), dropped: dropped };
 }
 var persistT = null;
+/* Saving is debounced — except when what is being saved is a REMOVAL. A
+   discarded draft that is still sitting in localStorage is the console keeping
+   content the safety check threw out, and a browser closed inside the debounce
+   window would leave it there. persistNow() writes on the spot. */
 function persistWork(){
   clearTimeout(persistT);
-  persistT = setTimeout(function(){
+  persistT = setTimeout(persistNow, 300);
+}
+function persistNow(){
+  clearTimeout(persistT);
+  (function(){
     try{
       /* CW-9: the live session pane is part of what the operator had on screen,
          so it is kept with the thread. Every block in it was built by
@@ -4179,7 +4471,7 @@ function persistWork(){
         sysMsg('This conversation is now larger than this browser can keep. The newest messages are still saved for a reload; the oldest ones are only in the incident record from here on.');
       }
     }catch(e){}
-  }, 300);
+  }());
 }
 function restoreWork(){
   var raw = null; try{ raw = localStorage.getItem(workKey()); }catch(e){}
@@ -4218,6 +4510,9 @@ function restoreWork(){
        every value in it is already escaped — re-inserting it introduces no new
        sink. Jump chips still work (the chat container delegates their clicks). */
     $('chat').innerHTML = st.chat;
+    /* CW-10: a half-written answer may have been saved mid-stream. It is not a
+       record — mark it honestly instead of restoring a blinking caret. */
+    cw10SweepRestoredPreviews();
     $('chat').scrollTop = $('chat').scrollHeight;
     did = true;
   }
