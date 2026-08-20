@@ -33,6 +33,8 @@ const teams = require('./sources/teams');            // CW-4: Teams bridge (one-
 const servicenow = require('./sources/servicenow-client'); // CW-6: two-way ServiceNow sync
 const investigation = require('./sources/investigation'); // CW-7: iterative investigation loop
 const conduct = require('./sources/conduct');        // CW-9: ONE bridge-conduct gate + pinned envelope
+const reflexion = require('./sources/reflexion');    // CW-11: round reflection, verdict self-check, prediction follow-through
+const lessons = require('./sources/lessons');        // CW-11: the lessons memory (facts, not rules)
 const mcp = require('./sources/mcp-connector');      // CW-8: generic MCP connector (gated, read-only, honest-if-absent)
 const pcap = require('./sources/pcap');              // A6: native pcap analyzer (honest no-capture, bounded parse)
 const nautobot = require('./sources/nautobot');      // A8: Nautobot source-of-truth reconciliation (honest not-connected)
@@ -386,6 +388,31 @@ function cleanChangeCommands(raw) {
   return { commands: out };
 }
 
+// CW-11 Part 3 — after the change engine is done with a change, settle any
+// prediction parked against it. This NEVER applies anything and never re-runs a
+// settled prediction; it only reads.
+function followThroughOnChange(rec, who) {
+  try {
+    if (!rec || !rec.id) return;
+    const parked = reflexion.listPredictions().filter((p) => p.changeId === rec.id && p.state === 'waiting');
+    if (!parked.length) return;
+    for (const p of parked) {
+      if (rec.status === 'applied') {
+        reflexion.runFollowThrough(p.id, { who })
+          .catch((err) => reportSystemError('the follow-through check could not run', err));
+      } else {
+        // No write path / denied / failed: the change did NOT land, so there is
+        // nothing to prove yet. Say that honestly and expose the check.
+        jarvisSay('jarvis',
+          `The change did not apply (${rec.status}), so I have proved nothing. When the fix is in — ` +
+          `by your hand if I have no write path — trigger my check with ` +
+          `POST /api/copilot/predictions/${p.id}/check and I will tell you honestly whether my call was right.`,
+          { kind: 'say', prediction: p });
+      }
+    }
+  } catch (e) { /* the follow-through never breaks a change */ }
+}
+
 // POST /api/copilot/change — start a wrapped change. Answers 202 with the
 // record id straight away; the wrap itself takes real minutes on real kit, and
 // the desk follows it through change_update events and GET /api/copilot/change/:id.
@@ -404,7 +431,17 @@ app.post('/api/copilot/change', (req, res) => {
     { onCreated: (rec) => { created = rec; } },
   );
   running
-    .then((rec) => broadcast('change_update', rec))
+    .then((rec) => {
+      broadcast('change_update', rec);
+      // CW-11 Part 3 — PREDICTION FOLLOW-THROUGH. The approval gate above is
+      // unchanged; this runs AFTER the engine has finished with the change.
+      //  • really applied → run the proving check and say honestly whether the
+      //    call held, or reopen the investigation if it did not;
+      //  • not applied (a frozen no-write-path on this observer-role sandbox, a
+      //    denial, a failure) → say so plainly and hand the operator the check to
+      //    trigger after THEIR fix. Nothing is ever claimed as applied.
+      followThroughOnChange(rec, req.operator);
+    })
     .catch((err) => {
       reportSystemError('the change engine could not finish that change', err);
       if (created) {
@@ -738,6 +775,60 @@ app.get('/api/copilot/investigate/:id', (req, res) => {
   res.json({ investigation: rec });
 });
 // ── end CW-7 block ──────────────────────────────────────────────────────────
+
+// ── CW-11: reflexion surfaces (lessons panel + prediction follow-through) ────
+// Self-contained block. Everything reasoned lives in sources/reflexion.js and
+// sources/lessons.js; these routes only read, delete and TRIGGER — none of them
+// can apply a change, and none of them can run a check the verdict did not
+// already name.
+
+// GET /api/lessons → the lessons panel's list. Facts about closed incidents,
+// already scrubbed on the way to disk.
+app.get('/api/lessons', (req, res) => {
+  res.json({ lessons: lessons.list(), dir: 'squad/lessons' });
+});
+
+// DELETE /api/lessons/:id → the operator throws a lesson away. A lesson is a
+// note, not a rule, so deleting one changes nothing except what Jarvis is
+// reminded of next time.
+app.delete('/api/lessons/:id', (req, res) => {
+  const id = lessons.safeId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'That is not a lesson id.' });
+  if (!lessons.get(id)) return res.status(404).json({ error: `No lesson for "${id}".` });
+  if (!lessons.remove(id)) return res.status(500).json({ error: `The lesson for "${id}" could not be deleted.` });
+  res.json({ deleted: id, lessons: lessons.list() });
+});
+
+// GET /api/copilot/predictions → every parked follow-through check and how it
+// settled (waiting / held / failed / inconclusive).
+app.get('/api/copilot/predictions', (req, res) => {
+  res.json({ predictions: reflexion.listPredictions({ incidentId: req.query.incidentId || null }) });
+});
+
+app.get('/api/copilot/predictions/:id', (req, res) => {
+  const p = reflexion.getPrediction(req.params.id);
+  if (!p) return res.status(404).json({ error: `No prediction with id "${req.params.id}".` });
+  res.json({ prediction: p });
+});
+
+// POST /api/copilot/predictions/:id/check → run the proving check NOW.
+// This is the honest path for the observer-role sandbox: this console has no
+// write path to the devices, so the operator applies the fix themselves and then
+// triggers this — Jarvis never pretends to have applied anything. The check is
+// read-only and goes through the same permission gate as any other read.
+app.post('/api/copilot/predictions/:id/check', async (req, res) => {
+  const id = String(req.params.id || '');
+  if (!reflexion.getPrediction(id)) return res.status(404).json({ error: `No prediction with id "${id}".` });
+  try {
+    const out = await reflexion.runFollowThrough(id, { who: req.operator });
+    if (out && out.error) return res.status(409).json(out);
+    res.json(out);
+  } catch (err) {
+    reportSystemError('the follow-through check could not run', err);
+    res.status(502).json({ error: `The follow-through check could not run — ${err.message}. Nothing is being claimed.` });
+  }
+});
+// ── end CW-11 block ─────────────────────────────────────────────────────────
 
 // ── CW-8: the generic MCP connector ──────────────────────────────────────────
 // Self-contained, contiguous block (A4 edits server.js in parallel — keep this
@@ -1227,6 +1318,40 @@ investigation.init({
   audit: (entry) => session.audit(entry),
 });
 investigation.setPlanner(jarvis.investigationPlanner);
+
+// CW-11 — REFLEXION. Jarvis checks its own work: one reflection pass per round,
+// one self-check per verdict, and the follow-through that proves (or falsifies)
+// the prediction a verdict made. The engine owns the bounds and the evidence
+// diff; jarvis.reflexionPlanner does the judging. The proving check runs through
+// the SAME gated read path a probe uses — nothing here opens its own.
+reflexion.init({
+  probe: ({ agentId, question, device }) =>
+    mcp.isMcpId(agentId)
+      ? mcp.gather(agentId, question, { who: 'jarvis', approved: false })
+      : live.gatherWithEvidence(agentId, question, device || null, null),
+  audit: (entry) => session.audit(entry),
+  say: (line, prediction) => jarvisSay('jarvis', line,
+    { kind: 'say', text: line, prediction: prediction || null }),
+  // A FALSIFIED prediction never closes on hope: a fresh investigation opens
+  // carrying the wrong hypothesis as context so the loop cannot walk back into it.
+  reopen: ({ prediction, report, falsified, who }) => {
+    const rec = investigation.create({
+      problem: `Re-opened after a failed prediction on ${prediction.investigationId || prediction.id}: ` +
+        `${prediction.hypothesis || prediction.then}`,
+      understood: `The earlier verdict predicted "${prediction.then}". The proving check does not show it, ` +
+        `so that hypothesis is RULED OUT and the real cause is still open. Latest reading: ` +
+        `${String((report && report.text) || '').slice(0, 400)}`,
+      hypotheses: [{ id: 'falsified', text: `RULED OUT (proven wrong by the follow-through check): ${falsified}`,
+        status: 'eliminated' }],
+      who: who || 'jarvis',
+    });
+    investigation.run(rec.id).catch((err) =>
+      reportSystemError('the reopened investigation could not run', err));
+    return rec;
+  },
+});
+reflexion.setPlanner(jarvis.reflexionPlanner);
+lessons.setPlanner(jarvis.lessonsPlanner);
 
 // Hand the triage engine the same broadcast/status plumbing. It reuses the live
 // adapters directly for its reads; this seam only carries dashboard events.

@@ -29,6 +29,7 @@ const incidentStore = require('./incident-store');
 const alerts = require('./alerts');
 const notifier = require('./notifier');
 const correlation = require('./correlation');   // Wave 4 — deterministic cross-domain co-occurrence
+const lessons = require('./lessons');           // CW-11 — the lessons memory (written on incident close)
 
 // The host app injects broadcast + status plumbing here so this module stays
 // free of server internals — the same seam live-agents.js uses.
@@ -746,6 +747,16 @@ function agentHeldByOpenBridge(agentId, exceptTriageId) {
 // capability missing, or the reasoning unavailable, it falls straight through to
 // the full sweep — EXACTLY today's behaviour.
 async function runBridge(triage) {
+  // CW-11 Part 4 — consult the lessons memory. One line, before anything is swept.
+  // It BIASES where to look first; it runs nothing, approves nothing and skips no
+  // question — the understanding gate below is completely unchanged by it.
+  try {
+    const hit = await lessons.consult({ problem: triage.description, understood: triage.title });
+    if (hit) {
+      triage.lesson = { id: hit.id, lookFirst: hit.lookFirst, why: hit.why };
+      post(triage, { agent: 'jarvis', tier: 'L4', round: 1, text: `📓 ${hit.line}` });
+    }
+  } catch (e) { /* a missing memory never changes how a bridge runs */ }
   if (understandFirstOn() && ctx && typeof ctx.understand === 'function') {
     let decision;
     try {
@@ -1422,9 +1433,38 @@ async function runL4(triage, sym) {
     sla: triage.sla, lifecycle: triage.lifecycle,
   });
   progress(triage, 'L4', 'done');
+  // CW-11 Part 4 — the incident is closed, so write its lesson: cause, the check
+  // that found it fastest, what wasted time, the symptom words. Fire-and-forget
+  // and gated on reasoning being available — a lesson nobody reasoned about would
+  // be a filed guess, and a missing note must never break a close.
+  writeIncidentLesson(triage);
   // Human-facing activity line: label the elapsed value "Time to verdict" — it is
   // opened→verdict (time to diagnose), not full MTTR. The mttr payload/field stays.
   log(`[Triage ${triage.id}] closed — ${triage.severity} "${triage.title}" — Time to verdict ${mttrOf(triage).mttrHuman}`);
+}
+
+// CW-11 Part 4 — one short lesson file per closed incident (squad/lessons/<INC>.md),
+// written through the shared session-log scrubber. Never throws, never blocks.
+function writeIncidentLesson(triage) {
+  try {
+    if (!lessons.available()) return;
+    const v = triage.verdict || {};
+    const hypo = v.hypothesis || null;
+    Promise.resolve()
+      .then(() => lessons.recordFromIncident({
+        incidentId: triage.incidentId || triage.id,
+        problem: triage.title || triage.subject || '',
+        cause: (hypo && hypo.hypothesis) || v.verdict || '',
+        verdict: v.verdict || '',
+        rounds: (triage.messages || []).slice(-40).map((m, i) => ({
+          round: i + 1, agent: m.agentName || m.agent || 'agent', question: m.tier || '',
+          stance: 'evidence', text: String(m.text || '').slice(0, 500), nothingNew: false,
+        })),
+        closedAt: triage.closedAt,
+      }))
+      .then((l) => { if (l) log(`[Triage ${triage.id}] lesson written — squad/lessons/${l.id}.md`); })
+      .catch(() => { /* a missing lesson never breaks a close */ });
+  } catch (e) { /* same */ }
 }
 
 // Is this front's evidence ACTIVE inside the incident window, or only pre-existing?
