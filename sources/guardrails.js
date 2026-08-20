@@ -201,6 +201,21 @@ const EVENT_NOUNS = new Set([
 // Determiners / possessives / quantifiers. In front of an event noun they make
 // it a noun phrase. NOT pronoun subjects ("you", "we") — "after you reload the
 // router" is still a real instruction and must still be refused.
+// A possessive form — "sw1's", "the device’s", "switches'". Whatever follows it
+// is the head of a noun phrase, so it cannot be an imperative verb.
+const POSSESSIVE = /(?:'s|’s|s'|s’)$/i;
+
+// PAST-TENSE REPORTING VERBS. Everything after one of these is a description of
+// what a read RETURNED — "the config showed no aaa new-model", "the output
+// displayed no shutdown" — never an instruction to act now. Only unambiguous
+// past-tense forms are listed: "show me" / "display the" (imperatives) are not
+// here, so an actual order is untouched. This is a refusal-timing decision only;
+// what may actually RUN is still the read-verb allowlist at the choke point.
+const REPORTED_SPEECH = new Set([
+  'showed', 'shown', 'reported', 'returned', 'displayed', 'revealed', 'indicated',
+  'confirmed', 'listed', 'contained', 'said', 'logged', 'printed', 'output',
+]);
+
 const DETERMINERS = new Set([
   'the', 'a', 'an', 'this', 'that', 'these', 'those', 'my', 'your', 'our',
   'its', 'their', 'his', 'her', 'last', 'latest', 'next', 'previous', 'recent',
@@ -498,6 +513,20 @@ function scanClauseForCommand(clause, sep, start, excuseEvents) {
       return { kind: 'write', word: w, base };
     }
     const prev = i > 0 ? toks[i - 1] : null;
+    // A POSSESSIVE in front makes the next word a NOUN, never an imperative verb
+    // (CW-9 re-review medium): "sw1's config showed no aaa new-model" is an
+    // engineer describing what a read returned, not an order to configure sw1 —
+    // but it was classified as a change and cost a whole investigation round.
+    // Same class as the determiner rule above it ("the reload" is an event, not
+    // an order); a possessive cannot introduce a command in English, so this can
+    // never excuse a real write ("reload sw2" has no possessive in front of it).
+    if (prev && POSSESSIVE.test(prev)) continue;
+    // REPORTED SPEECH: a past-tense reporting verb IMMEDIATELY before this word
+    // means the engineer is quoting what a read returned, not asking for an
+    // action. The window is deliberately tight (3 tokens) so a real order later
+    // in the same sentence — "the log showed a reload at 14:02 — now reload sw3"
+    // — is still caught: the quoted event is excused, the instruction is not.
+    if (toks.slice(Math.max(0, i - 3), i).some((t) => REPORTED_SPEECH.has(t))) continue;
     if (excuseEvents && isEventReference({ word: base, prev, bare: i === toks.length - 1 }, sep)) continue;
     if (HARD_WRITE.has(base)) return { kind: 'write', word: w, base };
     if (AMBIGUOUS_WRITE.has(base)) {

@@ -444,3 +444,17 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - 24 suites / 1026 assertions green (CW-9 suite 179). Live Sonnet: bare write refused (0 reads); mixed
   answer+write → refusal before roster, bridge opened, understood free of the reload; cache-busted repeat →
   "nothing new", 1 finding.
+
+## 2026-08-20 — CW-9 backend final gate (scrubber rewrite + probe-prose medium)
+- Scrubber is now ONE ordered pass (sources/session-log.js): free-text line guard (description/remark/
+  banner/!/prose) → separator forms → ONE token scan (keyword → syntax words → VALUE) → positional
+  snmp-server host/community forms. Fixes the racing-rules root cause: the marker can no longer land on a
+  syntax word while the secret survives, and prose is never eaten. New forms are one-line additions.
+- Closed: vrrp/standby authentication [text], wpa-passphrase, passphrase 0. Fixed false redactions:
+  pre-shared-key local|remote, authentication md5 key-string (VRRP+HSRP), wpa psk set-key ascii 0.
+- New sources/scrubber.cw9.test.js: table-driven, 109 assertions (38 secret forms incl. the reviewer's
+  round-3 nine + round-2 twelve, 17 survivors, 6 prose lines, a whole-config case, sanity).
+- Medium: probe prose no longer burns a round — a possessive ("sw1's config") makes the next word a noun,
+  and a past-tense reporting verb within 3 tokens ("showed no aaa") is quoted output, not an order. Real
+  writes still refuse, including an order after quoted speech in the same sentence.
+- 25 suites / 1145 assertions green.

@@ -642,6 +642,31 @@ section('THE 2026-08-19 FAILURE — "hey jarvis facing issue in epg" must ASK FI
       said.some((m) => /is a change/.test(m.text)), said.map((m) => m.text).join(' | '));
   }
 
+  section('MEDIUM — a probe describing what a read RETURNED is not a change ask:');
+  {
+    // The reviewer watched a whole investigation round die because the probe's
+    // own prose ("since sw1's config showed no aaa new-model") was classified as
+    // a device change. A possessive makes the next word a noun, and a past-tense
+    // reporting verb means the engineer is quoting output — neither is an order.
+    const g = require('./guardrails');
+    const notChanges = [
+      "Run 'show run | include aaa' on sw2 to confirm, since sw1's config showed no aaa new-model",
+      'the output showed no shutdown on Gi1/0/3',
+      "the device's configuration was changed last night",
+      'after sw1\'s reload, check the uplink',
+    ];
+    for (const t of notChanges) ok(`not a change: ${t.slice(0, 52)}`, !g.splitIntent(t).destructive, JSON.stringify(g.splitIntent(t).change));
+    const realChanges = [
+      'reload sw2',
+      'erase startup-config on sw3',
+      'no shut gi1/0/3 on sw2',
+      'configure terminal',
+      'show version on sw2; reload',
+      'the log showed a reload at 14:02 — now reload sw3',   // quoted event AND a real order
+    ];
+    for (const t of realChanges) ok(`still refused: ${t.slice(0, 52)}`, g.splitIntent(t).destructive);
+  }
+
   section('F2 — the plaintext shared-secret forms are scrubbed (the reviewer\'s 12 + more):');
   {
     const s = require('./session-log').scrub;
