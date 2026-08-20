@@ -646,3 +646,11 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - JOINT pre-merge fix in flight (both reviewers converged): discard:true on SAFETY-DECLINED aborts — FE
   wipes the partial (screen + localStorage; reviewer proved declined text persisted through reload); plain
   errors keep the honest partial. Then merge #74 → #75 → restart :3000 → live verify → CW-11.
+
+## 2026-08-20 ~20:20 — CW-10 SHIPPED ✅ (merged + live-verified)
+- #74 then #75 merged (package.json test lists merged keeping all 31 suites; chain exit 0 on master).
+- LIVE VERIFY on merged :3000 (Sonnet): streamed synthesis = 4 say_delta chunks, preview 277 ≤ 280 cap,
+  word-boundary clean, final chat_message settles the SAME messageId (len 278). /api/spend/summary live
+  (2 calls, tokens + cache_creation recorded, no prompt text). Capability answer path correctly non-streamed.
+- :3000 restarted on DEFAULT Opus for Vikas. Task #4 complete. CW-11 builders launching next (contract
+  docs/copilot-cw11-reflexion-contract.md).
