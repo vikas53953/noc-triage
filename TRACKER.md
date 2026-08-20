@@ -515,3 +515,16 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   overlap line prints wrong agent's systems; AGENT_SOURCES needs a drift-failing test; wasted rounds
   downstream of (1). Builder on round 3.
 - Seam with #72 re-confirmed (field=text matches, truncation precedence correct). BE still merges first.
+
+## 2026-08-20 (post-reset) — CW-9 BE final review: FIX-FIRST on ONE item (scrubber)
+- Reviewer (fresh clone :3114, verified own PID) closed everything else: 7 fresh write attacks all honest-
+  refusal-first w/ 0 wire; dedupe holds incl. unknown param names (output hash); roster per-agent lists
+  exact; drift test proven to fail on an undeclared read; 1026 assertions green; EPG replay clean; #72 seam
+  exact match. Noted honestly: euphemism screening rides the LLM changeAsk (deterministic backstop narrower
+  than PR body claims).
+- SCRUBBER blocker, root cause = two keyword rules race, first lacks NOT_A_SECRET + free-text guard:
+  5 forms leak (vrrp/standby auth, wpa-passphrase, passphrase 0), 4 falsely redact the syntax word while
+  the secret survives (ipsec pre-shared-key, md5 key-string, wpa psk ascii), and description/remark/banner
+  prose gets over-scrubbed. Builder on surgical final fix (single-pass ordered rules, value-not-syntax
+  redaction, table-driven tests). Then scrubber-only verify → merge train.
+- Session-limit note: the wall killed the reviewer mid-run pre-2pm; resumed immediately post-reset.
