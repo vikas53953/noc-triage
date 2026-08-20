@@ -458,6 +458,123 @@ pre.term{
   padding:.34rem .7rem;font-size:.74rem;font-weight:700;cursor:pointer}
 .inv-btn:hover{background:var(--purple-bg)}
 
+/* ============================================================
+   CW-9: bridge conduct — V2 SPLIT TERMINAL (approved prototype).
+   Chat on the left, a persistent SSH-style session pane on the
+   right. Every black-screen block is REAL agent evidence from a
+   finding.cli envelope: host, honest transport label, the exact
+   command and the raw (secret-scrubbed) output — escaped at the
+   sink. Nothing on that screen is decorative or invented.
+   ============================================================ */
+.centersplit{
+  flex:1;min-height:0;display:grid;gap:.55rem;
+  grid-template-columns:minmax(0,1fr) minmax(272px,340px);
+  padding-right:.55rem;overflow:hidden
+}
+.centersplit.solo{grid-template-columns:minmax(0,1fr);padding-right:0}
+.centersplit.solo .termpane{display:none}
+.centersplit .chat{min-height:0;height:100%}
+.termpane{
+  display:flex;flex-direction:column;min-height:0;min-width:0;margin:.6rem 0 .1rem;
+  border:1px solid var(--line);border-radius:10px;background:var(--term-bg);overflow:hidden
+}
+.termpane-h{
+  display:flex;align-items:center;gap:.45rem;padding:.42rem .6rem;flex-shrink:0;
+  border-bottom:1px solid rgba(148,163,184,.25);background:rgba(148,163,184,.10);
+  font-family:var(--mono);font-size:.62rem;font-weight:800;letter-spacing:.08em;
+  text-transform:uppercase;color:#9fb6ce
+}
+.termpane-h .tdots{display:flex;gap:.25rem;flex-shrink:0}
+.termpane-h .tdots i{width:8px;height:8px;border-radius:50%;display:inline-block}
+.termpane-h .tdots i:nth-child(1){background:#ff5f57}
+.termpane-h .tdots i:nth-child(2){background:#febc2e}
+.termpane-h .tdots i:nth-child(3){background:#28c840}
+.termpane-h .tcount{margin-left:auto;color:#7e93ac;letter-spacing:.04em}
+.termbody{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:.5rem .55rem}
+.termidle{
+  font-family:var(--mono);font-size:.72rem;line-height:1.6;color:#7e93ac;padding:.4rem .2rem
+}
+.termidle .p{color:#58a6ff}
+/* one command block on the running session */
+.tblock{border:1px solid rgba(148,163,184,.20);border-radius:8px;overflow:hidden;margin-bottom:.5rem}
+.tblock.latest{border-color:#58a6ff}
+.tb-cap{
+  display:flex;align-items:baseline;gap:.45rem;padding:.28rem .55rem;background:rgba(148,163,184,.10);
+  font-family:var(--mono);font-size:.62rem;font-weight:700;letter-spacing:.05em;color:#9fb6ce
+}
+.tb-cap .host{color:#d6e2f0;text-transform:none;letter-spacing:0;overflow-wrap:anywhere}
+.tb-cap .tport{text-transform:uppercase}
+.tb-cap .tport.ssh{color:#7ee787}
+.tb-cap .tport.cmdrunner{color:#ffd479}
+.tb-cap .tport.api{color:#58a6ff}
+.tb-cap .tport.unknown{color:#ff6b6b}
+.tb-cap .ts{margin-left:auto;color:#7e93ac}
+.tb-body{
+  font-family:var(--mono);font-size:.71rem;line-height:1.5;color:#9fb6ce;background:#04070b;
+  padding:.5rem .6rem;margin:0;white-space:pre;overflow-x:auto
+}
+.tb-body .p{color:#58a6ff}
+.tb-body .g{color:#7ee787}
+.tb-body .a{color:#ffd479}
+.tb-body .r{color:#ff6b6b}
+.tb-body .muted{color:#5d7290}
+.tb-empty{color:#7e93ac;font-style:italic}
+
+/* ---- envelope cards in the chat ---- */
+.bubble.askq{border-left:3px solid var(--info)}
+.asklist{list-style:decimal;margin:.45rem 0 .1rem 1.15rem;padding:0}
+.asklist li{font-size:.83rem;line-height:1.5;font-weight:650;margin-bottom:.28rem;overflow-wrap:anywhere}
+.askhint{font-size:.68rem;color:var(--ink3);margin-top:.45rem;line-height:1.45}
+
+/* the chat column is a flex column with its own scroll — cards must never be
+   squeezed to a hairline when the thread gets long. */
+.bridgecard,.findcard,.verdictcard,.changecard{flex-shrink:0}
+.bridgecard{border:1px solid var(--line);border-radius:10px;background:var(--panel);
+  padding:.55rem .7rem;margin-top:.55rem}
+.bridgecard .r-lbl{color:var(--bad)}
+.rosterwrap{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center}
+.rpill{font-family:var(--mono);font-size:.66rem;font-weight:800;padding:.2rem .5rem;
+  border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.rpill.on{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
+.rpill.off{color:var(--ink3);text-decoration:line-through;opacity:.75}
+.rwhy{font-size:.68rem;color:var(--ink3);line-height:1.45;margin-top:.3rem;overflow-wrap:anywhere}
+.rwhy b{color:var(--ink2);font-family:var(--mono);font-size:.65rem}
+.rstood{font-size:.66rem;color:var(--ink3);margin-top:.3rem}
+
+.findcard{border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden;margin-top:.55rem}
+.findcard>summary{cursor:pointer;padding:.45rem .65rem;font-size:.82rem;line-height:1.5;
+  display:flex;gap:.45rem;align-items:baseline;list-style:none}
+.findcard>summary::-webkit-details-marker{display:none}
+.findcard>summary::before{content:"▸";color:var(--ink3);font-family:var(--mono);flex-shrink:0}
+.findcard[open]>summary::before{content:"▾"}
+.findcard>summary .fagent{font-family:var(--mono);font-size:.63rem;font-weight:800;color:var(--info);
+  text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;flex-shrink:0}
+.findcard>summary .fline{min-width:0;overflow-wrap:anywhere}
+.findcard>summary .fmore{color:var(--ink3);font-size:.66rem;white-space:nowrap;margin-left:auto}
+.findcard .fbody{border-top:1px solid var(--line);background:var(--term-bg)}
+.findcard .fbody .tblock{margin:.45rem;border-radius:8px}
+
+.verdictcard{border:1px solid var(--ok);border-radius:10px;background:var(--ok-bg);
+  padding:.55rem .7rem;margin-top:.55rem;font-size:.83rem;line-height:1.55}
+.verdictcard .r-lbl{color:var(--ok)}
+.verdictcard .vcause{font-weight:700;overflow-wrap:anywhere}
+.verdictcard .vmeta{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.4rem}
+
+.changecard{border:1px solid var(--warn);border-radius:10px;background:var(--warn-bg);
+  padding:.55rem .7rem;margin-top:.55rem;font-size:.83rem;line-height:1.55}
+.changecard .r-lbl{color:var(--warn)}
+.changecard ol{margin:.35rem 0 .1rem 1.1rem;padding:0}
+.changecard li{margin-bottom:.22rem;overflow-wrap:anywhere}
+.changecard .cgate{font-size:.69rem;color:var(--ink2);margin-top:.45rem;line-height:1.45}
+
+/* the split collapses to stacked well before the phone breakpoint — a squeezed
+   chat column is worse than a terminal that sits under it. */
+@media (max-width:1240px){
+  .centersplit{display:flex;flex-direction:column;padding-right:0;overflow:hidden}
+  .centersplit .chat{flex:1;height:auto}
+  .termpane{flex:0 0 auto;max-height:38vh;margin:0 .55rem .45rem}
+}
+
 /* ---------- name gate ---------- */
 .gate{
   position:fixed;inset:0;z-index:400;background:rgba(6,10,18,.86);backdrop-filter:blur(6px);
@@ -694,6 +811,15 @@ pre.term{
   font-size:.68rem;color:var(--ink3);line-height:1.55
 }
 @media (max-width:760px){ .cap-drawer{width:100vw} }
+/* CW-9 on a phone: the conversation keeps the room, the session pane sits under
+   it as a shorter strip the operator can scroll — never the other way round. */
+@media (max-width:760px){
+  /* both panes keep a usable size and the column itself scrolls, so the session
+     pane can never be clipped off the bottom of the screen. */
+  .centersplit{overflow-y:auto}
+  .centersplit .chat{min-height:38vh}
+  .termpane{flex:0 0 auto;max-height:30vh}
+}
 </style>
 </head>
 <body>
@@ -772,13 +898,28 @@ pre.term{
     <div class="ctx" id="ctxBar">
       <b id="ctxTitle">No incident selected</b>
       <span class="qsub" id="ctxSub" style="margin-left:auto">Pick one on the left, or ask Jarvis anything</span>
+      <button class="btn btn-ghost btn-sm" id="termToggle"
+              title="Show or hide the live session pane">⌨ Session</button>
     </div>
 
-    <div class="chat" id="chat">
-      <div class="chat-empty" id="chatEmpty">
-        Nothing said yet. Ask Jarvis a question below, or pick an incident on the left
-        to see its real bridge conversation.
+    <!-- CW-9 V2: chat left, the live SSH-style session pane right. -->
+    <div class="centersplit" id="centerSplit">
+      <div class="chat" id="chat">
+        <div class="chat-empty" id="chatEmpty">
+          Nothing said yet. Ask Jarvis a question below, or pick an incident on the left
+          to see its real bridge conversation.
+        </div>
       </div>
+      <aside class="termpane" id="termPane">
+        <div class="termpane-h">
+          <span class="tdots"><i></i><i></i><i></i></span>
+          <span>Live session</span>
+          <span class="tcount" id="termCount">read-only</span>
+        </div>
+        <div class="termbody" id="termBody">
+          <div class="termidle" id="termIdle"><span class="p">jarvis@bridge</span>:~$ waiting for the first real command…</div>
+        </div>
+      </aside>
     </div>
 
     <div class="capbar" id="capBar"></div>
@@ -1167,6 +1308,248 @@ $('chat').addEventListener('click', function(e){
   if(j) evTab(j.getAttribute('data-jump'));
 });
 
+/* ============================================================
+   CW-9 — BRIDGE CONDUCT (V2 split terminal)
+   Renders the PINNED message envelope (docs/copilot-cw9-bridge-contract.md):
+     kind 'ask'     → blue-edge bubble + the narrowing questions
+     kind 'roster'  → bridge card: engaged (green) / stood down (struck, why)
+     kind 'finding' → one-line collapsed card; expand = the CLI block inline,
+                      and the same block is appended to the live session pane
+     kind 'verdict' → green cause card
+     kind 'change'  → amber "held for approval" card (never applies anything)
+   ADDITIVE: a message with no `kind` (or kind 'say') renders exactly as it did
+   before this wave — old transcripts are untouched.
+   EVERY value below goes through cw9Esc() before it reaches the DOM. The CLI
+   output is RAW device text (already secret-scrubbed server-side) and is the
+   most hostile sink on this page, so it is escaped line by line and only then
+   given a colour class — no device string is ever parsed as HTML.
+   ============================================================ */
+
+/* CW9-PURE-START — pure string helpers, no DOM, no closure state.
+   sources/desk.cw9.ui.test.js extracts this exact block and runs it. */
+function cw9Esc(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+/* Honest transport label. An absent/unknown transport is NEVER dressed up as
+   SSH — the pane says the transport was not stated. */
+function cw9Transport(t){
+  var k = String(t == null ? '' : t).toLowerCase();
+  if(k === 'ssh')       return { key:'ssh',       label:'SSH' };
+  if(k === 'cmdrunner') return { key:'cmdrunner', label:'Command Runner' };
+  if(k === 'api')       return { key:'api',       label:'API read' };
+  return { key:'unknown', label:'transport not stated' };
+}
+/* The opening shell line — says how the read really happened. */
+function cw9OpenLine(host, tkey){
+  var h = cw9Esc(host || 'device');
+  if(tkey === 'ssh')       return 'ssh ' + h;
+  if(tkey === 'cmdrunner') return 'catalyst-center command-runner --device ' + h;
+  if(tkey === 'api')       return 'api read ' + h;
+  return 'read ' + h;
+}
+/* Colour by WHOLE line only — the line is escaped first and the class is put on
+   a span wrapping all of it, so no regex ever splices markup into device text. */
+function cw9LineClass(line){
+  var s = String(line || '');
+  if(/(\berrors?\b|\bfailed\b|\bfailure\b|\bdown\b|\bdenied\b|\binvalid\b|\bunreachable\b|not found|no such|\brefused\b|\bcrc\b|\bmajor\b|\bcritical\b)/i.test(s)) return 'r';
+  if(/(\bwarn|\babsent\b|\bflap|\bdegraded\b|\bmissing\b|\btimeout\b|timed out|not resolved|\bshutdown\b|\braised\b)/i.test(s)) return 'a';
+  if(/(\bup\b|\bok\b|\bsuccess\b|\breachable\b|\bactive\b|\bconnected\b|\bestablished\b|\bpassed?\b)/i.test(s)) return 'g';
+  return '';
+}
+function cw9OutputHtml(output){
+  var raw = String(output == null ? '' : output);
+  if(!raw.replace(/\s/g,'')) return '<span class="tb-empty">(the device returned nothing)</span>';
+  return raw.replace(/\r/g,'').split('\n').map(function(line){
+    var e = cw9Esc(line), c = cw9LineClass(line);
+    return c ? '<span class="' + c + '">' + e + '</span>' : e;
+  }).join('\n');
+}
+/* One black-screen block for one finding.cli. */
+function cw9TermBlockHtml(cli, stamp){
+  var c = cli || {};
+  var t = cw9Transport(c.transport);
+  var host = c.host ? String(c.host) : 'unnamed device';
+  var prompt = cw9Esc(host) + (t.key === 'api' ? '›' : '#');
+  return '<div class="tblock">' +
+    '<div class="tb-cap"><span class="host">' + cw9Esc(host) + '</span><span>·</span>' +
+    '<span class="tport ' + t.key + '">' + cw9Esc(t.label) + '</span>' +
+    '<span class="ts">' + cw9Esc(stamp || '') + '</span></div>' +
+    '<pre class="tb-body">' +
+      '<span class="p">jarvis@bridge</span>:~$ ' + cw9OpenLine(host, t.key) + '\n' +
+      '<span class="p">' + prompt + '</span> ' + cw9Esc(c.command == null ? '' : c.command) + '\n' +
+      cw9OutputHtml(c.output) +
+    '</pre></div>';
+}
+/* Where an answer to a kind:'ask' must be posted. Same-origin paths only —
+   an envelope can never point the desk at another host. */
+function cw9ResumeTarget(d){
+  function ok(u){ return typeof u === 'string' && u.charAt(0) === '/' && u.charAt(1) !== '/'; }
+  var r = d && (d.resume || d.resumeEndpoint);
+  if(ok(r)) return { url:r, field:'text' };
+  if(r && typeof r === 'object' && ok(r.url)) return { url:r.url, field:(r.field || 'text') };
+  var tid = d && (d.triageId || d.threadId);
+  if(tid && /^[A-Za-z0-9_.:-]+$/.test(String(tid))){
+    return { url:'/api/triage/' + encodeURIComponent(tid) + '/message', field:'text' };
+  }
+  return null;   // no stated route → the answer goes back down the normal ask path
+}
+/* CW9-PURE-END */
+
+var CW9 = { awaiting:null, blocks:0 };
+
+/* ---------- the live session pane ---------- */
+function cw9TermAppend(cli, ts){
+  var body = $('termBody');
+  if(!body) return;
+  var idle = $('termIdle'); if(idle) idle.remove();
+  var prev = body.querySelector('.tblock.latest'); if(prev) prev.classList.remove('latest');
+  var wrap = document.createElement('div');
+  wrap.innerHTML = cw9TermBlockHtml(cli, clockOf(ts || new Date().toISOString()));
+  var block = wrap.firstElementChild;
+  if(!block) return;
+  block.classList.add('latest');
+  body.appendChild(block);
+  body.scrollTop = body.scrollHeight;
+  CW9.blocks++;
+  var c = $('termCount');
+  if(c) c.textContent = CW9.blocks + (CW9.blocks === 1 ? ' read · read-only' : ' reads · read-only');
+  cw9ShowPane();
+  persistWork();
+}
+function cw9ShowPane(){
+  var s = $('centerSplit');
+  if(s && s.classList.contains('solo') && !cw9UserHidPane) s.classList.remove('solo');
+}
+var cw9UserHidPane = false;
+(function(){
+  var t = $('termToggle');
+  if(!t) return;
+  try{ if(localStorage.getItem('noc-desk-term') === 'off'){ $('centerSplit').classList.add('solo'); cw9UserHidPane = true; } }catch(e){}
+  t.addEventListener('click', function(){
+    var s = $('centerSplit'); if(!s) return;
+    var off = s.classList.toggle('solo');
+    cw9UserHidPane = off;
+    try{ localStorage.setItem('noc-desk-term', off ? 'off' : 'on'); }catch(e){}
+  });
+})();
+
+/* ---------- the five envelope kinds ---------- */
+function cw9Card(html){
+  var d = document.createElement('div');
+  d.innerHTML = html;
+  var node = d.firstElementChild;
+  if(node) push(node);
+  return node;
+}
+function cw9Ask(d){
+  var qs = (d.questions || []).filter(function(q){ return q && String(q).trim(); }).slice(0,3);
+  var list = qs.length
+    ? '<ol class="asklist">' + qs.map(function(q){ return '<li>' + md(q) + '</li>'; }).join('') + '</ol>'
+    : '';
+  var b = bubble('jv', (d.agentName || d.agent || 'Jarvis') + ' · ' + clockOf(d.timestamp),
+    md(d.text || 'Before I pull anyone in — a couple of quick ones:') + list +
+    '<div class="askhint">Answer in the box below. Nothing has been read and nobody has been engaged yet.</div>', true);
+  var bub = b && b.querySelector('.bubble');
+  if(bub) bub.classList.add('askq');
+  CW9.awaiting = { resume: cw9ResumeTarget(d), at: Date.now() };
+  var box = $('ask');
+  if(box) box.placeholder = 'Answer Jarvis so it can scope this…';
+}
+function cw9Roster(d){
+  var r = d.roster || {};
+  var on  = (r.engaged   || []).filter(function(x){ return x && x.agent; });
+  var off = (r.stoodDown || []).filter(function(x){ return x && x.agent; });
+  if(!on.length && !off.length) return;
+  var pills = on.map(function(x){ return '<span class="rpill on">' + cw9Esc(x.agent) + ' ✓ engaged</span>'; })
+    .concat(off.map(function(x){ return '<span class="rpill off">' + cw9Esc(x.agent) + '</span>'; })).join('');
+  var why = on.concat(off).filter(function(x){ return x.why; }).map(function(x){
+    return '<div class="rwhy"><b>' + cw9Esc(x.agent) + '</b> — ' + cw9Esc(x.why) + '</div>';
+  }).join('');
+  cw9Card('<div class="bridgecard"><span class="r-lbl">Bridge roster · who is on this call</span>' +
+    '<div class="rosterwrap">' + pills + '</div>' +
+    (off.length ? '<div class="rstood">Struck out = stood down, not relevant to this problem.</div>' : '') +
+    why + '</div>');
+}
+function cw9Finding(d){
+  var f = d.finding || {};
+  var cli = f.cli || null;
+  var line = f.line || d.text || 'A read came back.';
+  var agent = f.agent || d.agentName || d.agent || 'Engineer';
+  cw9Card('<details class="findcard">' +
+    '<summary><span class="fagent">' + cw9Esc(agent) + '</span>' +
+    '<span class="fline">' + cw9Esc(line) + '</span>' +
+    '<span class="fmore">' + (cli ? 'expand CLI' : 'no CLI attached') + '</span></summary>' +
+    '<div class="fbody">' + (cli
+      ? cw9TermBlockHtml(cli, clockOf(d.timestamp))
+      : '<div class="termidle">This finding arrived without a command block — nothing is being shown that was not run.</div>') +
+    '</div></details>');
+  if(cli) cw9TermAppend(cli, d.timestamp);
+}
+function cw9Verdict(d){
+  var v = d.verdict || {};
+  var cause = v.cause || d.text || '';
+  if(!cause) return;
+  var meta = '';
+  if(v.confidence) meta += '<span class="conf">confidence ' + cw9Esc(v.confidence) + '</span>';
+  if(v.rounds != null) meta += '<span class="pill grey">' + cw9Esc(v.rounds) + ' round' + (Number(v.rounds) === 1 ? '' : 's') + '</span>';
+  cw9Card('<div class="verdictcard"><span class="r-lbl">✔ Cause found</span>' +
+    '<div class="vcause">' + cw9Esc(cause) + '</div>' +
+    (meta ? '<div class="vmeta">' + meta + '</div>' : '') + '</div>');
+}
+function cw9Change(d){
+  var c = d.change || {};
+  var steps = (c.steps || []).filter(function(s){ return s && String(s).trim(); });
+  if(!steps.length && !c.id) return;
+  cw9Card('<div class="changecard"><span class="r-lbl">⏸ Fix drafted — held for approval</span>' +
+    (c.id ? '<div><b>' + cw9Esc(c.id) + '</b> · <span class="state amber">' + cw9Esc(c.state || 'held-for-approval') + '</span></div>' : '') +
+    (steps.length ? '<ol>' + steps.map(function(s){ return '<li>' + cw9Esc(s) + '</li>'; }).join('') + '</ol>' : '') +
+    '<div class="cgate">Nothing has been sent to any device. A change only runs after a human presses go on the Change wrap.</div></div>');
+}
+
+/* One entry point. Returns true when the message was an envelope this wave
+   owns, so the caller does NOT also paint it as a plain bubble. */
+function cw9Render(d){
+  if(!d || typeof d !== 'object') return false;
+  var kind = d.kind;
+  if(kind !== 'ask' && kind !== 'roster' && kind !== 'finding' && kind !== 'verdict' && kind !== 'change') return false;
+  if(kind !== 'ask') CW9.awaiting = null;
+  if(kind === 'ask'){ cw9Ask(d); return true; }
+  /* a short jarvis line may travel with the card — paint it first, then the card */
+  if(d.text && String(d.text).trim() && kind !== 'finding'){
+    jvMsg(d.agentName || d.agent || 'Jarvis', d.text, d.timestamp);
+  }
+  if(kind === 'roster')  cw9Roster(d);
+  if(kind === 'finding') cw9Finding(d);
+  if(kind === 'verdict') cw9Verdict(d);
+  if(kind === 'change')  cw9Change(d);
+  return true;
+}
+
+/* Replay the bridge-conduct part of the server's chat-store history, once, and
+   only when this browser had no saved thread of its own (see restoreWork). */
+function cw9Hydrate(data){
+  if(!CW9.canHydrate || CW9.hydrated) return;
+  CW9.hydrated = true;
+  var hist = data && data.chatHistory;
+  if(!Array.isArray(hist) || !hist.length) return;
+  var envelopes = hist.filter(function(d){
+    return d && d.type !== 'outgoing' &&
+      (d.kind === 'ask' || d.kind === 'roster' || d.kind === 'finding' ||
+       d.kind === 'verdict' || d.kind === 'change');
+  }).slice(-40);
+  if(!envelopes.length) return;
+  sysMsg('Restored from the bridge history — the ' + envelopes.length +
+         ' call message' + (envelopes.length === 1 ? '' : 's') + ' below, and the session pane, are what the server kept.');
+  envelopes.forEach(function(d){ cw9Render(d); });
+}
+
+/* DEV/TEST ONLY — nothing in the app calls this. It exists so the envelope can
+   be exercised in a browser without waiting on the backend branch. Fixtures:
+   test/cw9-envelope-fixture.js */
+window.__cw9DevInject = function(msg){ return cw9Render(msg); };
+
 /* ---------- ask Jarvis (REAL POST /api/command; reply on the WS) ---------- */
 function sendAsk(){
   var box = $('ask'), t = box.value.trim();
@@ -1174,6 +1557,29 @@ function sendAsk(){
   if(!OP){ $('whoTag').click(); return; }
   box.value = '';
   meMsg(t);
+  /* CW-9: the thread is paused on Jarvis's narrowing questions — this reply IS
+     the answer, so it goes to the resume route the envelope named (same-origin
+     only) instead of opening a fresh ask. If the envelope named no route, the
+     answer falls through to the normal ask path, where the conduct layer
+     remembers the conversation. */
+  if(CW9.awaiting && CW9.awaiting.resume){
+    var tgt = CW9.awaiting.resume;
+    CW9.awaiting = null;
+    box.placeholder = 'Ask Jarvis anything about the network…';
+    var payload = {}; payload[tgt.field || 'text'] = t;
+    api(tgt.url, { method:'POST', body: JSON.stringify(payload) })
+      .then(function(r){
+        if(!r.ok) return r.json().catch(function(){ return {}; }).then(function(b){
+          sysMsg('Jarvis could not take that answer — ' + esc((b && b.error) || ('HTTP ' + r.status)) +
+                 '. Nothing was run.');
+        });
+      })
+      .catch(function(err){
+        sysMsg('Could not reach the server: ' + esc(err.message || err) + '. Nothing was run.');
+      });
+    return;
+  }
+  if(CW9.awaiting){ CW9.awaiting = null; box.placeholder = 'Ask Jarvis anything about the network…'; }
   /* An ask that reads like a change gets a proposal card too. The ask itself
      still goes to Jarvis untouched — nothing is hijacked, and no change is
      fired by typing. The card is the only trigger, and it needs a press. */
@@ -3698,6 +4104,12 @@ function connectWS(){
   ws.onmessage = function(ev){
     var m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
     if(!m || !m.type) return;
+    /* CW-9: the server's init snapshot carries the chat-store history. When this
+       browser had nothing saved locally, replay the bridge-conduct messages from
+       it so a reload (or a fresh machine) still shows the call and its session
+       pane. Plain old messages are left out on purpose — they are restored by
+       the local working context, and replaying them would double the thread. */
+    if(m.type === 'init' && m.data){ cw9Hydrate(m.data); return; }
     if(m.type === 'chat_message' && m.data){ onChat(m.data); return; }
     if(m.type === 'command_share' && m.data){ onShare(m.data); return; }
     if(m.type === 'system_error' && m.data){ sysMsg(esc(m.data.message || 'System error')); return; }
@@ -3748,6 +4160,13 @@ function scheduleReconnect(){ wsRetry = Math.min(wsRetry + 1, 6); setTimeout(con
 
 function onChat(d){
   if(d.type === 'outgoing') return;   // our own asks are already on screen
+  /* CW-9: an envelope kind paints itself (ask / roster / finding / verdict /
+     change). Anything without a kind falls through and renders as before. */
+  if(cw9Render(d)){
+    var p0 = d.proposal || d.changeProposal;
+    if(p0 && typeof p0 === 'object') proposalCard(p0, 'jarvis');
+    return;
+  }
   jvMsg(d.agentName || d.agent || 'Jarvis', d.text || '', d.timestamp);
   /* A reply may carry a drafted change. It is still only a PROPOSAL —
      the engine is not called until the operator presses go. */
@@ -3772,6 +4191,12 @@ function onTriage(type, d){
   switch(type){
     case 'triage_message':
       if(d.operator) bubble('me', esc(d.agentName || 'Operator') + ' · ' + clockOf(d.ts), md(d.text||''));
+      /* CW-9: a bridge message may carry an envelope kind. It paints itself;
+         anything without a kind keeps the old rendering exactly. */
+      else if(cw9Render({ kind:d.kind, text:d.text, questions:d.questions, roster:d.roster,
+                          finding:d.finding, verdict:d.verdict, change:d.change,
+                          agent:d.agent, agentName:d.agentName, timestamp:d.ts,
+                          triageId:d.triageId, resume:d.resume })){ /* painted */ }
       else if(!(d.tier === 'L4' && d.round === 2)) jvMsg(d.agentName || d.agent || 'Engineer', d.text || '', d.ts);
       break;
     case 'triage_verdict':
@@ -3842,9 +4267,16 @@ function persistWork(){
   persistT = setTimeout(function(){
     try{
       var html = $('chat').innerHTML || '';
+      /* CW-9: the live session pane is part of what the operator had on screen,
+         so it is kept with the thread. Same guard, same escaping guarantee —
+         every block in it was built by cw9TermBlockHtml through cw9Esc(). */
+      var tb = $('termBody');
+      var term = (tb && !tb.querySelector('#termIdle')) ? tb.innerHTML : '';
       /* guard: never let a runaway thread bloat localStorage */
-      if(html.length > 250000) return;
-      localStorage.setItem(workKey(), JSON.stringify({ v:1, selId:SELID, chat:html, ts:Date.now() }));
+      if(html.length + term.length > 250000) return;
+      localStorage.setItem(workKey(), JSON.stringify({
+        v:1, selId:SELID, chat:html, term:term, termBlocks:CW9.blocks, ts:Date.now()
+      }));
     }catch(e){}
   }, 300);
 }
@@ -3852,8 +4284,23 @@ function restoreWork(){
   var raw = null; try{ raw = localStorage.getItem(workKey()); }catch(e){}
   if(!raw) return false;
   var st = null; try{ st = JSON.parse(raw); }catch(e){ st = null; }
-  if(!st || (!st.chat && !st.selId)) return false;
+  if(!st || (!st.chat && !st.selId && !st.term)) return false;
   var did = false;
+  /* CW-9: bring the live session pane back exactly as it was. Every block in
+     this string was produced by cw9TermBlockHtml() — device text was escaped
+     before it was ever stored — so re-inserting it opens no new sink. */
+  if(typeof st.term === 'string' && st.term.trim()){
+    var tb = $('termBody');
+    if(tb){
+      tb.innerHTML = st.term;
+      tb.scrollTop = tb.scrollHeight;
+      CW9.blocks = Number(st.termBlocks) || tb.querySelectorAll('.tblock').length;
+      var tc = $('termCount');
+      if(tc) tc.textContent = CW9.blocks + (CW9.blocks === 1 ? ' read · read-only' : ' reads · read-only');
+      CW9.restored = true;
+      did = true;
+    }
+  }
   if(typeof st.chat === 'string' && st.chat.trim()){
     /* This transcript was built entirely by this page through esc()/md(), so
        every value in it is already escaped — re-inserting it introduces no new
@@ -3930,7 +4377,7 @@ function boot(){
   connectWS();
   /* Re-attach the incident + conversation from before the reload; only greet
      fresh when there was nothing to restore. */
-  if(!restoreWork()) showGreeting();
+  if(!restoreWork()){ CW9.canHydrate = true; showGreeting(); }
 }
 (function(){
   var saved = null; try{ saved = localStorage.getItem('noc-desk-operator'); }catch(e){}
