@@ -62,6 +62,37 @@
     return v != null && !Array.isArray(v);
   }
 
+  /* CW-10 item 7b — one member of an array-shaped field, as display text.
+     The old code did String(member), so a question or a change step that
+     arrived as an OBJECT printed the literal words "[object Object]" on a P1
+     bridge: a message that looks rendered but says nothing. Anything that is
+     not already text is stringified to something a human can actually read,
+     and bounded so one huge nested blob cannot fill the bubble.
+     It returns TEXT, never HTML — the caller still escapes it at the sink. */
+  var ITEM_MAX = 400;
+  function itemText(v) {
+    if (v == null) return '';
+    var t = typeof v;
+    if (t === 'string') return v;
+    if (t === 'number' || t === 'boolean') return String(v);
+    if (t === 'function' || t === 'symbol') return '(unreadable value)';
+    var s;
+    try { s = JSON.stringify(v); } catch (e) { s = null; }   /* cycles throw */
+    if (s == null || s === undefined) {
+      /* JSON.stringify returns undefined for a function/symbol and throws on a
+         cycle — either way there is nothing honest to print. */
+      return '(a value this screen cannot show — open the incident record)';
+    }
+    if (s.length > ITEM_MAX) s = s.slice(0, ITEM_MAX) + '… (trimmed for display)';
+    return s;
+  }
+
+  /* Every array-of-text field goes through here: coerce the list, make each
+     member readable, drop the ones that are genuinely empty. */
+  function textList(v) {
+    return arr(v).map(itemText).filter(function (s) { return s && s.trim(); });
+  }
+
   function transport(t) {
     var k = String(t == null ? '' : t).toLowerCase();
     if (k === 'ssh') return { key: 'ssh', label: 'SSH', open: 'ssh ' };
@@ -141,7 +172,7 @@
   /* ---------- the five cards (same markup on both pages) ---------- */
 
   function askHtml(d) {
-    var qs = arr(d && d.questions).filter(function (q) { return q && String(q).trim(); }).slice(0, 3);
+    var qs = textList(d && d.questions).slice(0, 3);
     var html = '';
     if (qs.length) {
       html = '<ol class="asklist">' + qs.map(function (q) { return '<li>' + esc(q) + '</li>'; }).join('') + '</ol>';
@@ -202,7 +233,7 @@
 
   function changeHtml(d) {
     var c = (d && d.change) || {};
-    var steps = arr(c.steps).filter(function (s) { return s && String(s).trim(); });
+    var steps = textList(c.steps);
     var wrong = badList(c.steps);
     if (!steps.length && !c.id && !wrong) return '';
     return '<div class="changecard"><span class="r-lbl">⏸ Fix drafted — held for approval</span>' +
@@ -269,8 +300,309 @@
     return null;   // nothing usable → the answer goes down the normal ask path
   }
 
+  /* ============================================================
+     CW-10 item 3 — STREAMING ANSWERS (kind:'say-delta')
+     ============================================================
+     The backend now sends Jarvis's answer twice: once as it is being
+     written, in pieces — {kind:'say-delta', messageId, delta, done} — and
+     once at the end, as the ordinary, complete chat message that is what
+     the server actually recorded.
+
+     THE ONE RULE: the final message always wins. The pieces are a PREVIEW.
+     They are shown so the operator is not staring at a dead screen for
+     fifteen seconds, and they are thrown away the moment the real message
+     lands — never merged with it, never left beside it as a second bubble.
+
+     What that buys us, in the failure cases that actually happen:
+       - a piece is lost in flight  → the preview is short, the final is whole
+       - pieces arrive out of order → optional `seq` catches it; without a seq
+                                      the preview may read oddly for a second,
+                                      and the final still replaces it
+       - a piece arrives after done → it is appended; the final still replaces
+       - the final never arrives    → the preview stays, and SAYS it is a
+                                      preview; the page ages it out honestly
+       - the stream never stops     → the preview is capped, not endless
+
+     This is state + strings only. The pages own the DOM node it goes in. */
+
+  var MAX_STREAM_CHARS = 24000;
+
+  function streamId(d) {
+    var id = d && (d.messageId !== undefined ? d.messageId : d.id);
+    if (typeof id === 'number' && isFinite(id)) id = String(id);
+    if (typeof id !== 'string') return '';
+    id = id.trim();
+    return (id && id.length <= 200) ? id : '';
+  }
+
+  function isDelta(d) {
+    return !!(d && typeof d === 'object' && d.kind === 'say-delta' && streamId(d));
+  }
+
+  /* The preview body. Deliberately NOT markdown: the pieces arrive mid-token,
+     so a half-written `**bold` would flip formatting on and off while the
+     operator reads. Plain escaped text now, the page's own markdown on the
+     final message. */
+  function streamPreviewHtml(st) {
+    if (!st) return '';
+    var body;
+    if (!st.text) {
+      body = '<span class="cw9-stream-wait">Jarvis is answering…</span>';
+    } else {
+      body = esc(st.text).replace(/\n/g, '<br>');
+    }
+    var notes = '';
+    if (st.capped) {
+      notes += '<span class="cw9-stream-note">This answer is longer than the live preview holds — the whole of it lands when Jarvis finishes.</span>';
+    }
+    if (st.gaps) {
+      notes += '<span class="cw9-stream-note">Part of this preview did not reach the screen. The complete answer replaces it when Jarvis finishes.</span>';
+    }
+    return '<span class="cw9-stream' + (st.done ? ' done' : '') + '">' + body +
+      (st.done ? '' : '<span class="cw9-caret" aria-hidden="true"></span>') + '</span>' +
+      notes +
+      (st.done ? '<span class="cw9-stream-note">Waiting for the recorded answer…</span>' : '');
+  }
+
+  function createStream() {
+    var live = Object.create(null);
+    var ids = [];
+
+    function drop(id) {
+      if (!(id in live)) return false;
+      delete live[id];
+      var i = ids.indexOf(id);
+      if (i !== -1) ids.splice(i, 1);
+      return true;
+    }
+
+    return {
+      /* Take one delta. Returns null when this is not a delta we own, else
+         { id, first, done, html } — `first` tells the page to create a bubble
+         rather than update one. */
+      accept: function (d, now) {
+        if (!isDelta(d)) return null;
+        var id = streamId(d);
+        var first = !(id in live);
+        if (first) {
+          live[id] = {
+            id: id, text: '', done: false, chunks: 0, gaps: false, capped: false,
+            lastSeq: null, started: now || Date.now(), at: now || Date.now(),
+            who: (typeof d.agentName === 'string' && d.agentName) ||
+                 (typeof d.agent === 'string' && d.agent) || 'Jarvis',
+            timestamp: typeof d.timestamp === 'string' ? d.timestamp : '',
+          };
+          ids.push(id);
+        }
+        var st = live[id];
+        st.at = now || Date.now();
+
+        /* `seq` is optional in the envelope. When it IS there we can tell a
+           replayed/duplicate piece from a new one, and spot a hole. When it is
+           not, we simply append — the final message covers us either way. */
+        var seq = (typeof d.seq === 'number' && isFinite(d.seq)) ? d.seq
+                : (typeof d.index === 'number' && isFinite(d.index)) ? d.index : null;
+        var stale = false;
+        if (seq !== null) {
+          if (st.lastSeq !== null && seq <= st.lastSeq) stale = true;       /* already had it */
+          else if (st.lastSeq !== null && seq > st.lastSeq + 1) st.gaps = true;
+          if (!stale) st.lastSeq = seq;
+        }
+
+        if (!stale) {
+          var piece = itemText(d.delta);
+          if (piece) {
+            var room = MAX_STREAM_CHARS - st.text.length;
+            if (room <= 0) st.capped = true;
+            else if (piece.length > room) { st.text += piece.slice(0, room); st.capped = true; }
+            else st.text += piece;
+            st.chunks++;
+          }
+        }
+        if (d.done === true) st.done = true;
+        return { id: id, first: first, done: st.done, stale: stale, html: streamPreviewHtml(st) };
+      },
+
+      /* Which preview (if any) this ORDINARY message replaces.
+         Matched by messageId. When the final carries no id at all and exactly
+         one preview is open, that preview is the one — refusing to match there
+         would leave a stale preview AND the real answer side by side, which is
+         the duplicate bubble we are trying to avoid. With two or more open we
+         do not guess; the page ages the leftovers out honestly. */
+      finalFor: function (d) {
+        if (!d || typeof d !== 'object' || isDelta(d)) return null;
+        var id = streamId(d);
+        if (id) return (id in live) ? id : null;
+        return ids.length === 1 ? ids[0] : null;
+      },
+
+      /* Previews with no final message after `maxAgeMs`. The page turns these
+         into an honest note; they are never silently deleted. */
+      stale: function (maxAgeMs, now) {
+        var t = now || Date.now();
+        return ids.filter(function (id) { return t - live[id].at > maxAgeMs; });
+      },
+
+      get: function (id) { return live[id] || null; },
+      ids: function () { return ids.slice(); },
+      size: function () { return ids.length; },
+      drop: drop,
+      clear: function () { live = Object.create(null); ids = []; },
+    };
+  }
+
+  /* ============================================================
+     CW-10 item 4 (panel half) — SPEND SUMMARY
+     ============================================================
+     Reads GET /api/spend/summary and turns it into totals + bars. The
+     endpoint is built on the other branch, so this normalises the field
+     names it could plausibly arrive under and, when it finds nothing,
+     SAYS nothing was found. There is no default, no estimate, no
+     placeholder number anywhere below: a spend panel that guesses is
+     worse than no spend panel. Tokens only — this file never prints a
+     price, because nothing in the record knows one. */
+
+  function num(v) {
+    var n = typeof v === 'number' ? v : (typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
+    return (isFinite(n) && n >= 0) ? n : 0;
+  }
+
+  /* One bucket of counters, whatever the backend called its fields. */
+  function tokens(o) {
+    if (!o || typeof o !== 'object') return { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, calls: 0 };
+    return {
+      input: num(o.input_tokens !== undefined ? o.input_tokens : (o.inputTokens !== undefined ? o.inputTokens : o.input)),
+      output: num(o.output_tokens !== undefined ? o.output_tokens : (o.outputTokens !== undefined ? o.outputTokens : o.output)),
+      cacheRead: num(o.cache_read !== undefined ? o.cache_read
+                  : (o.cacheRead !== undefined ? o.cacheRead : o.cache_read_input_tokens)),
+      cacheCreate: num(o.cache_creation !== undefined ? o.cache_creation
+                  : (o.cacheCreation !== undefined ? o.cacheCreation : o.cache_creation_input_tokens)),
+      calls: num(o.calls !== undefined ? o.calls : (o.count !== undefined ? o.count : o.requests)),
+    };
+  }
+  function totalOf(t) { return t.input + t.output + t.cacheRead + t.cacheCreate; }
+  function anyOf(t) { return totalOf(t) > 0 || t.calls > 0; }
+
+  /* A map {name: bucket} or a list [{purpose|model|name, …}] — both are shapes
+     a reasonable backend would send, so both are read. */
+  function buckets(v, nameKeys) {
+    var out = [];
+    if (Array.isArray(v)) {
+      v.forEach(function (row) {
+        if (!row || typeof row !== 'object') return;
+        var name = '';
+        for (var i = 0; i < nameKeys.length; i++) {
+          if (typeof row[nameKeys[i]] === 'string' && row[nameKeys[i]]) { name = row[nameKeys[i]]; break; }
+        }
+        out.push({ name: name || 'not stated', t: tokens(row) });
+      });
+    } else if (v && typeof v === 'object') {
+      Object.keys(v).forEach(function (k) {
+        var row = v[k];
+        out.push({ name: k || 'not stated', t: typeof row === 'number' ? tokens({ input: row }) : tokens(row) });
+      });
+    }
+    return out.filter(function (b) { return anyOf(b.t); })
+      .sort(function (a, b) { return totalOf(b.t) - totalOf(a.t); });
+  }
+
+  function pick(o, keys) {
+    for (var i = 0; i < keys.length; i++) if (o && o[keys[i]] != null) return o[keys[i]];
+    return null;
+  }
+
+  function normalizeSpend(raw) {
+    var d = (raw && typeof raw === 'object') ? raw : {};
+    var t = (d.totals && typeof d.totals === 'object') ? d.totals : d;
+    var today = tokens(pick(t, ['today', 'day']));
+    var week = tokens(pick(t, ['week', 'thisWeek', 'this_week', 'last7', 'last7Days']));
+    var purposes = buckets(pick(d, ['byPurpose', 'purposes', 'perPurpose', 'by_purpose']), ['purpose', 'name', 'key']);
+    var models = buckets(pick(d, ['byModel', 'models', 'perModel', 'by_model']), ['model', 'name', 'key']);
+    return {
+      today: today, week: week, purposes: purposes, models: models,
+      empty: !anyOf(today) && !anyOf(week) && !purposes.length && !models.length,
+    };
+  }
+
+  function compact(n) {
+    n = num(n);
+    if (n >= 1000000) return (n / 1000000).toFixed(n >= 10000000 ? 0 : 1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k';
+    return String(Math.round(n));
+  }
+  function exact(n) { return String(Math.round(num(n))).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+
+  /* One labelled bar. The number is written next to the label — the bar is
+     only there to make the ORDER readable at a glance, so there is no grid,
+     no axis and no second colour competing with it. */
+  function bar(name, value, max, sub) {
+    var w = max > 0 ? Math.max(2, Math.round((value / max) * 100)) : 0;
+    return '<div class="sp-row" title="' + esc(exact(value)) + ' tokens">' +
+      '<div class="sp-rowtop"><span class="sp-name">' + esc(name) + '</span>' +
+      '<span class="sp-val">' + esc(compact(value)) + '</span></div>' +
+      '<div class="sp-track"><span class="sp-fill" style="width:' + w + '%"></span></div>' +
+      (sub ? '<div class="sp-sub">' + esc(sub) + '</div>' : '') +
+      '</div>';
+  }
+
+  function totalsCard(label, t) {
+    if (!anyOf(t)) {
+      return '<div class="sp-tile"><span class="sp-tl">' + esc(label) + '</span>' +
+        '<span class="sp-big">—</span><span class="sp-sub">nothing recorded</span></div>';
+    }
+    var sub = compact(t.input) + ' in · ' + compact(t.output) + ' out' +
+      (t.cacheRead ? ' · ' + compact(t.cacheRead) + ' from cache' : '') +
+      (t.calls ? ' · ' + exact(t.calls) + ' call' + (t.calls === 1 ? '' : 's') : '');
+    return '<div class="sp-tile" title="' + esc(exact(totalOf(t))) + ' tokens">' +
+      '<span class="sp-tl">' + esc(label) + '</span>' +
+      '<span class="sp-big">' + esc(compact(totalOf(t))) + '</span>' +
+      '<span class="sp-sub">' + esc(sub) + '</span></div>';
+  }
+
+  /* The honest states. `spendNoteHtml` is what shows when the endpoint is not
+     there yet (404 — the backend branch has not merged), is unreachable, or
+     answered with something this panel cannot read. It never shows a zero as
+     if zero were the measurement. */
+  function spendNoteHtml(reason) {
+    return '<div class="sp-note"><b>No spend data yet</b>' +
+      (reason ? ' — ' + esc(reason) : '') +
+      '<div class="sp-fine">Nothing is being estimated here. When the server starts recording model usage, the real numbers appear.</div></div>';
+  }
+
+  function spendHtml(raw) {
+    var s;
+    try { s = normalizeSpend(raw); }
+    catch (e) { return spendNoteHtml('the summary arrived in a shape this panel cannot read'); }
+    if (s.empty) return spendNoteHtml('the server is recording model usage, but nothing has been spent yet');
+
+    var html = '<div class="sp-tiles">' + totalsCard('Today', s.today) + totalsCard('This week', s.week) + '</div>';
+
+    if (s.purposes.length) {
+      var pmax = totalOf(s.purposes[0].t);
+      html += '<div class="sp-sec"><span class="sp-sech">What it went on</span>' +
+        s.purposes.slice(0, 8).map(function (b) {
+          return bar(b.name, totalOf(b.t), pmax, b.t.calls ? exact(b.t.calls) + ' call' + (b.t.calls === 1 ? '' : 's') : '');
+        }).join('') + '</div>';
+    }
+    if (s.models.length) {
+      var mtotal = s.models.reduce(function (a, b) { return a + totalOf(b.t); }, 0);
+      var mmax = totalOf(s.models[0].t);
+      html += '<div class="sp-sec"><span class="sp-sech">Which model</span>' +
+        s.models.slice(0, 6).map(function (b) {
+          var v = totalOf(b.t);
+          var pct = mtotal > 0 ? Math.round((v / mtotal) * 100) + '% of all tokens' : '';
+          return bar(b.name, v, mmax, pct);
+        }).join('') + '</div>';
+    }
+    html += '<div class="sp-fine">Tokens counted from the server\'s own usage record. No price is shown — the record does not hold one.</div>';
+    return html;
+  }
+
   return {
-    MAX_LINES: MAX_LINES, MAX_CHARS: MAX_CHARS, KINDS: KINDS,
+    MAX_LINES: MAX_LINES, MAX_CHARS: MAX_CHARS, MAX_STREAM_CHARS: MAX_STREAM_CHARS, KINDS: KINDS,
+    itemText: itemText, textList: textList,
+    isDelta: isDelta, streamId: streamId, createStream: createStream, streamPreviewHtml: streamPreviewHtml,
+    normalizeSpend: normalizeSpend, spendHtml: spendHtml, spendNoteHtml: spendNoteHtml,
     esc: esc, arr: arr, badList: badList, transport: transport, lineClass: lineClass,
     outputHtml: outputHtml, termBlockHtml: termBlockHtml,
     askHtml: askHtml, rosterHtml: rosterHtml, findingHtml: findingHtml,
