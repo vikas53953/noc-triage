@@ -25,6 +25,11 @@
 
 const claude = require('./claude');
 const session = require('./session-log');
+// CW-9: the ONE bridge-conduct layer — the shared understanding gate and the
+// pinned message envelope (with its hard caps). conduct.js knows nothing about
+// Jarvis (no cycle): Jarvis hands it a planner, and every operator entry point
+// goes through the same gate.
+const conduct = require('./conduct');
 
 let ctx = null;
 // ctx: { say(agentId,text), status(agentId,state,label), log(line),
@@ -193,6 +198,12 @@ from campus, fabric, wan, incidents, firewall, loadbalancer, security — or nam
 null if not scoped), and the rawSymptom (the operator's own words for what is wrong).
 Then choose the delegations.
 
+BRIDGE ROSTER (CW-9). You are the call leader, so say out loud who you are NOT pulling
+in. In "standDown", list the roster agents you deliberately left out THAT AN OPERATOR
+MIGHT EXPECT to be involved, each with a one-line reason ("nothing in this points at
+firewall policy"). Leave it empty when nothing needs saying. Never stand an agent down
+and task it as well, and never invent a reason — if you have no reason, leave it out.
+
 Return ONLY the structured plan. Phrase each agent's question in plain, specific terms.`;
 
 const PLAN_FORMAT_BASE = {
@@ -273,11 +284,109 @@ async function gatherGuarded(d) {
   }
 }
 
-async function ask(question) {
+// Say something on the bridge in the PINNED ENVELOPE. `env` carries kind + its
+// structured payload; the text is what an old client (or a plain reader) sees.
+// Additive: ctx.say ignores a third argument it does not understand.
+function speak(agentId, env) {
+  ctx.say(agentId, env.text, env);
+}
+
+// ── CW-9: the bridge front door ─────────────────────────────────────────────
+// EVERY operator message reaches Jarvis here, and the FIRST thing that happens
+// is the shared conduct gate (sources/conduct.js) — the same gate the triage
+// intake uses. An underspecified problem report gets up to 3 narrowing questions
+// and NOTHING is engaged and NOTHING is read. That is the class fix for the
+// 2026-08-19 failure: sweep-first-ask-last is now impossible, because the ask
+// happens before any engagement decision exists.
+async function ask(question, opts) {
   // NO KEY = NO REASONING. Honest state, zero fabrication, no rule-router.
   if (!claude.hasKey()) return refuseNoKey(question);
 
   const q = String(question || '').trim();
+  const conversationId = (opts && opts.conversationId) || 'default';
+  const operatorTz = (opts && opts.operatorTz) || null;
+
+  let gate;
+  try {
+    gate = await conduct.assess({ conversationId, text: q, operatorTz });
+  } catch (err) {
+    gate = { decision: 'unavailable', reason: 'failed', changeAsk: conduct.writeAsk(q),
+      why: (err && err.message) || 'the gate failed' };
+  }
+
+  // A CHANGE ASK IS NEVER MET WITH SILENCE (re-review F1). Whatever the gate
+  // decides next, if the operator asked for something that changes a device it is
+  // refused OUT LOUD first — including inside a scoping answer ("…since 2pm.
+  // Also reload sw2"), where the old screen could not fire at all. This refuses
+  // the change and nothing else: the rest of the message carries on below.
+  if (gate && gate.changeAsk) {
+    speak('jarvis', conduct.envelope.say(conduct.writeRefusalText(gate.changeAsk)));
+    session.audit({
+      what: `change asked in chat: ${String((gate.changeAsk.clause || q)).slice(0, 200)}`,
+      result: 'refused out loud on the read-only path — zero device calls, nothing applied',
+    });
+    ctx.log(`[Jarvis] Change ask refused out loud (${gate.changeAsk.source}) — nothing ran — "${q.slice(0, 60)}"`);
+  }
+
+  // Underspecified problem report → ASK. Zero engagements, zero reads.
+  if (gate.decision === 'ask') return askNarrowing(q, gate);
+  // A real, specific problem report → run the bridge (roster + the CW-7 loop).
+  if (gate.decision === 'proceed') return runBridge(q, gate, { conversationId, operatorTz });
+  // The understanding step FAILED (threw, or came back in a shape we cannot
+  // read). That is not permission to engage the squad — fail SAFE (reviewer
+  // finding #7): say so, engage nobody, read nothing.
+  if (gate.decision === 'unavailable' && gate.reason === 'failed') {
+    speak('jarvis', conduct.envelope.say(
+      `I could not reason about that — ${gate.why}. I have engaged nobody and read nothing. Say it again and I will try once more.`));
+    ctx.status('jarvis', 'idle', 'Could not understand it — engaged nobody');
+    ctx.log(`[Jarvis] Conduct gate failed safe (${gate.why}) — zero engagement — "${q.slice(0, 60)}"`);
+    return;
+  }
+  // ONE GATE, FIRST, ON EVERY PATH (reviewer finding #4). The capability screen
+  // used to sit in FRONT of this in server.js, which meant an operator's ANSWER
+  // to parked questions could be swallowed by a change-proposal bubble and the
+  // thread orphaned in awaiting-info forever. It now runs HERE — after the gate
+  // has had its say — so nothing decides before conduct does. It may still only
+  // refuse (safety) or offer a proposal; it never routes an answer away.
+  if (typeof ctx.screen === 'function' && ctx.screen(q)) return;
+  // Anything else (a question, a greeting, a command) takes the existing
+  // plan → gather → answer path, unchanged.
+  return planAndAnswer(q);
+}
+
+// The ask message: ONE short line plus up to 3 real narrowing questions from the
+// planner. Nothing was engaged and nothing was read — and it says so.
+function askNarrowing(q, gate) {
+  const questions = (gate.questions || []).slice(0, conduct.MAX_QUESTIONS);
+  // The questions are the point, so the 280-char budget is spent on WHOLE
+  // questions: the lead line is dropped before a question is, and a question is
+  // dropped whole rather than clipped into a dangling "3.". The envelope always
+  // carries all of them, so the desk shows the full list either way.
+  const fit = (lead) => {
+    let text = lead;
+    let n = 0;
+    for (let i = 0; i < questions.length; i++) {
+      const next = `${text}\n${i + 1}. ${questions[i]}`;
+      if (next.length > conduct.TEXT_MAX) break;
+      text = next; n++;
+    }
+    return { text, n };
+  };
+  const short = 'Nothing has run yet — first:';
+  const withLead = fit(gate.message);
+  const body = (withLead.n === questions.length ? withLead : fit(short)).text;
+  speak('jarvis', conduct.envelope.ask(body, questions));
+  session.recordReasoning({
+    command: 'UNDERSTAND',
+    raw: `Problem as stated: "${q}"\nNot specific enough to act on. Asked:\n` +
+      questions.map((x, i) => `${i + 1}. ${x}`).join('\n'),
+    interpretation: 'Ran the shared conduct gate BEFORE any engagement: the problem was underspecified, so Jarvis asked the operator to narrow it and engaged nobody — zero reads, zero device calls.',
+  });
+  ctx.status('jarvis', 'idle', 'Asked you to narrow it — engaged nobody');
+  ctx.log(`[Jarvis] Conduct gate: asked ${questions.length} narrowing question(s), engaged nobody, read nothing — "${q.slice(0, 60)}"`);
+}
+
+async function planAndAnswer(q) {
   ctx.status('jarvis', 'active', 'Reasoning about who to task…');
   ctx.say('jarvis', `🧠 Let me think about who should look at this…`);
 
@@ -292,7 +401,7 @@ async function ask(question) {
       schema: {
         type: 'object',
         additionalProperties: false,
-        required: ['intent', 'symptom', 'delegations', 'note', 'selfAnswer'],
+        required: ['intent', 'symptom', 'delegations', 'standDown', 'note', 'selfAnswer'],
         properties: {
           intent: { type: 'string' },
           // A greeting or a meta/help ask about Jarvis itself is answered HERE, by
@@ -333,6 +442,18 @@ async function ask(question) {
                 // against the live inventory and asks (the ambiguity net).
                 device: { type: ['string', 'null'] },
               },
+            },
+          },
+          // CW-9 bridge roster: who you are deliberately NOT pulling in, and the
+          // one-line reason each. It is what a call leader says out loud on a
+          // bridge ("Firewall, stand down — nothing points at policy"), and it
+          // stops a silent estate-wide sweep looking like diligence.
+          standDown: {
+            type: 'array',
+            items: {
+              type: 'object', additionalProperties: false,
+              required: ['agentId', 'why'],
+              properties: { agentId: { type: 'string', enum: ids }, why: { type: 'string' } },
             },
           },
           note: { type: 'string' },
@@ -410,11 +531,18 @@ async function ask(question) {
     interpretation: 'Chose the smallest set of agents whose combined sight covers the request, with the exact sub-question sent to each.',
   });
 
-  // Show the plan (real reasoning output, not a canned menu).
-  ctx.say('jarvis',
-    `🗺️ Plan — I'm pulling in ${valid.length} ${valid.length === 1 ? 'engineer' : 'engineers'}:\n${RULE}\n` +
-    valid.map((d) => `• ${ctx.nameOf(d.agentId)} → ${d.question}`).join('\n') +
-    (plan.note ? `\n\n${softClip(plan.note, 300)}` : ''));
+  // CW-9: the plan IS the bridge roster — who is engaged, and who is standing
+  // down, one line each. Short by construction (the envelope caps it), with the
+  // structured roster riding alongside for the desk to render as a bridge card.
+  const engaged = valid.map((d) => ({ agent: ctx.nameOf(d.agentId), why: d.question }));
+  const stoodDown = (Array.isArray(plan.standDown) ? plan.standDown : [])
+    .filter((s) => s && s.agentId && !valid.some((d) => d.agentId === s.agentId))
+    .map((s) => ({ agent: ctx.nameOf(s.agentId), why: s.why }));
+  speak('jarvis', conduct.envelope.roster(
+    `Pulling in ${valid.length} ${valid.length === 1 ? 'engineer' : 'engineers'}: ` +
+      engaged.map((e) => e.agent).join(', ') + '.' +
+      (stoodDown.length ? ` Standing down: ${stoodDown.map((e) => e.agent).join(', ')}.` : ''),
+    engaged, stoodDown));
   ctx.log(`[Jarvis] Plan: ${valid.map((d) => d.agentId).join(', ')} — "${q.slice(0, 50)}"`);
 
   // ── Execute the plan for REAL ──────────────────────────────────────────────
@@ -426,7 +554,7 @@ async function ask(question) {
       raw: `Sub-question to ${ctx.nameOf(d.agentId)}: ${d.question}`,
       interpretation: `Routed this piece to ${ctx.nameOf(d.agentId)} because it is the owner that can actually see what the sub-question needs.`,
     });
-    ctx.say('jarvis', `📨 @${ctx.nameOf(d.agentId)} — ${d.question}`);
+    speak('jarvis', conduct.envelope.say(`@${ctx.nameOf(d.agentId)} — ${d.question}`));
     // Pass the STRUCTURED device (CLASS 2) alongside the sub-question so the
     // executor targets the box the planner resolved, not a regex over its prose.
     // NO SILENT DROPPED TURNS (QA CLASS 6): a tasked read must ALWAYS resolve to
@@ -436,11 +564,11 @@ async function ask(question) {
     // vanishing and leaving the operator staring at a plan that went nowhere.
     const f = await gatherGuarded(d);
     findings.push(f);
-    // Surface each agent's real result under that agent, so the delegation is visible.
-    const tag = f.stance === 'evidence' ? '📡'
-      : f.stance === 'not-connected' ? '🔌'
-      : f.stance === 'denied' ? '🛑' : '⚠️';
-    ctx.say(d.agentId, `${tag} ${f.text}`);
+    // CW-9: the agent's result is surfaced as FINDINGS — one short line of
+    // meaning each, with the real terminal evidence (host, command, raw output,
+    // honest transport) travelling in finding.cli. Raw device output never goes
+    // into message text again; that was the wall-of-text defect.
+    emitFindings(d.agentId, f);
   }
 
   // ── Call 2: SYNTHESIS — strictly from the real findings ────────────────────
@@ -461,9 +589,288 @@ async function ask(question) {
     raw: String(answer || ''),
     interpretation: `Composed strictly from the ${findings.length} real finding(s) gathered above — no number, device, or status invented.`,
   });
-  ctx.say('jarvis', `🎖️ ${answer}`);
+  speak('jarvis', conduct.envelope.say(answer));
   ctx.status('jarvis', 'idle', 'Answered from live findings');
   ctx.log(`[Jarvis] Answered from ${findings.length} finding(s) — "${q.slice(0, 50)}"`);
+}
+
+// ── CW-9: findings as evidence, never as a wall of text ─────────────────────
+// One finding message per REAL read: a single sentence of meaning (hard-capped
+// at 200 chars) plus the terminal evidence behind it — host, exact command, raw
+// (already secret-scrubbed) output and the HONEST transport label. A read that
+// produced no terminal evidence (not connected / denied / unreachable / an
+// answer built from an API summary) still gets its one honest line.
+function emitFindings(agentId, finding) {
+  const name = (finding && finding.name) || ctx.nameOf(agentId) || agentId;
+  const cli = finding && Array.isArray(finding.cli) ? finding.cli : [];
+  if (!cli.length) {
+    speak(agentId, conduct.envelope.finding({ agent: name, line: finding.text, cli: null }));
+    return;
+  }
+  for (const e of cli) {
+    speak(agentId, conduct.envelope.finding({
+      agent: name,
+      line: e.line || `${name} ran "${e.command}" on ${e.host}.`,
+      cli: e,
+    }));
+  }
+}
+
+// ── CW-9: the BRIDGE — a real problem report, run like a P1 call ────────────
+// The conduct gate already understood the problem (one gate, no second grill).
+// From here Jarvis behaves like the call leader:
+//   1. names the bridge roster out loud — who is engaged and who is standing
+//      down, one line each (and the loop may then task ONLY the engaged);
+//   2. reuses the CW-7 investigation loop round by round — each round is one
+//      short 'say' plus the finding evidence that arrived;
+//   3. closes with a verdict, and — when the fix is a config change — a change
+//      record drafted through the CW-2 engine and HELD FOR APPROVAL. Never
+//      applied: the gate law is unchanged.
+// Everything reasoned is the LLM's; everything enforced (caps, engagement set,
+// held-for-approval) is code.
+async function runBridge(q, gate, opts) {
+  if (!ctx.investigate || typeof ctx.investigate.create !== 'function') {
+    // No loop wired up (an old host / a test harness): fall back to the plan
+    // path rather than dead-end the operator.
+    return planAndAnswer(q);
+  }
+  const roster = ctx.roster();
+  ctx.status('jarvis', 'active', 'Opening the bridge…');
+
+  let call;
+  try {
+    call = await planBridgeRoster({ problem: gate.problem, understood: gate.understood, roster });
+  } catch (err) {
+    call = null;
+  }
+  const engagedIds = (call && call.engaged.length ? call.engaged : [])
+    .filter((e) => roster.some((a) => a.id === e.agentId));
+  if (!engagedIds.length) {
+    speak('jarvis', conduct.envelope.say(
+      'I understood the problem but there is nobody on this squad who can see it, so I engaged no-one and read nothing.'));
+    ctx.status('jarvis', 'idle', 'Nobody can see this — engaged nobody');
+    return;
+  }
+  const engaged = engagedIds.map((e) => ({ agent: ctx.nameOf(e.agentId), why: e.why }));
+
+  // ROSTER TRUTH (reviewer blocker #1). A stand-down claim is only made when it
+  // is true of the READS, not just of the plan: an agent whose own source
+  // systems an ENGAGED agent is going to read is NOT announced as standing down
+  // — it is named honestly as "not on the call, but their systems get read".
+  // Never-connected agents are left off entirely: naming them every time is
+  // noise on the one card that has to be scannable.
+  const sourcesOf = (id) => ((roster.find((a) => a.id === id) || {}).sources || []);
+  const engagedSources = new Set(engagedIds.flatMap((e) => sourcesOf(e.agentId)));
+  const claimed = ((call && call.stoodDown) || [])
+    .filter((s) => s && s.agentId && !engagedIds.some((e) => e.agentId === s.agentId))
+    .filter((s) => (roster.find((a) => a.id === s.agentId) || {}).connected !== false);
+  const stoodDown = claimed
+    .filter((s) => !sourcesOf(s.agentId).some((src) => engagedSources.has(src)))
+    .map((s) => ({ agent: ctx.nameOf(s.agentId), why: s.why }));
+  const overlapping = claimed
+    .filter((s) => sourcesOf(s.agentId).some((src) => engagedSources.has(src)))
+    .map((s) => ({ agent: ctx.nameOf(s.agentId), shared: sourcesOf(s.agentId).filter((src) => engagedSources.has(src)) }));
+
+  speak('jarvis', conduct.envelope.say(conduct.capText(gate.understood)));
+  // The gate ran out of narrowing rounds and we are working a thin problem —
+  // say so plainly, and say what is being assumed (ambiguity law).
+  if (gate.thin) {
+    // The ASSUMPTION is the payload of this message, so it is what gets the room
+    // (re-review L1): the preamble and the invitation are fixed and short, the
+    // assumption is fitted to what is left, and the full text also rides the
+    // envelope as a structured field so nothing is lost to the cap.
+    const lead = 'Still under-specified after my questions — proceeding on: ';
+    const invite = ' Correct me and I will re-scope.';
+    const room = conduct.TEXT_MAX - lead.length - invite.length;
+    speak('jarvis', {
+      ...conduct.envelope.say(lead + conduct.clip(gate.understood, room) + invite),
+      assumption: gate.understood,
+    });
+  }
+  speak('jarvis', conduct.envelope.roster(
+    `On the bridge: ${engaged.map((e) => e.agent).join(', ')}.` +
+      (stoodDown.length ? ` Standing down: ${stoodDown.map((e) => e.agent).join(', ')}.` : '') +
+      // PER AGENT (re-review M2): printing the first agent's shared list against
+      // everyone named the wrong system for all but one of them — on the very
+      // line added to fix an honesty blocker.
+      (overlapping.length
+        ? ` Not on the call, but their systems still get read: ` +
+          overlapping.map((o) => `${o.agent} (${o.shared.join(', ')})`).join(', ') + '.'
+        : ''),
+    engaged, stoodDown));
+  session.recordReasoning({
+    command: 'BRIDGE',
+    raw: `Understood: ${gate.understood}\nEngaged: ${engaged.map((e) => `${e.agent} — ${e.why}`).join('\n')}\n` +
+      (stoodDown.length ? `Stood down: ${stoodDown.map((e) => `${e.agent} — ${e.why}`).join('\n')}` : 'Stood down: nobody named'),
+    interpretation: 'Opened a bridge on a problem the shared conduct gate judged specific enough to work — the engaged set is the only set the investigation loop may task.',
+  });
+
+  const observer = bridgeObserver({
+    // The backstop for the roster claim: if a round's REAL evidence touches a
+    // system belonging to someone we announced as standing down, Jarvis says so
+    // out loud instead of leaving a false claim standing.
+    stoodDown: claimed
+      .filter((s) => !sourcesOf(s.agentId).some((src) => engagedSources.has(src)))
+      .map((s) => ({ agent: ctx.nameOf(s.agentId), sources: sourcesOf(s.agentId) })),
+  });
+  const rec = ctx.investigate.create({
+    problem: gate.problem,
+    understood: gate.understood,
+    hypotheses: gate.hypotheses,
+    operatorTz: (opts && opts.operatorTz) || null,
+    agents: engagedIds.map((e) => e.agentId),
+    observer,
+  });
+  ctx.log(`[Jarvis] Bridge ${rec.id} opened from chat — engaged ${engagedIds.map((e) => e.agentId).join(', ')} — "${q.slice(0, 50)}"`);
+  await ctx.investigate.run(rec.id);
+  ctx.status('jarvis', 'idle', 'Bridge closed');
+}
+
+// Narrates the CW-7 loop into the pinned envelope, round by round.
+//
+// NARRATION IS COMPOSED FROM THE EVIDENCE, NOT FROM THE PLAN (reviewer blocker
+// #2). The first cut printed the probe's QUESTION as if it were what ran, so
+// three rounds that produced byte-identical reads read like three escalating
+// investigations. Now each round is described by the checks it ACTUALLY
+// produced, diffed against every earlier round: a round that turned up nothing
+// new says so in plain words, and its repeated evidence is not posted again.
+function bridgeObserver(opts) {
+  let closed = false;
+  const seen = new Set();                       // source|command already evidenced
+  const stoodDown = (opts && opts.stoodDown) || [];
+  const corrected = new Set();
+  return {
+    onRound(snap, round) {
+      if (!round) return;
+      const report = round.report || {};
+      const cli = Array.isArray(report.cli) ? report.cli : [];
+      // A check is NEW only if neither its normalised identity (volatile query
+      // params stripped — re-review M1) nor its exact output has been shown
+      // before. A cache-buster in the URL can no longer make a repeat look new.
+      // Marked as they are walked, so a duplicate WITHIN one round is caught too.
+      const fresh = [];
+      for (const e of cli) {
+        const id = conduct.identityKey(e);
+        const out = conduct.outputKey(e);
+        if (!seen.has(id) && !seen.has(out)) fresh.push(e);
+        seen.add(id); seen.add(out);
+      }
+      const lead = (round.hypotheses || []).find((h) => h.status === 'confirmed')
+        || (round.hypotheses || []).find((h) => h.status !== 'eliminated');
+      const tail = lead ? ` Leading line: ${lead.text} (${Math.round((round.confidence || 0) * 100)}%).` : '';
+
+      // What actually happened this round, in the order of what is TRUE.
+      const head = !cli.length
+        ? `Round ${round.round} — ${round.agent}: no reading came back (${report.stance}).`
+        : !fresh.length
+          ? `Round ${round.round} — ${round.agent}: ${cli.length} check(s) ran and returned the same picture as before — nothing new.`
+          : `Round ${round.round} — ${round.agent}: ${fresh.length} new check(s) — ${fresh.slice(0, 2).map((e) => e.command).join(', ')}.`;
+      speak('jarvis', conduct.envelope.say(head + tail));
+
+      // Only NEW evidence is posted as findings; a repeat is not re-dumped.
+      if (fresh.length) {
+        emitFindings((round.probe && round.probe.agentId) || 'jarvis',
+          { name: report.agentName, text: report.text, cli: fresh });
+      } else if (!cli.length) {
+        emitFindings((round.probe && round.probe.agentId) || 'jarvis',
+          { name: report.agentName, text: report.text, cli: [] });
+      }
+
+      // ROSTER BACKSTOP: did this round read a system we said was standing down?
+      for (const s of stoodDown) {
+        const hit = cli.find((e) => s.sources.includes(e.source));
+        if (hit && !corrected.has(s.agent)) {
+          corrected.add(s.agent);
+          speak('jarvis', conduct.envelope.say(
+            `Correction: I said ${s.agent} was standing down, but that check read ${hit.source} — ` +
+            `${s.agent}'s own system. The read stands; the stand-down claim does not.`));
+        }
+      }
+    },
+    onUpdate(snap) {
+      if (closed || !snap) return;
+      if (snap.status === 'resolved') {
+        closed = true;
+        const rounds = (snap.rounds || []).length;
+        speak('jarvis', conduct.envelope.verdict(
+          `Cause: ${snap.rootCause || (snap.fixPlan && snap.fixPlan.summary) || 'isolated — see the rounds above'}`,
+          { cause: snap.rootCause || '', confidence: snap.confidence, rounds }));
+        offerChange(snap);
+        return;
+      }
+      if (['capped', 'stuck', 'blocked', 'reasoning-unavailable'].includes(snap.status)) {
+        closed = true;
+        speak('jarvis', conduct.envelope.say(snap.stuckReason || 'I stopped rather than claim a cause I have not proven.'));
+      }
+    },
+  };
+}
+
+// A fixable cause becomes a CHANGE RECORD through the CW-2 engine, opened in the
+// held-for-approval state. Nothing is applied and nothing is scheduled — the
+// operator approves it (or does not) exactly as before.
+function offerChange(snap) {
+  const proposal = snap && snap.fixPlan && snap.fixPlan.proposal;
+  if (!proposal || !ctx.proposeChange) return;
+  try {
+    const rec = ctx.proposeChange({
+      device: proposal.device,
+      commands: proposal.commands,
+      reason: proposal.reason || `Fix for ${snap.id}: ${snap.rootCause || 'the isolated cause'}`,
+    });
+    if (!rec || !rec.id) return;
+    speak('jarvis', conduct.envelope.change(
+      `Fix drafted for ${proposal.device} — ${rec.id}, held for your approval. Nothing has run.`,
+      // The steps shown are the ones the RECORD holds (reviewer finding #13) —
+      // the approval card can never show a different list from what would run.
+      { id: rec.id, steps: Array.isArray(rec.commands) && rec.commands.length ? rec.commands : proposal.commands }));
+    ctx.log(`[Jarvis] Change ${rec.id} drafted from bridge ${snap.id} — held for approval, nothing applied`);
+  } catch (err) {
+    speak('jarvis', conduct.envelope.say(
+      `I could not open the change record (${(err && err.message) || 'error'}), so nothing was drafted and nothing ran.`));
+  }
+}
+
+// ── The bridge roster call ──────────────────────────────────────────────────
+// Who is on this call and who stands down — reasoned, never keyed off words.
+const ROSTER_SYSTEM =
+`You are Jarvis, L4 / Principal Engineer, opening a P1 bridge on a live NOC. The problem is
+already understood; your only job now is to say WHO IS ON THE CALL.
+- "engaged": the smallest set of agents whose sight actually covers this problem, each with a
+  one-line reason. Never pad it — an engineer on a call who has nothing to look at is noise,
+  and every extra agent means an estate sweep the operator did not ask for.
+- "stoodDown": the agents an operator might reasonably expect on this call that you are
+  deliberately NOT engaging, each with a one-line reason. Leave it empty rather than invent one.
+Only the agents listed can see the network, and each sees only what its "sees" line lists.
+State no network fact — you have no data yet.`;
+
+async function planBridgeRoster({ problem, understood, roster }) {
+  const ids = (roster || []).map((a) => a.id);
+  const entry = {
+    type: 'object', additionalProperties: false,
+    required: ['agentId', 'why'],
+    properties: { agentId: { type: 'string', enum: ids }, why: { type: 'string' } },
+  };
+  const res = await claude.reason({
+    system: ROSTER_SYSTEM,
+    messages: [{ role: 'user', content:
+      `Problem as the operator gave it: "${problem}"\n` +
+      `Understood as: ${understood}\n\n` +
+      `The squad (the only things that can see the network):\n${rosterTextFrom(roster)}\n\n` +
+      `Name the bridge: who is engaged, and who stands down.` }],
+    maxTokens: 2000, effort: 'high',
+    format: { type: 'json_schema', schema: {
+      type: 'object', additionalProperties: false,
+      required: ['engaged', 'stoodDown'],
+      properties: { engaged: { type: 'array', items: entry }, stoodDown: { type: 'array', items: entry } },
+    } },
+  });
+  if (res.refused) throw new Error('reasoning declined');
+  const p = JSON.parse(res.text);
+  return {
+    engaged: (Array.isArray(p.engaged) ? p.engaged : []).filter((e) => e && ids.includes(e.agentId)),
+    stoodDown: (Array.isArray(p.stoodDown) ? p.stoodDown : []).filter((e) => e && ids.includes(e.agentId)),
+  };
 }
 
 // ── SYNTHESIS with a one-shot neutral retry (class fix, 2026-08-19) ──────────
@@ -982,6 +1389,34 @@ function rosterTextFrom(roster) {
 
 const INV_UNDERSTAND_SYSTEM =
 `You are Jarvis, L4 / Principal Engineer, about to run an ITERATIVE investigation on a live NOC.
+
+FIRST decide, in "problemReport", whether the operator is actually REPORTING A PROBLEM with the
+network ("epg is not reachable", "branch users can't get to the app", "the fabric went down at
+2pm") — true — or doing something else entirely: greeting you, asking what you can do, asking a
+question about the estate or an incident, or telling you to run a specific command ("run show
+version on sw2", "who is on INC-20260817-013?"). Those are false. Reason about what they MEAN;
+never decide this from keywords. Everything below only matters when problemReport is true — when
+it is false, set specific=true, questions to an empty list, and do not grill anyone.
+
+IS THE OPERATOR ASKING YOU TO CHANGE SOMETHING? Put it in "changeAsk", in their own words
+("reload sw2 to clear it"), whenever any part of the message asks for an action that would
+alter a device — reload, restart, shut/no shut, clear, configure, reset, apply. null when
+they are only describing or asking. Reporting a PAST change ("since the reload last night")
+is NOT a change ask. This path is read-only, so a change ask is refused out loud and routed
+to the change engine — it is never performed.
+CRITICAL: "understood" must describe the PROBLEM ONLY. Never fold the change they asked for
+into it — an investigation that inherits "the operator wants sw2 reloaded" spends its rounds
+chasing an action nobody may take.
+
+WHEN THE OPERATOR IS REPLYING to clarifying questions you already asked, you are also given
+their latest reply on its own. Judge it in "replyIntent":
+  - "answers"   — it narrows the SAME problem (even partially, even badly).
+  - "new-topic" — they are now talking about a DIFFERENT problem or asking something else.
+  - "abandons"  — they are dropping it ("never mind", "forget it", "what can you do?").
+Only "answers" may continue the parked problem; the other two mean it is finished. Never treat
+a change of subject as an answer, and never assume: judge what they MEAN. When you are not
+replying to questions, set replyIntent to "answers".
+
 Before probing anything you must decide whether the problem is SPECIFIC ENOUGH to investigate.
 A problem is specific enough when you can name a first read-only check worth running — it has
 enough of a symptom, a scope (a device/site/front) and/or a timeframe to act on.
@@ -1015,7 +1450,13 @@ more, or a read query an agent already supports) — never a change. For a devic
 target device in "device" as its bare name or mgmt IP; else null. If NOTHING you can reach would
 narrow this further — you need a device you cannot reach, an operator input, or credentials you do
 not have — set "stuck" to a plain sentence saying exactly what it needs, and pick no probe. Never
-invent a probe just to look busy; a real dead-end is an honest stuck, not a wasted round.`;
+invent a probe just to look busy; a real dead-end is an honest stuck, not a wasted round.
+
+LEARN FROM A REFUSAL (CW-9 re-review M4). If a previous round came back REFUSED because the probe
+was not read-only, do NOT re-ask for that action in other words — reload / reset / restart / clear
+are all refused, every time, by design. Either pick a READ that would show you the same thing, or
+declare stuck. A round spent bouncing off the read-only guardrail is a round the operator paid for
+and got nothing from.`;
 
 const INV_ASSESS_SYSTEM =
 `You are Jarvis, L4 / Principal Engineer, narrowing an investigation from ONE real agent report.
@@ -1040,11 +1481,22 @@ Compose a fix, grounded ONLY in the evidence gathered (the rounds/reports). Retu
   manual/external (replace hardware, call a carrier, an operator action), set proposal to null and put
   the steps in summary. Never propose a change the evidence does not justify.`;
 
-async function invUnderstand({ problem, operatorTz, answers }) {
+async function invUnderstand({ problem, operatorTz, answers, reply }) {
   const format = { type: 'json_schema', schema: {
     type: 'object', additionalProperties: false,
-    required: ['specific', 'understood', 'hypotheses', 'questions', 'relevantFronts'],
+    required: ['problemReport', 'replyIntent', 'changeAsk', 'specific', 'understood', 'hypotheses', 'questions', 'relevantFronts'],
     properties: {
+      // CW-9 (resume): does the operator's latest reply answer the parked
+      // questions, change the subject, or drop it? An abandoned problem must
+      // never be quietly investigated anyway.
+      replyIntent: { type: 'string', enum: ['answers', 'new-topic', 'abandons'] },
+      // CW-9 re-review F1: the change the operator asked for, in their words —
+      // refused out loud on this read-only path, and deliberately kept OUT of
+      // `understood` so the investigation never chases it.
+      changeAsk: { type: ['string', 'null'] },
+      // CW-9: is this a problem report at all? The shared conduct gate only
+      // narrows PROBLEMS — a greeting or a direct command is never grilled.
+      problemReport: { type: 'boolean' },
       specific: { type: 'boolean' },
       understood: { type: 'string' },
       hypotheses: { type: 'array', items: { type: 'object', additionalProperties: false,
@@ -1063,13 +1515,21 @@ async function invUnderstand({ problem, operatorTz, answers }) {
     system: INV_UNDERSTAND_SYSTEM,
     messages: [{ role: 'user', content:
       `Current time (UTC): ${new Date().toISOString()}${operatorTz ? `  Operator timezone: ${operatorTz}` : ''}\n\n` +
-      `Problem the operator gave:\n"${String(problem || '')}"${answerBlock}\n\n` +
-      `Decide if this is specific enough to start probing. If not, ask; if yes, state it + initial hypotheses.` }],
+      `Problem the operator gave:\n"${String(problem || '')}"${answerBlock}` +
+      (reply ? `\n\nTheir LATEST reply, to the clarifying questions you asked:\n"${String(reply)}"\n` +
+        `Judge it in replyIntent: does it answer those questions, change the subject, or abandon the problem?` : '') +
+      `\n\nDecide if this is specific enough to start probing. If not, ask; if yes, state it + initial hypotheses.` }],
     maxTokens: 3000, effort: 'high', format,
   });
   if (res.refused) throw new Error('reasoning declined');
   const p = JSON.parse(res.text);
   return {
+    // Additive: investigation.js and triage.js ignore problemReport; the CW-9
+    // conduct gate uses it to keep its hands off anything that is not a problem.
+    problemReport: p.problemReport !== false,
+    // 'answers' | 'new-topic' | 'abandons' — only meaningful on a resume.
+    replyIntent: ['answers', 'new-topic', 'abandons'].includes(p.replyIntent) ? p.replyIntent : 'answers',
+    changeAsk: typeof p.changeAsk === 'string' && p.changeAsk.trim() ? p.changeAsk.trim() : null,
     specific: p.specific !== false,
     understood: p.understood || String(problem || ''),
     hypotheses: Array.isArray(p.hypotheses) ? p.hypotheses : [],
@@ -1180,14 +1640,27 @@ const investigationPlanner = {
   fix: invFix,
 };
 
+// CW-9 — the reasoning half of the SHARED conduct gate. It is deliberately the
+// SAME understanding call the investigation loop and the triage intake use, so
+// chat, intake and any future entry point can never drift into different
+// behaviour. That drift is exactly what produced the 2026-08-19 failure.
+const conductPlanner = {
+  available: investigationAvailable,
+  understand: invUnderstand,
+};
+
 module.exports = {
   init, ask, keyStatus, extractSymptom, rankBlindSpots, synthesizeTriageVerdict, narrateCorrelation,
   // CW-7: the reasoning planner injected into the investigation loop engine.
   investigationPlanner,
+  // CW-9: the reasoning planner injected into the shared conduct gate.
+  conductPlanner,
   // Exposed for the QA CLASS 6 offline test only (the always-surfaces guarantee):
   // a delegated read that hangs / rejects / returns null-or-empty must resolve to
   // an explicit honest finding, never silence.
   _test: { gatherGuarded, GATHER_TIMEOUT_MS, softClip, abilitiesText,
+    // CW-9: the bridge pieces, exercised offline with a stubbed planner.
+    askNarrowing, emitFindings, bridgeObserver, runBridge, planAndAnswer, speak,
     // 2026-08-19 synthesis-refusal class fix: the one-shot neutral retry + the
     // short honest fallback, exercised offline with a mocked claude.reason.
     synthesizeAnswer, relayFindings, neutralizeFindingText },

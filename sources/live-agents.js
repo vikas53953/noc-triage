@@ -35,6 +35,86 @@ function init(hostCtx) { ctx = hostCtx; }
 const say = (agentId, text) => ctx.say(agentId, text);
 const RULE = '──────────────────────────────────';
 
+// ── CW-9: the terminal-evidence envelope ────────────────────────────────────
+// Every read a delegated agent performs must come back with the evidence behind
+// it — the host, the exact command (or API read), the RAW output (already
+// secret-scrubbed by the session log) and an HONEST transport label. A Command
+// Runner read is 'cmdrunner'; only a real SSH session is 'ssh'; everything else
+// is an 'api' read. Nothing here changes what runs, what is gated or what is
+// scrubbed — it only carries what ALREADY happened up to the bridge so the chat
+// can show a real terminal instead of a wall of prose.
+//
+// ATTRIBUTION IS PER-DELEGATION, AT WRITE TIME (reviewer blocker #3, 2026-08-20).
+// The first cut swept the GLOBAL session log by a sequence watermark, so two
+// overlapping reads could hand one delegation's wire records to another — a
+// finding showing a command that agent never ran, which is fabrication. Now every
+// collection opens a scope id, session-log stamps that id onto each wire record it
+// writes underneath (contexts nest), and the collector keeps ONLY the records
+// carrying its own id. A delegation that read nothing comes back with nothing,
+// however many other reads ran at the same time.
+const { AsyncLocalStorage } = require('async_hooks');
+const evidenceAls = new AsyncLocalStorage();
+let evidenceSeq = 0;
+
+function evidenceBag() { return evidenceAls.getStore() || null; }
+
+// Record ONE real device-CLI run as terminal evidence. Called from the choke
+// point only, with the values it actually used.
+function pushCliEvidence({ host, command, output, transport, line, source }) {
+  const bag = evidenceBag();
+  if (!bag) return;
+  bag.entries.push({
+    host: String(host || 'unknown host'),
+    command: String(command || ''),
+    output: output == null ? '' : String(output),
+    transport: transport === 'ssh' ? 'ssh' : 'cmdrunner',
+    // Which SOURCE SYSTEM this read touched. The bridge checks the roster it
+    // announced against these, so a "standing down" claim can be verified
+    // against what was actually read instead of being taken on trust.
+    source: source || (transport === 'ssh' ? 'ssh' : 'catalyst-center'),
+    line: line ? String(line) : '',
+    ts: new Date().toISOString(),
+  });
+}
+
+// Everything else this delegation read is an API call, and the session log
+// already holds it (host, path, raw body, plain-words interpretation). Records
+// are selected by THIS scope's id — never by position in a shared log. Auth
+// exchanges are excluded (their bodies are never kept) and the Command Runner
+// hops are excluded because the CLI push above already carries that read as one
+// clean block instead of four transport hops.
+function apiEvidenceFor(evidenceId) {
+  return session.all()
+    .filter((r) => r.evidenceId === evidenceId)
+    .filter((r) => r.kind !== 'reasoning' && r.kind !== 'login')
+    .filter((r) => !(r.kind === 'command-runner' || r.kind === 'poll' || r.kind === 'output'))
+    .map((r) => ({
+      host: r.host || r.sourceLabel || 'unknown host',
+      command: r.command || r.path || '',
+      output: r.raw == null ? '' : String(r.raw),
+      transport: 'api',
+      source: r.source || 'unknown',
+      line: r.interpretation || '',
+      ts: r.ts,
+    }));
+}
+
+/**
+ * Run `fn` and collect the terminal evidence every read inside it produced.
+ * Returns { result, cli: [{host, command, output, transport, source, line, ts}] }.
+ * Evidence is attributed by scope id, so concurrent collections never mix.
+ */
+async function collectCliEvidence(fn) {
+  const id = `ev-${Date.now().toString(36)}-${(++evidenceSeq).toString(36)}`;
+  const bag = { id, entries: [] };
+  return evidenceAls.run(bag, () => session.runWithContext({ evidenceId: id }, async () => {
+    const result = await fn();
+    const cli = bag.entries.concat(apiEvidenceFor(id))
+      .sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+    return { result, cli };
+  }));
+}
+
 // Agents that have no sandbox behind them. Honest answer, every time.
 const NO_BACKEND = {
   'sentinel': 'CVE / threat-feed source (Cisco Umbrella or Talos)',
@@ -578,6 +658,21 @@ async function executeDeviceCli({ agentId, request, purpose, announce, device, a
     };
   }
   const runs = r.runs || [];
+  // CW-9: every real run becomes terminal evidence, with the transport it
+  // ACTUALLY used — Command Runner is never dressed up as SSH.
+  const transport = r.via === 'ssh' ? 'ssh' : 'cmdrunner';
+  for (const run of runs) {
+    pushCliEvidence({
+      host: (run.target && (run.target.ip || run.target.hostname)) || 'unknown host',
+      command: verdict.command,
+      output: run.body,
+      transport,
+      source: transport === 'ssh' ? 'ssh' : 'catalyst-center',
+      line: `${run.ok === false ? 'Device rejected' : 'Ran'} "${verdict.command}" on ` +
+        `${(run.target && run.target.hostname) || 'the device'} over ` +
+        `${transport === 'ssh' ? 'direct SSH' : `${catalyst.label} Command Runner`}.`,
+    });
+  }
   if (r.multi) return { ok: true, multi: true, command: verdict.command, runs, note: r.note, via: r.via || 'command-runner', refusedChange };
   const one = runs[0];
   // This conversation is now working on THIS box: a follow-up that names no
@@ -1889,6 +1984,17 @@ async function gatherForJarvis(agentId, question, planDevice, planIncidentId) {
   }
 }
 
+// CW-9 — the SAME delegated read, with its terminal evidence attached. Every
+// caller on the bridge path (Jarvis's plan loop, the investigation loop) uses
+// this so a finding always arrives with the real command + raw output + honest
+// transport behind it. The finding itself is byte-for-byte what gatherForJarvis
+// returns; `cli` is additive.
+async function gatherWithEvidence(agentId, question, planDevice, planIncidentId) {
+  const { result, cli } = await collectCliEvidence(
+    () => gatherForJarvis(agentId, question, planDevice, planIncidentId));
+  return { ...(result || {}), cli };
+}
+
 // Called once per participating agent when a debate runs.
 async function debateContribution(agentId, topic) {
   if (NO_BACKEND[agentId]) return noDataContribution(agentId, topic);
@@ -1951,6 +2057,28 @@ const READ_ASK = [
   'report', 'look', 'see', 'display', 'find', 'confirm', 'verify', 'compare',
   'pull', 'fetch', 'run', 'status', 'update', 'brief', 'catch', 'recap',
 ];
+
+// ── Which SOURCE SYSTEMS each agent actually reads (CW-9 reviewer blocker #1) ─
+// Read off the builders above, not off marketing copy: Monitor-Eye's build()
+// really does call catalyst.getHealth/getIssues AND sdwan.getAlarmCount, and
+// Router-Expert really does read the APIC AND vManage. The bridge roster is
+// checked against THIS map before it claims anyone is standing down, so a
+// "standing down Monitor-Eye" line can never ship while an engaged agent is
+// about to read Monitor-Eye's own systems. Ids match session-log's source ids
+// ('catalyst-center' | 'aci' | 'sdwan'), plus 'ssh' and 'incidents' (this
+// console's own record, which is not a wire source at all).
+const AGENT_SOURCES = {
+  'netops': ['catalyst-center'],
+  'monitor-eye': ['catalyst-center', 'sdwan'],
+  'incident-handler': ['incidents', 'catalyst-center', 'aci'],
+  'router-expert': ['aci', 'sdwan'],
+  'config-keeper': ['catalyst-center', 'ssh'],
+  'doc-writer': ['catalyst-center', 'aci', 'sdwan'],
+  'jarvis': [],
+  // No backend behind these — they read nothing at all, honestly.
+  'sentinel': [], 'firewall-pro': [], 'loadbal-pro': [],
+};
+function sourcesFor(agentId) { return (AGENT_SOURCES[agentId] || []).slice(); }
 
 const CAPABILITIES = {
   'netops': {
@@ -2107,6 +2235,11 @@ module.exports = {
   canAnswer, cannotAnswer, CAPABILITIES,
   isDeviceCliRequest, runDeviceCli,
   debateContribution, gatherForJarvis,
+  // CW-9 evidence envelope: the same delegated read, plus the terminal evidence
+  // (host / command / raw scrubbed output / honest transport) behind it.
+  gatherWithEvidence, collectCliEvidence,
+  // CW-9 roster truth: the source systems each agent really reads.
+  AGENT_SOURCES, sourcesFor,
   // Ambiguity → ask, never assume: the parked-question resume + the explicit
   // "forget the device" reset. server.js calls these BEFORE it routes anything,
   // so both surfaces (Jarvis and a direct @mention) inherit the same behaviour.

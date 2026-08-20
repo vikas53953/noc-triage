@@ -27,8 +27,14 @@ const als = new AsyncLocalStorage();
 // ── Context: which agent / triage a wire call belongs to ────────────────────
 // Callers (live-agents runLive, triage withAgent, a manual retry) wrap their
 // live work in runWithContext so the wire calls underneath get tagged.
+// CW-9 fix: contexts now NEST — an inner context inherits the outer one and
+// overrides only the keys it sets. Before this, an inner runWithContext (a
+// delegated read inside a collection scope) REPLACED the store, which erased the
+// outer tag and made per-delegation attribution impossible. Every wire call made
+// under a scope is now stamped with that scope's id at WRITE time, so evidence
+// is attributed by the record itself and never by a watermark over a shared log.
 function runWithContext(context, fn) {
-  return als.run({ ...(context || {}) }, fn);
+  return als.run({ ...getContext(), ...(context || {}) }, fn);
 }
 function getContext() {
   return als.getStore() || {};
@@ -55,11 +61,147 @@ function setBroadcast(fn) { onRecord = typeof fn === 'function' ? fn : null; }
 function setCommandShareBroadcast(fn) { onCommandShare = typeof fn === 'function' ? fn : null; }
 
 // ── Secret scrubbing ────────────────────────────────────────────────────────
-// Belt-and-braces: even for non-auth endpoints, redact anything token-shaped so
-// a credential can never land in a stored record or on the wire to the browser.
-function scrub(text) {
-  if (text == null) return text;
-  let s = String(text);
+// ONE ORDERED PASS, ONE EXCLUSION LIST, ONE FREE-TEXT GUARD (CW-9 re-review F2).
+//
+// The previous shape had two independent keyword rules racing over the same
+// string. The first one won every race, and it carried neither the "this word is
+// syntax, not a secret" exclusions nor the prose guard — so it stamped
+// «redacted» over a syntax word while the real key survived next to it
+// (`pre-shared-key «redacted» LocalPsk99`), and it ate words out of ordinary
+// `description` / `banner` prose. A line that LOOKS scrubbed is more dangerous
+// than one that obviously is not, so the rules are now a single ordered pass:
+//
+//   1. per LINE — a free-text command (description / remark / banner / a `!`
+//      comment) is evidence an engineer typed, and is never touched;
+//   2. separator forms (`password=…`, `"token":"…"`, `Bearer …`) — precise, so
+//      they run on prose lines too;
+//   3. ONE token scan for the space-separated config forms: a secret-introducing
+//      keyword, then any number of SYNTAX words (`text`, `local`, `md5`,
+//      `key-string`, `ascii`, an encoding digit …), then THE VALUE — which is
+//      what gets redacted, never the syntax word in between;
+//   4. the positional `snmp-server host … <community>` form, which has no
+//      keyword in front of the secret at all.
+//
+// Adding the next form is a one-line addition to one of the token sets below.
+
+// A keyword that introduces a secret and cannot appear this way in English
+// prose — its value is redacted whatever it looks like.
+const STRONG_SECRET_INTRO = new Set([
+  'key-string', 'key-hash', 'pre-shared-key', 'psk', 'wpa-psk', 'wpa-passphrase',
+  'passphrase', 'authentication-key', 'message-digest-key', 'auth-key',
+  // NOTE: `community` is deliberately NOT here. On its own it is an ordinary
+  // English word ("joined the community channel"), so it is handled structurally
+  // below, where an `snmp` prefix or a `=`/`:` separator proves it is the SNMP
+  // shared secret and not prose.
+]);
+// A keyword that introduces a secret in config but is also ordinary English
+// ("enter your password when prompted"). Its value is redacted when the line is
+// config-shaped, or when the value itself looks like a secret.
+const WEAK_SECRET_INTRO = new Set([
+  'password', 'passwd', 'secret', 'key', 'authentication', 'md5', 'auth', 'priv',
+]);
+// Words that sit BETWEEN the keyword and the value. They are syntax — stepping
+// over them is what stops the marker landing on the wrong token.
+const SECRET_SYNTAX = new Set([
+  'text', 'local', 'remote', 'key-string', 'key-hash',
+  'set-key', 'ascii', 'hex', 'clear', 'cleartext', 'encrypted', 'encrypt', '0x',
+  // English copulas, so a secret STATED in a sentence ("the password is
+  // Hunter2!") is still found — the value is the token after the verb, and the
+  // verb itself must never be the thing that gets the marker.
+  'is', 'was', 'are', 'be', 'equals', 'set', 'to', '=', ':',
+]);
+// ALGORITHM NAMES AS A CLASS, not as a list of literals (CW-9 final gate). An
+// SNMPv3 line writes them hyphenated and with key lengths — `auth sha-256 …`,
+// `priv des56 …`, `hmac-sha-384` — so listing `sha256`/`3des` by hand left the
+// passphrase in clear next to a «redacted» marker. Hyphens are normalised out
+// and the whole SHA / HMAC / AES / DES family is matched by shape, so the next
+// digest anyone invents is covered without a code change.
+const ALGORITHM_TOKEN = /^(?:hmac)?(?:sha\d*|md5|aes\d*|des\d*|3des\d*)$/;
+function isAlgorithmToken(token) {
+  return ALGORITHM_TOKEN.test(String(token || '').replace(/-/g, ''));
+}
+
+// A value that is never a secret: a sub-command or a mode name. Seeing one of
+// these means the keyword was not introducing a secret at all.
+const NOT_A_SECRET = new Set([
+  'chain', 'config-key', 'generate', 'zeroize', 'mypubkey', 'pubkey', 'rsa', 'general-keys',
+  'exchange', 'id', 'lifetime', 'address', 'length', 'modulus', 'label', 'import', 'export',
+  'decrypt', 'cached', 'management', 'mode', 'message-digest', 'none', 'open', 'shared',
+  'wpa', 'wpa2', 'wpa3', 'eap', 'dot1x', 'network', 'enable', 'traps', 'informs', 'version',
+  'server', 'host', 'vrf', 'udp-port', 'timeout', 'retransmit', 'port', 'source-interface',
+  'user', 'group', 'view', 'access', 'ro', 'rw', 'digest', 'accept-lifetime',
+  'send-lifetime', 'null', 'default', 'auto', 'disable',
+  // `aaa authentication login default group tacacs+ local` — "login" is the
+  // method list being named, not a secret. `ip authentication key-chain KC1` —
+  // the chain NAME is not a secret either (the key-string inside it is, and that
+  // is caught on its own line).
+  'login', 'key-chain',
+]);
+// Enough English to tell a sentence from a config line. Two hits = prose.
+const PROSE_WORDS = /\b(?:the|your|when|with|please|anyone|should|would|could|been|you|this|that|there|about|because|before|prompted|share|enter)\b/gi;
+
+const REDACTED = '«redacted»';
+
+function isFreeTextLine(line) {
+  return /^\s*(?:description|remark|banner|!|#|\/\/)/i.test(line)
+    // A banner body line carries the ^C delimiter with it.
+    || /\^C/.test(line);
+}
+
+function looksLikeProse(line) {
+  const hits = String(line).match(PROSE_WORDS);
+  return Boolean(hits && hits.length >= 2);
+}
+
+// Does this VALUE look like a credential rather than an English word? Digits,
+// symbols, mixed case or unusual length all say "secret".
+function looksLikeSecretValue(value) {
+  const v = String(value || '');
+  if (v.length < 3) return false;
+  return /\d/.test(v) || /[^A-Za-z]/.test(v) || (/[a-z]/.test(v) && /[A-Z]/.test(v)) || v.length >= 16;
+}
+
+function normToken(token) {
+  return String(token || '').toLowerCase().replace(/^[("'[]+|[)"'\],.;:]+$/g, '');
+}
+
+// THE token scan (rule 3 above). Walks the line once; for every secret-
+// introducing keyword it steps over the syntax words and redacts the VALUE.
+function scrubConfigForms(line) {
+  const parts = String(line).split(/(\s+)/);   // whitespace kept, so the line rebuilds exactly
+  const prose = looksLikeProse(line);
+  for (let i = 0; i < parts.length; i++) {
+    if (!parts[i].trim()) continue;
+    const intro = normToken(parts[i]);
+    const strong = STRONG_SECRET_INTRO.has(intro);
+    const weak = WEAK_SECRET_INTRO.has(intro);
+    if (!strong && !weak) continue;
+
+    // Step over the syntax words / encoding digits to reach the value.
+    let j = i + 1;
+    const skipSpace = () => { while (j < parts.length && !parts[j].trim()) j++; };
+    skipSpace();
+    while (j < parts.length) {
+      const t = normToken(parts[j]);
+      if (SECRET_SYNTAX.has(t) || isAlgorithmToken(t) || /^\d{1,3}$/.test(t)) { j++; skipSpace(); continue; }
+      break;
+    }
+    if (j >= parts.length) continue;              // `ntp server 10.0.0.1 key 1` — no value follows
+    const value = parts[j];
+    const v = normToken(value);
+    if (!v || value.includes(REDACTED)) continue; // never redact twice
+    if (NOT_A_SECRET.has(v)) continue;            // `key chain KC1`, `authentication mode md5`
+    if (STRONG_SECRET_INTRO.has(v) || WEAK_SECRET_INTRO.has(v)) continue; // `key config-key …`
+    // A weak keyword inside an English sentence only redacts a secret-SHAPED value.
+    if (!strong && prose && !looksLikeSecretValue(value)) continue;
+    parts[j] = REDACTED;
+    i = j;
+  }
+  return parts.join('');
+}
+
+// Separator forms (rule 2). Precise enough to run on prose as well as config.
+function scrubSeparatorForms(s) {
   // JSON credential fields: "token":"...", "APIC-cookie":"...", and the login
   // identity ("username":"...") which some device APIs (e.g. Catalyst Center's
   // Command Runner task metadata) echo back inside an otherwise-real response
@@ -67,23 +209,40 @@ function scrub(text) {
   // service account — so it is redacted too. Host/device names are never
   // redacted; only the login identity + the secret half.
   s = s.replace(/("?(?:token|Token|apic[-_]?cookie|password|pwd|pass|username|userName|user[-_]?name|snmp[-_ ]?community|community)"?\s*[:=]\s*")([^"]{4,})(")/gi,
-    (m, a, _v, c) => a + '«redacted»' + c);
-  // UNQUOTED form: a device/alarm message is free text, not JSON, so a credential
-  // reaches us as `password=SuperSecret123`, `token: abc…`, `api-key=…`. The quoted
-  // rule above cannot see those. Redact the VALUE up to the next whitespace or
-  // separator, leaving the key visible so the line still reads as evidence.
-  // `community` is here because a syslog/trap free-text line from real kit can
-  // carry the SNMP community (a shared read/write secret) as `community=publicRO`.
+    (m, a, _v, c) => a + REDACTED + c);
+  // UNQUOTED form: `password=SuperSecret123`, `token: abc…`, `api-key=…`.
   s = s.replace(/\b(token|apic[-_]?cookie|password|passwd|pwd|pass|secret|api[-_]?key|auth[-_]?token|access[-_]?token|username|user[-_]?name|snmp[-_ ]?community|community)(\s*[:=]\s*)(?!"|«)([^\s,;&"'}\])]{4,})/gi,
-    (m, k, sep) => k + sep + '«redacted»');
-  // IOS-style SPACE-separated community: `snmp-server community publicRO RO`,
-  // `snmp community publicRO`. No `=`/`:`, so the rule above misses it. Require
-  // the `snmp` prefix so a bare English "community <word>" is never touched.
-  s = s.replace(/\b(snmp(?:[-\s]server)?[-\s]community)(\s+)(?!«)([^\s,;&"'}\])]{3,})/gi,
-    (m, k, sep) => k + sep + '«redacted»');
+    (m, k, sep) => k + sep + REDACTED);
+  // PREFIXED env-style key names: `ANTHROPIC_API_KEY=sk-…`, `DNAC_PASSWORD=…`.
+  s = s.replace(/\b([A-Za-z0-9_-]*(?:api[-_]?key|api[-_]?token|access[-_]?key|secret[-_]?key|password|passwd|secret|token))(\s*[:=]\s*)(?!"|«)([^\s,;&"'}\])]{4,})/gi,
+    (m, k, sep) => k + sep + REDACTED);
   // `Authorization: Bearer <token>` / a bare `Bearer <token>` in free text.
-  s = s.replace(/\b(Bearer\s+)(?!«)[A-Za-z0-9._~+/=-]{8,}/g, (m, k) => k + '«redacted»');
-  return s;
+  return s.replace(/\b(Bearer\s+)(?!«)[A-Za-z0-9._~+/=-]{8,}/g, (m, k) => k + REDACTED);
+}
+
+// `snmp-server host <ip> [vrf X] [traps|informs] [version 1|2c|3 [auth|noauth|priv]] <COMMUNITY>`
+// — the community/user is positional, with no keyword in front of it (rule 4).
+function scrubPositionalForms(s) {
+  // IOS-style SPACE-separated community: `snmp-server community publicRO RO`,
+  // `snmp community publicRO`. The `snmp` prefix is required so a bare English
+  // "community <word>" is never touched.
+  s = s.replace(/\b(snmp(?:[-\s]server)?[-\s]community)(\s+)(?!«)([^\s,;&"'}\])]{3,})/gi,
+    (m, k, sep) => k + sep + REDACTED);
+  return s.replace(
+    /\b(snmp-server\s+host\s+\S+(?:\s+vrf\s+\S+)?(?:\s+(?:traps|informs))?(?:\s+version\s+(?:1|2c|3(?:\s+(?:auth|noauth|priv))?))?\s+)(?!«)([^\s,;"'<>]{3,})/gi,
+    (m, head) => head + REDACTED);
+}
+
+function scrub(text) {
+  if (text == null) return text;
+  return String(text).split('\n').map((line) => {
+    // 1. A free-text command is evidence an engineer typed. Never touched.
+    if (isFreeTextLine(line)) return line;
+    // 2 → 4, in order, on the same line.
+    let s = scrubSeparatorForms(line);
+    s = scrubConfigForms(s);
+    return scrubPositionalForms(s);
+  }).join('\n');
 }
 
 // Pull the real device CLI transcript out of a Command Runner file response.
@@ -243,6 +402,10 @@ function record({ host, method, path, res, durationMs }) {
     path: path || '',
     agentId: ctx.agentId || null,
     agentName: ctx.agentName || null,
+    // CW-9: which evidence scope (one delegation / one probe) made this call.
+    // Stamped at write time — the ONLY honest way to attribute a command to the
+    // agent that actually ran it when two reads overlap.
+    evidenceId: ctx.evidenceId || null,
     triageId: ctx.triageId || null,
     front: ctx.front || null,
     origin: ctx.label || null, // e.g. "Device health check" / "manual retry"

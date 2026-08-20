@@ -397,6 +397,67 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - Class law for this wave: ONE conduct layer shared by EVERY operator entry point (chat + triage intake +
   future paths) — never a per-path fix again.
 
+## 2026-08-20 — CW-9 BACKEND (feat/cw9-bridge-be) built
+- ONE conduct layer: sources/conduct.js — the shared understanding gate + the pinned envelope with the
+  hard caps in CODE (jarvis text ≤280, finding.line ≤200, ≤3 questions). Chat (jarvis.ask) and the triage
+  intake (triage ctx.understand) both go through it now — no more per-path conduct.
+- Vikas's EPG failure replayed LIVE on claude-sonnet-5: "hey jarvis facing issue in epg" → one 275-char ask
+  with 3 real narrowing questions, ZERO engagements, ZERO reads. The answer resumes the same understanding.
+- Bridge: roster message (engaged + stood-down, one-line why each; the loop may task ONLY the engaged) →
+  CW-7 investigation loop round-by-round (one short say + finding evidence per round) → verdict → CW-2
+  change record held-for-approval (never applied).
+- Every read now carries finding.cli {host, command, raw scrubbed output, honest transport} — Command
+  Runner is 'cmdrunner', never dressed as ssh; anything else is 'api'. Raw output never enters message text.
+- 24 suites / 918 assertions green (new sources/conduct.cw9.test.js: 71; CW-7 suite grew by 8).
+
+## 2026-08-20 — CW-9 backend FIX-FIRST pass (reviewer blockers 1-3, high 4-6, medium 7-10)
+- Roster truth: agents now carry the SOURCE SYSTEMS they really read (live.AGENT_SOURCES). A stand-down is
+  only claimed when no engaged agent reads that agent's systems; overlap is stated out loud; a round that
+  reads a stood-down system anyway triggers an honest correction. Never-connected agents are off the card.
+- Narration from evidence: each round is described by the checks it actually produced, diffed against every
+  earlier round ("returned the same picture — nothing new"); repeated evidence is not re-posted; the probe
+  QUESTION is never printed as if it were what ran.
+- Evidence attribution: session-log contexts NEST and every wire record is stamped with its evidence scope
+  id at write time; the collector keeps only its own records (watermark sweep deleted). Proved live: a
+  delegation that read nothing came back with 0 entries while a concurrent real read kept its 2.
+- ONE gate, first: capabilities.checkAsk is now a POST-gate ctx.screen; a parked thread is resumed by ANY
+  reply (a write ask inside the answer is refused out loud AND the answer still resumes).
+- Abandon/new-topic on resume are LLM-judged (replyIntent); garbage planner output fails SAFE; thin proceed
+  is stated out loud; cli output capped 4000 with honest marker; IOS space-separated secrets scrubbed;
+  triage keeps its 4th question and now posts kind:'ask'; operatorTz carried on HTTP; change steps = record.
+- 24 suites / 966 assertions green (CW-9 suite 119). Live Sonnet: EPG ask-first 0 reads; abandonment opens
+  no bridge; concurrent delegations do not swap evidence; roster claims no false stand-down.
+
+## 2026-08-20 — CW-9 backend re-review pass (F1, F2, M1-M4, L1)
+- F1: a change ask can no longer be met with silence. The dead isDeviceCliRequest-gated branch is gone;
+  the shared conduct layer screens the operator's own text (LLM `changeAsk` primary + guardrails.splitIntent
+  backstop) on EVERY path, refuses out loud, and still lets the rest of the message be understood. The
+  change is kept OUT of `understood`, so the investigation never spends rounds chasing it (M4 root cause).
+- F2: scrubber now treats key/secret/community as secret-bearing with or without an encoding digit, plus the
+  positional `snmp-server host … <community>` form; algorithm names and free-text (description/remark/banner)
+  lines survive. All 12 reviewer forms + 6 more scrub; real evidence untouched.
+- M1: round dedupe signs on normalised identity (volatile query params stripped, params sorted) AND an output
+  hash — a cache-busting timestamp can no longer make a repeat look like a new check.
+- M2: the overlap line names each agent's OWN shared systems. M3: drift test asserts every builder's touched
+  sources are declared in AGENT_SOURCES. L1: thin-proceed keeps the assumption + the invitation, full text in
+  a structured `assumption` field.
+- 24 suites / 1026 assertions green (CW-9 suite 179). Live Sonnet: bare write refused (0 reads); mixed
+  answer+write → refusal before roster, bridge opened, understood free of the reload; cache-busted repeat →
+  "nothing new", 1 finding.
+
+## 2026-08-20 — CW-9 backend final gate (scrubber rewrite + probe-prose medium)
+- Scrubber is now ONE ordered pass (sources/session-log.js): free-text line guard (description/remark/
+  banner/!/prose) → separator forms → ONE token scan (keyword → syntax words → VALUE) → positional
+  snmp-server host/community forms. Fixes the racing-rules root cause: the marker can no longer land on a
+  syntax word while the secret survives, and prose is never eaten. New forms are one-line additions.
+- Closed: vrrp/standby authentication [text], wpa-passphrase, passphrase 0. Fixed false redactions:
+  pre-shared-key local|remote, authentication md5 key-string (VRRP+HSRP), wpa psk set-key ascii 0.
+- New sources/scrubber.cw9.test.js: table-driven, 109 assertions (38 secret forms incl. the reviewer's
+  round-3 nine + round-2 twelve, 17 survivors, 6 prose lines, a whole-config case, sanity).
+- Medium: probe prose no longer burns a round — a possessive ("sw1's config") makes the next word a noun,
+  and a past-tense reporting verb within 3 tokens ("showed no aaa") is quoted output, not an order. Real
+  writes still refuse, including an order after quoted speech in the same sentence.
+- 25 suites / 1145 assertions green.
 ## 2026-08-20 — CW-9 build state
 - Backend PR #73 (feat/cw9-bridge-be) BUILT: sources/conduct.js one shared gate (chat + triage), envelope
   + caps in code, finding.cli w/ honest transport, roster, CW-7 loop reuse, verdict→held change. 24 suites

@@ -596,11 +596,17 @@ async function investigateFront(triage, front, agentId, sym, cadence) {
 }
 
 // ── Posting: a triage_message (narration) + the matching triage_evidence ────
-function post(triage, { agent, tier, round, text }) {
+function post(triage, { agent, tier, round, text, envelope }) {
   const info = agentInfo(agent);
   const msg = emit('triage_message', triage.id, {
     agent, agentName: info.name, agentIcon: info.icon,
     tier, severity: triage.severity, round, text,
+    // CW-9 (reviewer finding #11): the intake's clarifying questions now ride
+    // the SAME pinned envelope the chat bridge uses (kind:'ask' + questions[]),
+    // so both operator entry points render identically instead of one being a
+    // structured ask and the other a wall of numbered prose. Additive — a client
+    // that only reads `text` is unaffected.
+    ...(envelope && typeof envelope === 'object' ? envelope : {}),
   });
   triage.messages.push(msg);
   return msg;
@@ -842,11 +848,15 @@ async function understandPhase(triage) {
 // Post the restatement + the clarifying questions as a clear numbered Jarvis line.
 function postClarifyQuestions(triage, understood, questions) {
   const numbered = questions.map((q, i) => `${i + 1}. ${q}`).join('\n');
+  const text = `I need to narrow this before I sweep the estate — ${understood || triage.description}.\n` +
+    `Please answer so I read only what matters:\n${numbered}\n` +
+    `(Reply in the message box below — your answer scopes the triage.)`;
   post(triage, {
     agent: 'jarvis', tier: 'L4', round: 1,
-    text: `I need to narrow this before I sweep the estate — ${understood || triage.description}.\n` +
-      `Please answer so I read only what matters:\n${numbered}\n` +
-      `(Reply in the message box below — your answer scopes the triage.)`,
+    text,
+    // Same shape the chat bridge emits (sources/conduct.js envelope.ask), plus
+    // the triage id so a client knows which surface the answer belongs to.
+    envelope: { kind: 'ask', questions: questions.slice(), triageId: triage.id },
   });
 }
 
