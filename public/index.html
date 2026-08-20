@@ -742,49 +742,14 @@ pre.cli{
 
 /* ============================================================
    CW-9 (classic console): the bridge-conduct envelope.
-   The desk (public/desk.html) is where the V2 split terminal lives —
-   this column is too narrow for a persistent pane, so here the same
-   evidence renders inline: a one-line finding card whose CLI block
-   opens under it on the same black screen. Without this, a finding
-   (which carries no `text`) would paint an EMPTY bubble here.
+   The cards themselves are styled once in public/cw9-bridge.css,
+   shared with the desk. All this block does is fit them into this
+   column's bubble layout.
    ============================================================ */
 .cw9-ask{border-left:3px solid var(--info);padding-left:.6rem}
-.cw9-ask ol{margin:.4rem 0 .1rem 1.1rem;padding:0}
-.cw9-ask li{margin-bottom:.25rem;font-weight:600}
-.cw9-card{border:1px solid var(--line);border-radius:10px;background:var(--panel);
-  padding:.5rem .65rem;font-size:.8rem;line-height:1.55;width:100%;max-width:min(100%,62ch)}
-.cw9-lbl{display:block;font-size:.6rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
-  color:var(--ink3);margin-bottom:.25rem}
-.cw9-roster{display:flex;flex-wrap:wrap;gap:.3rem}
-.cw9-pill{font-family:var(--mono);font-size:.64rem;font-weight:800;padding:.16rem .45rem;
-  border-radius:999px;border:1px solid var(--line);white-space:nowrap}
-.cw9-pill.on{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
-.cw9-pill.off{color:var(--ink3);text-decoration:line-through;opacity:.75}
-.cw9-why{font-size:.68rem;color:var(--ink3);margin-top:.25rem;word-break:break-word}
-.cw9-find{border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden;
-  width:100%;max-width:min(100%,62ch)}
-.cw9-find>summary{cursor:pointer;padding:.42rem .6rem;font-size:.8rem;line-height:1.5;list-style:none;
-  display:flex;gap:.4rem;align-items:baseline}
-.cw9-find>summary::-webkit-details-marker{display:none}
-.cw9-find>summary::before{content:"▸";color:var(--ink3);font-family:var(--mono)}
-.cw9-find[open]>summary::before{content:"▾"}
-.cw9-find .ag{font-family:var(--mono);font-size:.62rem;font-weight:800;color:var(--info);
-  text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
-.cw9-tcap{display:flex;gap:.4rem;align-items:baseline;padding:.25rem .55rem;font-family:var(--mono);
-  font-size:.61rem;font-weight:700;color:#9fb6ce;background:rgba(148,163,184,.10);
-  border-top:1px solid var(--line)}
-.cw9-tcap .tport{text-transform:uppercase}
-.cw9-tcap .tport.ssh{color:#7ee787} .cw9-tcap .tport.cmdrunner{color:#ffd479}
-.cw9-tcap .tport.api{color:#58a6ff} .cw9-tcap .tport.unknown{color:#ff6b6b}
-.cw9-term{font-family:var(--mono);font-size:.7rem;line-height:1.5;background:#04070b;color:#9fb6ce;
-  padding:.5rem .6rem;margin:0;white-space:pre;overflow-x:auto}
-.cw9-term .p{color:#58a6ff} .cw9-term .g{color:#7ee787}
-.cw9-term .a{color:#ffd479} .cw9-term .r{color:#ff6b6b}
-.cw9-verdict{border:1px solid var(--ok);background:var(--ok-bg)}
-.cw9-verdict .cw9-lbl{color:var(--ok)}
-.cw9-change{border:1px solid var(--warn);background:var(--warn-bg)}
-.cw9-change .cw9-lbl{color:var(--warn)}
-.cw9-change ol{margin:.3rem 0 .1rem 1.1rem;padding:0}
+.msg-main>.bridgecard,.msg-main>.findcard,.msg-main>.verdictcard,
+.msg-main>.changecard,.msg-main>.cw9-broken{width:100%;max-width:min(100%,62ch)}
+.msg-main>.findcard{overflow:hidden}
 
 /* ---------- markdown inside chat bubbles (B6) — mdToHtml escapes then formats ---------- */
 .msg-text>:first-child{margin-top:0}
@@ -1290,6 +1255,10 @@ pre.cli{
   .top-right .notif-pill,.top-right .hdr-alert{max-width:150px}
 }
 </style>
+<!-- CW-9: one shared implementation of the bridge envelope — same cards, same
+     escaper, same caps on both this page and the classic console. -->
+<link rel="stylesheet" href="/cw9-bridge.css">
+<script src="/cw9-bridge.js"></script>
 </head>
 <body>
 
@@ -3241,92 +3210,34 @@ selectAgent('jarvis');
    CW-9 (classic console) — the pinned bridge envelope.
    ADDITIVE: only messages carrying one of the five kinds take this
    path; everything else renders exactly as it always has.
-   Every device-supplied string is escaped before it reaches the DOM;
-   the CLI output is coloured by WHOLE escaped line, so raw switch
-   text can never open a tag.
+
+   The desk (public/desk.html) owns the V2 split terminal; this column
+   is too narrow for a persistent pane, so the same evidence renders
+   INLINE — a one-line finding card whose CLI block opens under it.
+
+   There is no second implementation here: escaping, the honest
+   transport label, the output cap and the card markup all come from
+   public/cw9-bridge.js (CW9B), the module the desk uses and the test
+   suite requires. Two copies with two different escapers is exactly the
+   defect this replaced.
    ============================================================ */
-function cw9ClassicTransport(t){
-  var k = String(t == null ? '' : t).toLowerCase();
-  if(k === 'ssh')       return { key:'ssh',       label:'SSH',             open:'ssh ' };
-  if(k === 'cmdrunner') return { key:'cmdrunner', label:'Command Runner',  open:'catalyst-center command-runner --device ' };
-  if(k === 'api')       return { key:'api',       label:'API read',        open:'api read ' };
-  return { key:'unknown', label:'transport not stated', open:'read ' };
-}
-function cw9ClassicLineClass(line){
-  var s = String(line || '');
-  if(/(\berrors?\b|\bfailed\b|\bfailure\b|\bdown\b|\bdenied\b|\binvalid\b|\bunreachable\b|not found|no such|\brefused\b|\bcrc\b|\bmajor\b|\bcritical\b)/i.test(s)) return 'r';
-  if(/(\bwarn|\babsent\b|\bflap|\bdegraded\b|\bmissing\b|\btimeout\b|timed out|not resolved|\bshutdown\b|\braised\b)/i.test(s)) return 'a';
-  if(/(\bup\b|\bok\b|\bsuccess\b|\breachable\b|\bactive\b|\bconnected\b|\bestablished\b|\bpassed?\b)/i.test(s)) return 'g';
-  return '';
-}
-function cw9ClassicTerm(cli){
-  var c = cli || {};
-  var t = cw9ClassicTransport(c.transport);
-  var host = c.host ? String(c.host) : 'unnamed device';
-  var out = String(c.output == null ? '' : c.output);
-  var body = out.replace(/\s/g,'')
-    ? out.replace(/\r/g,'').split('\n').map(function(l){
-        var e = escapeHtml(l), k = cw9ClassicLineClass(l);
-        return k ? '<span class="'+k+'">'+e+'</span>' : e;
-      }).join('\n')
-    : '(the device returned nothing)';
-  return '<div class="cw9-tcap"><span>'+escapeHtml(host)+'</span><span>·</span>' +
-    '<span class="tport '+t.key+'">'+escapeHtml(t.label)+'</span></div>' +
-    '<pre class="cw9-term"><span class="p">jarvis@bridge</span>:~$ '+t.open+escapeHtml(host)+'\n' +
-    '<span class="p">'+escapeHtml(host)+(t.key === 'api' ? '›' : '#')+'</span> ' +
-    escapeHtml(c.command == null ? '' : c.command)+'\n'+body+'</pre>';
-}
-/* Returns the inner HTML for one envelope message, or '' when the message is
-   not one of the five kinds (→ the caller renders it the old way). */
 function cw9RenderClassic(d){
-  var k = d && d.kind;
-  if(k === 'ask'){
-    var qs = (d.questions || []).filter(function(q){ return q && String(q).trim(); }).slice(0,3);
-    return '<div class="msg-text cw9-ask">' + mdToHtml(d.text || 'Before I pull anyone in:') +
-      (qs.length ? '<ol>' + qs.map(function(q){ return '<li>'+escapeHtml(q)+'</li>'; }).join('') + '</ol>' : '') +
-      '</div>';
+  if(!window.CW9B || !CW9B.isEnvelope(d)) return '';
+  var k = d.kind;
+  try{
+    if(k === 'ask'){
+      return '<div class="msg-text cw9-ask">' + mdToHtml(d.text || 'Before I pull anyone in:') +
+        CW9B.askHtml(d) + '</div>';
+    }
+    if(k === 'roster')  return CW9B.rosterHtml(d);
+    if(k === 'verdict') return CW9B.verdictHtml(d);
+    if(k === 'change')  return CW9B.changeHtml(d);
+    if(k === 'finding') return CW9B.findingHtml(d, tsClock(d.timestamp)).html;
+    return '';
+  }catch(err){
+    /* a malformed envelope is still a message Jarvis sent — never a silent drop */
+    return CW9B.placeholderHtml(k, (err && err.message) ? String(err.message).slice(0,120) : 'unexpected shape');
   }
-  if(k === 'roster'){
-    var r = d.roster || {};
-    var on = (r.engaged || []).filter(function(x){ return x && x.agent; });
-    var off = (r.stoodDown || []).filter(function(x){ return x && x.agent; });
-    if(!on.length && !off.length) return '';
-    return '<div class="cw9-card"><span class="cw9-lbl">Bridge roster · who is on this call</span>' +
-      '<div class="cw9-roster">' +
-        on.map(function(x){ return '<span class="cw9-pill on">'+escapeHtml(x.agent)+' ✓ engaged</span>'; }).join('') +
-        off.map(function(x){ return '<span class="cw9-pill off">'+escapeHtml(x.agent)+'</span>'; }).join('') +
-      '</div>' +
-      on.concat(off).filter(function(x){ return x.why; }).map(function(x){
-        return '<div class="cw9-why">'+escapeHtml(x.agent)+' — '+escapeHtml(x.why)+'</div>';
-      }).join('') + '</div>';
-  }
-  if(k === 'finding'){
-    var f = d.finding || {};
-    return '<details class="cw9-find"><summary><span class="ag">'+escapeHtml(f.agent || d.agentName || 'Engineer')+'</span>' +
-      '<span>'+escapeHtml(f.line || d.text || 'A read came back.')+'</span></summary>' +
-      (f.cli ? cw9ClassicTerm(f.cli)
-             : '<div class="cw9-tcap">no command block attached — nothing is shown that was not run</div>') +
-      '</details>';
-  }
-  if(k === 'verdict'){
-    var v = d.verdict || {};
-    if(!v.cause && !d.text) return '';
-    return '<div class="cw9-card cw9-verdict"><span class="cw9-lbl">✔ Cause found</span>' +
-      '<b>'+escapeHtml(v.cause || d.text)+'</b>' +
-      (v.confidence ? '<div class="cw9-why">confidence: '+escapeHtml(v.confidence)+
-        (v.rounds != null ? ' · '+escapeHtml(v.rounds)+' rounds' : '')+'</div>' : '') + '</div>';
-  }
-  if(k === 'change'){
-    var c = d.change || {};
-    var steps = (c.steps || []).filter(function(s){ return s && String(s).trim(); });
-    if(!steps.length && !c.id) return '';
-    return '<div class="cw9-card cw9-change"><span class="cw9-lbl">⏸ Fix drafted — held for approval</span>' +
-      (c.id ? '<div><b>'+escapeHtml(c.id)+'</b> · '+escapeHtml(c.state || 'held-for-approval')+'</div>' : '') +
-      (steps.length ? '<ol>'+steps.map(function(s){ return '<li>'+escapeHtml(s)+'</li>'; }).join('')+'</ol>' : '') +
-      '<div class="cw9-why">Nothing has been sent to any device. A change only runs after a human approves it.</div>' +
-      '</div>';
-  }
-  return '';
 }
 
 function renderChat(d){
@@ -3355,9 +3266,23 @@ function renderChat(d){
        its own card in place of the plain bubble. Anything else — every message
        that existed before this wave — takes the untouched path below. */
     var env = cw9RenderClassic(d);
-    var bodyHtml = env
-      ? ((d.kind !== 'ask' && d.text && String(d.text).trim()) ? '<div class="msg-text">'+mdToHtml(d.text)+'</div>'+env : env)
-      : '<div class="msg-text">'+mdToHtml(d.text)+'</div>';
+    var hasText = !!(d.text && String(d.text).trim());
+    var bodyHtml;
+    if(env){
+      bodyHtml = (d.kind !== 'ask' && hasText) ? '<div class="msg-text">'+mdToHtml(d.text)+'</div>'+env : env;
+    } else if(window.CW9B && CW9B.isEnvelope(d) && !hasText){
+      /* a bridge envelope with nothing in it (verdict:{}, empty roster, change:{}).
+         It used to fall through and paint an EMPTY bubble — a blank box under an
+         agent's name on a P1. Say what arrived instead; never a blank, never a
+         message that quietly disappears. */
+      bodyHtml = CW9B.placeholderHtml(d.kind, 'it arrived empty');
+    } else if(!hasText){
+      /* no envelope and no text at all — nothing to paint, so paint nothing
+         rather than an empty bubble. */
+      return;
+    } else {
+      bodyHtml = '<div class="msg-text">'+mdToHtml(d.text)+'</div>';
+    }
     el.innerHTML =
       '<div class="msg-ico">'+escapeHtml(ico)+'</div><div class="msg-main">'+
       '<div class="msg-top"><span class="msg-who">'+escapeHtml(who)+'</span>'+tierBadge+
