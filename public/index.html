@@ -3288,14 +3288,27 @@ function onSayDeltaClassic(d){
   }catch(e){ /* a preview must never break the thread */ }
   return true;
 }
-/* The recorded answer landed — its preview goes before anything is painted. */
+/* The recorded answer landed — its preview goes before anything is painted, in
+   the SAME turn, so the browser paints once and nothing flickers. A marker is
+   left where the preview stood so the recorded message takes its place in the
+   thread instead of jumping to the bottom, and how long the preview got is
+   returned so a shorter recorded answer can be explained rather than just
+   silently shrinking. */
 function saySettleClassic(d){
-  if(!SAYC || !SAYC.size()) return;
+  if(!SAYC || !SAYC.size()) return null;
   var id = null; try{ id = SAYC.finalFor(d); }catch(e){ id = null; }
-  if(!id) return;
+  if(!id) return null;
+  var st = SAYC.get(id);
+  var shown = st ? st.text.length : 0;
   SAYC.drop(id);
   var n = SAYC_NODES[id]; delete SAYC_NODES[id];
-  if(n && n.parentNode) n.parentNode.removeChild(n);
+  if(!n || !n.parentNode) return null;
+  var mark = document.createComment('say-slot');
+  n.parentNode.replaceChild(mark, n);
+  return { mark: mark, shown: shown };
+}
+function sayDropSlot(slot){
+  if(slot && slot.mark && slot.mark.parentNode) slot.mark.parentNode.removeChild(slot.mark);
 }
 /* A preview whose recorded message never came. Never deleted, never left
    pretending to be live. */
@@ -3322,7 +3335,7 @@ function renderChat(d){
   var host = $('chatStream'); if(!host) return;
   /* CW-10: the recorded version of an answer we were previewing clears that
      preview first — one answer, one bubble, whatever the network did. */
-  if(d && d.type !== 'outgoing') saySettleClassic(d);
+  var sayslot = (d && d.type !== 'outgoing') ? saySettleClassic(d) : null;
   var empty = host.querySelector('.chat-empty'); if(empty) empty.remove();
   var outgoing = d.type === 'outgoing';
   var id = d.agent;
@@ -3360,6 +3373,7 @@ function renderChat(d){
     } else if(!hasText){
       /* no envelope and no text at all — nothing to paint, so paint nothing
          rather than an empty bubble. */
+      sayDropSlot(sayslot);
       return;
     } else {
       bodyHtml = '<div class="msg-text">'+mdToHtml(d.text)+'</div>';
@@ -3375,7 +3389,18 @@ function renderChat(d){
   // scrolling up to read history isn't yanked away).
   var sc0 = findScroller(host);
   var nearBottom = !sc0 || (sc0.scrollHeight - sc0.scrollTop - sc0.clientHeight < 160);
-  host.appendChild(el);
+  /* CW-10: a recorded answer goes back where its preview was — and says so when
+     the record is materially shorter than what was on screen, so a bubble that
+     shrinks never reads as text quietly lost. */
+  if(sayslot && sayslot.mark.parentNode){
+    if(sayslot.shown - String(d.text || '').length > 40){
+      var m = el.querySelector('.msg-text');
+      if(m) m.insertAdjacentHTML('beforeend',
+        '<span class="cw9-stream-note">The recorded answer is shorter than the live preview — this short form is what the server kept.</span>');
+    }
+    sayslot.mark.parentNode.insertBefore(el, sayslot.mark);
+    sayDropSlot(sayslot);
+  } else host.appendChild(el);
   if(outgoing || nearBottom){ var sc = findScroller(host) || host; sc.scrollTop = sc.scrollHeight; }
 }
 

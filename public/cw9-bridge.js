@@ -424,16 +424,29 @@
       },
 
       /* Which preview (if any) this ORDINARY message replaces.
-         Matched by messageId. When the final carries no id at all and exactly
-         one preview is open, that preview is the one — refusing to match there
-         would leave a stale preview AND the real answer side by side, which is
-         the duplicate bubble we are trying to avoid. With two or more open we
-         do not guess; the page ages the leftovers out honestly. */
+         The pinned seam puts the same messageId on the recorded answer, so
+         that is the match that matters.
+
+         The id-less fallback exists only so a recorded answer that arrives
+         WITHOUT an id cannot leave a stale preview beside it. It is
+         deliberately narrow, because everything else on this socket also
+         arrives without a messageId: a finding card, a roster, a system
+         line. A live test caught exactly that — a finding landing mid-answer
+         claimed the preview, and the rest of the answer started a second
+         bubble. So a message may only claim a preview when
+           - it is a plain answer (no envelope `kind`) with real text, AND
+           - exactly one preview is open, AND
+           - that preview has already had its LAST piece.
+         A preview that is still being written is never settled by something
+         that merely happened to arrive. */
       finalFor: function (d) {
         if (!d || typeof d !== 'object' || isDelta(d)) return null;
         var id = streamId(d);
         if (id) return (id in live) ? id : null;
-        return ids.length === 1 ? ids[0] : null;
+        if (d.kind) return null;
+        if (!(typeof d.text === 'string' && d.text.trim())) return null;
+        if (ids.length !== 1) return null;
+        return live[ids[0]].done ? ids[0] : null;
       },
 
       /* Previews with no final message after `maxAgeMs`. The page turns these

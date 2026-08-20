@@ -4,15 +4,25 @@
  * watch a streamed answer arrive piece by piece and then be replaced by the
  * recorded message — WITHOUT waiting for the backend half of CW-10.
  *
- * It uses the marked dev hooks: window.__cw10DevDelta(msg) for a piece, and the
- * page's own incoming-message path for the final. Nothing in the product calls
- * this file. Every string below is invented FOR THE LOOK ONLY and says so.
+ * THE WIRE SHAPE (pinned with the backend, PR #74): a piece arrives as its own
+ * WebSocket message — {type:'say_delta', data:{kind:'say-delta', messageId,
+ * delta, done}} — NOT inside a chat_message. The recorded answer then arrives
+ * as the ordinary chat_message carrying the same messageId, and it is
+ * authoritative. The backend CAPS what it records at 280 characters, so the
+ * recorded answer is often SHORTER than the preview: the bubble shrinks on
+ * done, and the page says why. The `data` payload is what the dev hook below
+ * takes, so this fixture exercises exactly what the socket delivers.
+ *
+ * It uses the marked dev hooks: window.__cw10DevDelta(payload) for a piece and
+ * window.__cw10DevSay(msg) for the recorded answer. Nothing in the product
+ * calls this file. Every string below is invented FOR THE LOOK ONLY and says so.
  *
  * Use:
  *   cw10Stream()      — the happy path: pieces accumulate, final replaces
  *   cw10StreamLossy() — pieces go missing / arrive out of order; final still wins
  *   cw10StreamXss()   — hostile text in the pieces: printed, never executed
  *   cw10StreamOrphan()— pieces, done, and NO final (the honest stale note)
+ *   cw10StreamShort() — the recorded answer is much shorter than the preview
  *   cw10Spend()       — draw the Spend panel from a fixture (desk only)
  *   cw10SpendEmpty()  — the honest empty state
  */
@@ -29,6 +39,13 @@ function cw10Chunks(text, size) {
   return out;
 }
 
+/* What the server actually records: the same answer, capped at 280 characters.
+   The preview is therefore usually the longer of the two. */
+var CW10_SAY_CAP = 280;
+function cw10Capped(text) {
+  return text.length <= CW10_SAY_CAP ? text : text.slice(0, CW10_SAY_CAP - 1) + '…';
+}
+
 function cw10Final(id, text) {
   var msg = {
     role: 'jarvis', agent: 'jarvis', agentName: 'Jarvis',
@@ -43,7 +60,9 @@ function cw10Play(id, pieces, opts) {
   var i = 0;
   (function step() {
     if (i >= pieces.length) {
-      if (!opts.noFinal) setTimeout(function () { cw10Final(id, opts.finalText || CW10_ANSWER); }, 700);
+      if (!opts.noFinal) setTimeout(function () {
+        cw10Final(id, cw10Capped(opts.finalText || CW10_ANSWER));
+      }, 700);
       return;
     }
     var p = pieces[i++];
@@ -88,6 +107,16 @@ function cw10StreamOrphan() {
   var id = 'fx-orphan-' + Date.now().toString(36);
   cw10Play(id, cw10Chunks(CW10_ANSWER, 20).map(function (c, n) { return { delta: c, seq: n }; }),
     { noFinal: true });
+}
+
+/* 5 — the recorded answer is much shorter than what streamed (the 280-char
+   cap). The bubble shrinks on done, and the page must say why rather than
+   letting text look lost. */
+function cw10StreamShort() {
+  var id = 'fx-short-' + Date.now().toString(36);
+  var long = CW10_ANSWER + ' ' + CW10_ANSWER;
+  cw10Play(id, cw10Chunks(long, 16).map(function (c, n) { return { delta: c, seq: n }; }),
+    { gap: 40, finalText: long });
 }
 
 /* ---------- Spend panel (desk only) ---------- */

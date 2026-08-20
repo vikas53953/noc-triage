@@ -111,9 +111,22 @@ ok('an absurd messageId is refused rather than kept as a key',
   s.accept(delta('m1', 'partial'));
   ok('the final message is matched to its preview by id', s.finalFor({ messageId: 'm1', text: 'whole' }) === 'm1');
   ok('a final for an answer we never previewed matches nothing', s.finalFor({ messageId: 'zz' }) === null);
-  ok('an id-less final with exactly one preview open still clears it',
+  // The id-less fallback is deliberately narrow. A LIVE test caught the bug it
+  // is guarding: a finding card landing mid-answer claimed the preview, and the
+  // rest of the answer opened a second bubble. Everything on this socket except
+  // the recorded answer arrives without a messageId.
+  ok('a still-streaming preview is never claimed by an id-less message',
+    s.finalFor({ text: 'whole' }) === null);
+  s.accept(delta('m1', '', { done: true }));
+  ok('once the last piece has landed, an id-less answer may claim it',
     s.finalFor({ text: 'whole' }) === 'm1');
-  s.accept(delta('m2', 'another'));
+  ok('a finding card can never claim a preview',
+    s.finalFor({ kind: 'finding', finding: { line: 'CRC climbing' } }) === null);
+  ok('a roster or verdict card cannot either',
+    s.finalFor({ kind: 'roster', roster: {} }) === null && s.finalFor({ kind: 'verdict', text: 'x' }) === null);
+  ok('a message with no text at all cannot claim a preview',
+    s.finalFor({ text: '   ' }) === null && s.finalFor({ proposal: {} }) === null);
+  s.accept(delta('m2', 'another', { done: true }));
   ok('with two previews open an id-less final is NOT guessed at', s.finalFor({ text: 'whole' }) === null);
   ok('a delta is never treated as a final', s.finalFor(delta('m1', 'x')) === null);
   ok('dropping a settled preview removes it', s.drop('m1') === true && s.size() === 1 && s.get('m1') === null);
@@ -239,15 +252,35 @@ ok('totals nested under a totals object are found too',
   CW9B.normalizeSpend({ totals: { today: { input_tokens: 9 } } }).today.input === 9);
 
 // ── 8. both pages, one implementation ──────────────────────────────────────
-ok('the desk routes say-delta to the stream', /onSayDelta\(m\.data\)/.test(desk));
-ok('the classic console routes say-delta to the stream', /onSayDeltaClassic\(m\.data\)/.test(idx));
-ok('a delta inside a chat_message is routed too, on both pages',
+// The wire shape pinned with the backend (PR #74): pieces ride their OWN WS
+// message type 'say_delta'; they do NOT arrive inside a chat_message.
+ok('the desk listens for the pinned say_delta message type',
+  /m\.type === 'say_delta'[\s\S]{0,120}onSayDelta\(m\.data\)/.test(desk));
+ok('the classic console listens for it too',
+  /m\.type === 'say_delta'[\s\S]{0,140}onSayDeltaClassic\(m\.data\)/.test(idx));
+ok('a delta smuggled inside a chat_message is still not painted as a message',
   /CW9B\.isDelta\(m\.data\)/.test(desk) && /CW9B\.isDelta\(m\.data\)/.test(idx));
 ok('the desk clears the preview BEFORE painting the recorded message',
-  desk.indexOf('saySettle(d);') < desk.indexOf("if(cw9Render(d)){"));
+  desk.indexOf('var slot = saySettle(d);') < desk.indexOf('onChatPaint(d)'));
 ok('the classic console clears the preview before painting too',
-  /saySettleClassic\(d\)/.test(idx) &&
+  /var sayslot = \(d && d\.type !== 'outgoing'\) \? saySettleClassic\(d\)/.test(idx) &&
   idx.indexOf('saySettleClassic(d)') < idx.indexOf('var outgoing = d.type'));
+// A shrinking bubble must not read as text quietly lost: the server caps what
+// it records at 280 characters, so the recorded answer is routinely SHORTER
+// than the preview the operator was just reading.
+ok('a recorded answer shorter than the preview is explained, on both pages',
+  /shorter than the live preview/.test(desk) && /shorter than the live preview/.test(idx));
+ok('the length actually shown is what the note is measured against',
+  /slot\.shown - finalLen > 40/.test(desk) && /sayslot\.shown - String\(d\.text \|\| ''\)\.length > 40/.test(idx));
+// The preview holds its PLACE in the thread: findings and roster cards keep
+// arriving while an answer streams, and an answer that jumped to the bottom is
+// an answer the operator has to go looking for.
+ok('the recorded answer is painted into the slot the preview held',
+  /createComment\('say-slot'\)/.test(desk) && /createComment\('say-slot'\)/.test(idx) &&
+  /insertBefore\(moved\[i\], slot\.mark\)/.test(desk) &&
+  /sayslot\.mark\.parentNode\.insertBefore\(el, sayslot\.mark\)/.test(idx));
+ok('the slot marker is always cleaned up, even when nothing is painted',
+  /finally\{ sayTakeSlot\(/.test(desk) && /sayDropSlot\(sayslot\);\s*\n\s*return;/.test(idx));
 ok('neither page hand-rolls its own accumulator',
   /CW9B\.createStream\(\)/.test(desk) && /CW9B\.createStream\(\)/.test(idx) &&
   !/\+= *d\.delta/.test(desk) && !/\+= *d\.delta/.test(idx));

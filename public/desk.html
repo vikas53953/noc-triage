@@ -1478,17 +1478,52 @@ function onSayDelta(d){
   return true;
 }
 
-/* The recorded message landed. Drop its preview BEFORE the message is painted,
-   so the operator never sees the two at once. */
+/* The recorded message landed. Its preview goes BEFORE the message is painted,
+   so the two are never on screen together — both DOM changes happen in one
+   turn, so the browser paints once and there is no flicker.
+
+   It leaves a MARKER where the preview stood and returns it. The recorded
+   message is then painted into that slot rather than appended to the bottom:
+   while an answer streams, findings and roster cards keep arriving, and an
+   answer that jumped to the end of the thread would be an answer the operator
+   has to go looking for.
+
+   The recorded message is also allowed to be SHORTER than the preview — the
+   backend caps what it records. The bubble visibly shrinking with no
+   explanation reads like lost text, so how long the preview got is returned
+   with the marker and the caller says so plainly. */
 function saySettle(d){
-  if(!SAY || !SAY.size()) return;
+  if(!SAY || !SAY.size()) return null;
   var id = null;
   try{ id = SAY.finalFor(d); }catch(e){ id = null; }
-  if(!id) return;
+  if(!id) return null;
+  var st = SAY.get(id);
+  var shown = st ? st.text.length : 0;
   SAY.drop(id);
   var n = SAYNODES[id];
   delete SAYNODES[id];
-  if(n && n.parentNode) n.parentNode.removeChild(n);
+  if(!n || !n.parentNode) return null;
+  var mark = document.createComment('say-slot');
+  n.parentNode.replaceChild(mark, n);
+  return { mark: mark, shown: shown };
+}
+
+/* Move whatever the paint just appended into the slot the preview held, and
+   say so when the record is materially shorter than what was on screen. */
+function sayTakeSlot(slot, from, finalLen){
+  if(!slot) return;
+  var chat = $('chat');
+  try{
+    var moved = [].slice.call(chat.children, from);
+    for(var i = 0; i < moved.length; i++) chat.insertBefore(moved[i], slot.mark);
+    if(moved.length && slot.shown - finalLen > 40){
+      var bub = moved[0].querySelector('.bubble');
+      if(bub) bub.insertAdjacentHTML('beforeend',
+        '<span class="cw9-stream-note">The recorded answer is shorter than the live preview — this short form is what the server kept.</span>');
+    }
+  }catch(e){}
+  if(slot.mark.parentNode) slot.mark.parentNode.removeChild(slot.mark);
+  persistWork();
 }
 
 /* A preview whose recorded message never arrived (the server died mid-answer,
@@ -4218,12 +4253,21 @@ function connectWS(){
 }
 function scheduleReconnect(){ wsRetry = Math.min(wsRetry + 1, 6); setTimeout(connectWS, 500 * wsRetry); }
 
+/* CW-10: if this message is the recorded version of an answer we were
+   previewing, the preview goes NOW — before anything is painted — and the
+   recorded message is painted into the slot the preview held. One bubble, in
+   the place the operator was already reading, in a single browser paint. */
 function onChat(d){
+  if(d && d.type === 'outgoing') return;
+  var slot = saySettle(d);
+  if(!slot) return onChatPaint(d);
+  var from = $('chat').children.length;
+  try{ onChatPaint(d); }
+  finally{ sayTakeSlot(slot, from, String((d && d.text) || '').length); }
+}
+
+function onChatPaint(d){
   if(d.type === 'outgoing') return;   // our own asks are already on screen
-  /* CW-10: if this message is the recorded version of an answer we were
-     previewing, the preview goes NOW — before anything is painted — so there
-     is never a moment with two bubbles for one answer. */
-  saySettle(d);
   /* CW-9: an envelope kind paints itself (ask / roster / finding / verdict /
      change). Anything without a kind falls through and renders as before. */
   if(cw9Render(d)){
@@ -4256,7 +4300,11 @@ function onTriage(type, d){
     case 'triage_message':
       /* CW-10: same rule on the bridge path — the recorded message clears the
          preview it belongs to before anything else is painted. */
-      if(!d.operator) saySettle(d);
+      /* CW-10: same rule on the bridge path — the recorded message clears the
+         preview it belongs to and is painted into its slot. */
+      var tslot = d.operator ? null : saySettle(d);
+      var tfrom = $('chat').children.length;
+      try{
       if(d.operator) bubble('me', esc(d.agentName || 'Operator') + ' · ' + clockOf(d.ts), md(d.text||''));
       /* CW-9: a bridge message may carry an envelope kind. It paints itself;
          anything without a kind keeps the old rendering exactly. */
@@ -4265,6 +4313,7 @@ function onTriage(type, d){
                           agent:d.agent, agentName:d.agentName, timestamp:d.ts,
                           triageId:d.triageId, resume:d.resume })){ /* painted */ }
       else if(!(d.tier === 'L4' && d.round === 2)) jvMsg(d.agentName || d.agent || 'Engineer', d.text || '', d.ts);
+      }finally{ sayTakeSlot(tslot, tfrom, String(d.text || '').length); }
       break;
     case 'triage_verdict':
       jvMsg('Jarvis · verdict', d.verdict || 'Verdict posted.', d.ts, jumpBtn('ev-find','See the findings behind it'));
