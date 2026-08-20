@@ -339,41 +339,93 @@
     return !!(d && typeof d === 'object' && d.kind === 'say-delta' && streamId(d));
   }
 
-  /* The preview body. Deliberately NOT markdown: the pieces arrive mid-token,
-     so a half-written `**bold` would flip formatting on and off while the
-     operator reads. Plain escaped text now, the page's own markdown on the
-     final message. */
+  function note(t) { return '<span class="cw9-stream-note">' + t + '</span>'; }
+
+  /* Why a preview stopped being live. Each one keeps the text that reached the
+     screen and says what happened to the rest — none of them ever throws that
+     text away, because the operator already read it. */
+  var SETTLE_NOTES = {
+    /* the recorded copy arrived with nothing in it */
+    empty: 'The recorded copy of this answer came back empty. What is above is what actually reached this screen — it is kept, not thrown away.',
+    /* the backend told us the stream was cut short (delta done+aborted) */
+    aborted: 'Answer interrupted — this is the partial text Jarvis had written when the stream stopped. Nothing further is coming; ask again if you need the rest.',
+    /* nothing more ever arrived and no record came */
+    orphan: 'Jarvis stopped mid-answer and the recorded version never arrived. What is above is only what reached this screen — ask again if it matters.',
+  };
+
+  function streamBody(st) {
+    if (!st.text) return '<span class="cw9-stream-wait">Jarvis is answering…</span>';
+    return esc(st.text).replace(/\n/g, '<br>');
+  }
+  function streamCaveats(st) {
+    var out = '';
+    if (st.capped) out += note('This answer is longer than the live preview holds — the whole of it lands when Jarvis finishes.');
+    if (st.gaps) out += note('Part of this preview did not reach the screen. The complete answer replaces it when Jarvis finishes.');
+    return out;
+  }
+
+  /* The preview body while the answer is still live. Deliberately NOT markdown:
+     the pieces arrive mid-token, so a half-written `**bold` would flip
+     formatting on and off while the operator reads. Plain escaped text now, the
+     page's own markdown on the final message. */
   function streamPreviewHtml(st) {
     if (!st) return '';
-    var body;
-    if (!st.text) {
-      body = '<span class="cw9-stream-wait">Jarvis is answering…</span>';
-    } else {
-      body = esc(st.text).replace(/\n/g, '<br>');
-    }
-    var notes = '';
-    if (st.capped) {
-      notes += '<span class="cw9-stream-note">This answer is longer than the live preview holds — the whole of it lands when Jarvis finishes.</span>';
-    }
-    if (st.gaps) {
-      notes += '<span class="cw9-stream-note">Part of this preview did not reach the screen. The complete answer replaces it when Jarvis finishes.</span>';
-    }
-    return '<span class="cw9-stream' + (st.done ? ' done' : '') + '">' + body +
+    return '<span class="cw9-stream' + (st.done ? ' done' : '') + '">' + streamBody(st) +
       (st.done ? '' : '<span class="cw9-caret" aria-hidden="true"></span>') + '</span>' +
-      notes +
-      (st.done ? '<span class="cw9-stream-note">Waiting for the recorded answer…</span>' : '');
+      streamCaveats(st) +
+      (st.done ? note('Waiting for the recorded answer…') : '');
+  }
+
+  /* The preview is finished and no recorded answer is replacing it. The text
+     STAYS on screen; only the caret and the "waiting" line go, replaced by the
+     honest reason. Used for an empty recorded copy, an aborted stream, and a
+     record that never came. */
+  function streamSettledHtml(st, reason) {
+    if (!st) return '';
+    var body = st.text ? esc(st.text).replace(/\n/g, '<br>')
+      : '<span class="cw9-stream-wait">Nothing of this answer reached the screen.</span>';
+    return '<span class="cw9-stream done">' + body + '</span>' +
+      streamCaveats(st) + note(SETTLE_NOTES[reason] || SETTLE_NOTES.orphan);
   }
 
   function createStream() {
-    var live = Object.create(null);
+    var live = Object.create(null);      /* answers still arriving */
     var ids = [];
+    /* Answers that stopped being live WITHOUT a recorded message replacing them
+       — interrupted, or a recorded copy that came back empty. Their text is
+       still on screen, so a late recorded answer must still be able to replace
+       it. Bounded, oldest dropped first. */
+    var closed = Object.create(null);
+    var closedIds = [];
+    var CLOSED_MAX = 20;
 
     function drop(id) {
-      if (!(id in live)) return false;
+      var had = false;
+      if (id in live) {
+        delete live[id]; had = true;
+        var i = ids.indexOf(id);
+        if (i !== -1) ids.splice(i, 1);
+      }
+      if (id in closed) {
+        delete closed[id]; had = true;
+        var j = closedIds.indexOf(id);
+        if (j !== -1) closedIds.splice(j, 1);
+      }
+      return had;
+    }
+
+    /* Move a live answer into the closed set with the reason it stopped. */
+    function closeOut(id, reason) {
+      var st = live[id];
+      if (!st) return null;
+      st.settled = reason;
       delete live[id];
       var i = ids.indexOf(id);
       if (i !== -1) ids.splice(i, 1);
-      return true;
+      closed[id] = st;
+      closedIds.push(id);
+      while (closedIds.length > CLOSED_MAX) delete closed[closedIds.shift()];
+      return st;
     }
 
     return {
@@ -420,33 +472,54 @@
           }
         }
         if (d.done === true) st.done = true;
-        return { id: id, first: first, done: st.done, stale: stale, html: streamPreviewHtml(st) };
+
+        /* The backend flags a stream it could not finish (done + aborted). The
+           partial text stays exactly where it is, labelled as partial, and the
+           answer stops being live IMMEDIATELY — there is no recorded message
+           coming, so waiting for one would leave a caret blinking at an
+           operator for no reason. A late record can still replace it. */
+        if (st.done && d.aborted === true) {
+          closeOut(id, 'aborted');
+          return { id: id, first: first, done: true, stale: stale, aborted: true,
+                   settled: 'aborted', html: streamSettledHtml(st, 'aborted') };
+        }
+        return { id: id, first: first, done: st.done, stale: stale, aborted: false,
+                 settled: null, html: streamPreviewHtml(st) };
       },
 
-      /* Which preview (if any) this ORDINARY message replaces.
-         The pinned seam puts the same messageId on the recorded answer, so
-         that is the match that matters.
+      /* What (if anything) this ORDINARY message does to a preview.
+         Returns null, or { id, empty, shown, html }.
+           empty:false → the page REPLACES the preview with this message
+           empty:true  → the recorded copy was blank: the preview's text STAYS,
+                         relabelled with `html`, and nothing is deleted
 
-         The id-less fallback exists only so a recorded answer that arrives
-         WITHOUT an id cannot leave a stale preview beside it. It is
-         deliberately narrow, because everything else on this socket also
-         arrives without a messageId: a finding card, a roster, a system
-         line. A live test caught exactly that — a finding landing mid-answer
-         claimed the preview, and the rest of the answer started a second
-         bubble. So a message may only claim a preview when
-           - it is a plain answer (no envelope `kind`) with real text, AND
-           - exactly one preview is open, AND
-           - that preview has already had its LAST piece.
-         A preview that is still being written is never settled by something
-         that merely happened to arrive. */
-      finalFor: function (d) {
+         ONE rule decides it: the messageId must match. The pinned seam puts
+         the same messageId on the recorded answer, and everything ELSE on this
+         socket — findings, rosters, system lines, another agent's reply —
+         arrives without one. Two live reviews found the same class of bug from
+         guessing: a finding landing mid-answer claimed the preview (a second
+         bubble), and later, once settle-in-place existed, an unrelated message
+         claiming a finished preview DELETED Jarvis's answer outright. There is
+         no id-less path left; an unmatched message renders normally, and a
+         preview nobody claims ages out honestly with its text intact.
+
+         A message with no real text can never replace anything either — an
+         empty recorded copy must not wipe what the operator just read. */
+      settleFor: function (d) {
         if (!d || typeof d !== 'object' || isDelta(d)) return null;
+        if (d.kind && KINDS.indexOf(d.kind) !== -1) return null;   /* a card, not an answer */
         var id = streamId(d);
-        if (id) return (id in live) ? id : null;
-        if (d.kind) return null;
-        if (!(typeof d.text === 'string' && d.text.trim())) return null;
-        if (ids.length !== 1) return null;
-        return live[ids[0]].done ? ids[0] : null;
+        if (!id) return null;
+        var st = live[id] || closed[id];
+        if (!st) return null;
+        var hasText = typeof d.text === 'string' && d.text.trim() !== '';
+        if (!hasText) {
+          if (!(id in live)) return null;          /* already settled — leave it alone */
+          closeOut(id, 'empty');
+          return { id: id, empty: true, shown: st.text.length, html: streamSettledHtml(st, 'empty') };
+        }
+        drop(id);
+        return { id: id, empty: false, shown: st.text.length, html: '' };
       },
 
       /* Previews with no final message after `maxAgeMs`. The page turns these
@@ -456,11 +529,15 @@
         return ids.filter(function (id) { return t - live[id].at > maxAgeMs; });
       },
 
-      get: function (id) { return live[id] || null; },
+      get: function (id) { return live[id] || closed[id] || null; },
+      isLive: function (id) { return !!live[id]; },
       ids: function () { return ids.slice(); },
       size: function () { return ids.length; },
       drop: drop,
-      clear: function () { live = Object.create(null); ids = []; },
+      clear: function () {
+        live = Object.create(null); ids = [];
+        closed = Object.create(null); closedIds = [];
+      },
     };
   }
 
@@ -524,15 +601,39 @@
     return null;
   }
 
+  /* EMPTY and UNREADABLE are different claims, and saying the wrong one is a
+     lie about money. "Nothing has been spent yet" is a statement about the
+     server's record; it may only be made when a summary was actually
+     understood and its counters really are zero. A body that is not an object,
+     or that names none of the fields this panel reads, was NOT understood —
+     that is UNREADABLE, and it says so. (A review found this branch was dead
+     code: nothing here threw, so an unreadable shape claimed zero spend.) */
+  var SPEND_KEYS = ['today', 'day', 'week', 'thisWeek', 'this_week', 'last7', 'last7Days',
+    'byPurpose', 'purposes', 'perPurpose', 'by_purpose',
+    'byModel', 'models', 'perModel', 'by_model'];
+
+  function readable(o) {
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return false;
+    for (var i = 0; i < SPEND_KEYS.length; i++) if (o[SPEND_KEYS[i]] != null) return true;
+    return false;
+  }
+
+  function unreadableSpend() {
+    var zero = tokens(null);
+    return { today: zero, week: zero, purposes: [], models: [], empty: false, unreadable: true };
+  }
+
   function normalizeSpend(raw) {
-    var d = (raw && typeof raw === 'object') ? raw : {};
-    var t = (d.totals && typeof d.totals === 'object') ? d.totals : d;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return unreadableSpend();
+    var nested = (raw.totals && typeof raw.totals === 'object' && !Array.isArray(raw.totals)) ? raw.totals : null;
+    if (!readable(raw) && !readable(nested)) return unreadableSpend();
+    var t = nested && readable(nested) ? nested : raw;
     var today = tokens(pick(t, ['today', 'day']));
     var week = tokens(pick(t, ['week', 'thisWeek', 'this_week', 'last7', 'last7Days']));
-    var purposes = buckets(pick(d, ['byPurpose', 'purposes', 'perPurpose', 'by_purpose']), ['purpose', 'name', 'key']);
-    var models = buckets(pick(d, ['byModel', 'models', 'perModel', 'by_model']), ['model', 'name', 'key']);
+    var purposes = buckets(pick(raw, ['byPurpose', 'purposes', 'perPurpose', 'by_purpose']), ['purpose', 'name', 'key']);
+    var models = buckets(pick(raw, ['byModel', 'models', 'perModel', 'by_model']), ['model', 'name', 'key']);
     return {
-      today: today, week: week, purposes: purposes, models: models,
+      today: today, week: week, purposes: purposes, models: models, unreadable: false,
       empty: !anyOf(today) && !anyOf(week) && !purposes.length && !models.length,
     };
   }
@@ -582,10 +683,19 @@
       '<div class="sp-fine">Nothing is being estimated here. When the server starts recording model usage, the real numbers appear.</div></div>';
   }
 
+  /* Different claim, different words: this one does NOT say nothing was spent.
+     It says the answer could not be understood, which is all we know. */
+  function spendUnreadableHtml(reason) {
+    return '<div class="sp-note"><b>Spend data can\'t be read</b>' +
+      (reason ? ' — ' + esc(reason) : ' — the summary came back in a shape this panel does not recognise') +
+      '<div class="sp-fine">There may or may not be spend recorded; this panel will not guess either way. The server\'s record is the truth — this is a display problem, and it is worth reporting.</div></div>';
+  }
+
   function spendHtml(raw) {
     var s;
     try { s = normalizeSpend(raw); }
-    catch (e) { return spendNoteHtml('the summary arrived in a shape this panel cannot read'); }
+    catch (e) { return spendUnreadableHtml('reading the summary threw: ' + (e && e.message ? e.message : 'unexpected shape')); }
+    if (s.unreadable) return spendUnreadableHtml('');
     if (s.empty) return spendNoteHtml('the server is recording model usage, but nothing has been spent yet');
 
     var html = '<div class="sp-tiles">' + totalsCard('Today', s.today) + totalsCard('This week', s.week) + '</div>';
@@ -614,8 +724,10 @@
   return {
     MAX_LINES: MAX_LINES, MAX_CHARS: MAX_CHARS, MAX_STREAM_CHARS: MAX_STREAM_CHARS, KINDS: KINDS,
     itemText: itemText, textList: textList,
-    isDelta: isDelta, streamId: streamId, createStream: createStream, streamPreviewHtml: streamPreviewHtml,
+    isDelta: isDelta, streamId: streamId, createStream: createStream,
+    streamPreviewHtml: streamPreviewHtml, streamSettledHtml: streamSettledHtml,
     normalizeSpend: normalizeSpend, spendHtml: spendHtml, spendNoteHtml: spendNoteHtml,
+    spendUnreadableHtml: spendUnreadableHtml,
     esc: esc, arr: arr, badList: badList, transport: transport, lineClass: lineClass,
     outputHtml: outputHtml, termBlockHtml: termBlockHtml,
     askHtml: askHtml, rosterHtml: rosterHtml, findingHtml: findingHtml,

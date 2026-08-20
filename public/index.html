@@ -3285,6 +3285,18 @@ function onSayDeltaClassic(d){
         if(sc && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 200) sc.scrollTop = sc.scrollHeight;
       }
     }
+    /* CW-10: an interrupted stream (done+aborted). The partial text stays,
+       labelled as partial, and stops being live at once — nothing is coming.
+       The node stays in the map so a late record can still replace it. */
+    if(r.settled){
+      var sn = SAYC_NODES[r.id];
+      if(sn && sn.parentNode){
+        sn.removeAttribute('data-say-preview');
+        sn.setAttribute('data-say-settled', r.id);
+        var sb = sn.querySelector('.cw9-saybody');
+        if(sb) sb.innerHTML = r.html;
+      }
+    }
   }catch(e){ /* a preview must never break the thread */ }
   return true;
 }
@@ -3295,17 +3307,26 @@ function onSayDeltaClassic(d){
    returned so a shorter recorded answer can be explained rather than just
    silently shrinking. */
 function saySettleClassic(d){
-  if(!SAYC || !SAYC.size()) return null;
-  var id = null; try{ id = SAYC.finalFor(d); }catch(e){ id = null; }
-  if(!id) return null;
-  var st = SAYC.get(id);
-  var shown = st ? st.text.length : 0;
-  SAYC.drop(id);
-  var n = SAYC_NODES[id]; delete SAYC_NODES[id];
+  if(!SAYC) return null;
+  var m = null; try{ m = SAYC.settleFor(d); }catch(e){ m = null; }
+  if(!m) return null;
+  var n = SAYC_NODES[m.id];
+  /* A recorded copy with NO text must never delete what the operator already
+     read: the preview's text stays and is relabelled instead. */
+  if(m.empty){
+    if(n && n.parentNode){
+      n.removeAttribute('data-say-preview');
+      n.setAttribute('data-say-settled', m.id);
+      var eb = n.querySelector('.cw9-saybody');
+      if(eb) eb.innerHTML = m.html;
+    }
+    return { empty:true };
+  }
+  delete SAYC_NODES[m.id];
   if(!n || !n.parentNode) return null;
   var mark = document.createComment('say-slot');
   n.parentNode.replaceChild(mark, n);
-  return { mark: mark, shown: shown };
+  return { mark: mark, shown: m.shown };
 }
 function sayDropSlot(slot){
   if(slot && slot.mark && slot.mark.parentNode) slot.mark.parentNode.removeChild(slot.mark);
@@ -3315,14 +3336,15 @@ function sayDropSlot(slot){
 setInterval(function(){
   if(!SAYC || !SAYC.size()) return;
   SAYC.stale(SAYC_STALE_MS).forEach(function(id){
+    var st = SAYC.get(id);
+    var html = st ? CW9B.streamSettledHtml(st, 'orphan') : '';
     SAYC.drop(id);
     var n = SAYC_NODES[id]; delete SAYC_NODES[id];
-    if(!n || !n.parentNode) return;
+    if(!n || !n.parentNode || !html) return;
     n.removeAttribute('data-say-preview');
-    var c = n.querySelector('.cw9-caret'); if(c) c.remove();
+    n.setAttribute('data-say-settled', id);
     var body = n.querySelector('.cw9-saybody');
-    if(body) body.insertAdjacentHTML('beforeend',
-      '<span class="cw9-stream-note">Jarvis stopped mid-answer and the recorded version never arrived. What is above is only what reached this screen — ask again if it matters.</span>');
+    if(body) body.innerHTML = html;     /* text kept, caret gone, reason said */
   });
 }, 5000);
 /* DEV/TEST ONLY — nothing in the app calls these. They feed the pieces, and the
@@ -3336,6 +3358,9 @@ function renderChat(d){
   /* CW-10: the recorded version of an answer we were previewing clears that
      preview first — one answer, one bubble, whatever the network did. */
   var sayslot = (d && d.type !== 'outgoing') ? saySettleClassic(d) : null;
+  /* An empty recorded copy is already reported on the preview itself — nothing
+     is painted in its place, and nothing the operator read is removed. */
+  if(sayslot && sayslot.empty) return;
   var empty = host.querySelector('.chat-empty'); if(empty) empty.remove();
   var outgoing = d.type === 'outgoing';
   var id = d.agent;

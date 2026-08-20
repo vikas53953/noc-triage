@@ -106,31 +106,81 @@ ok('an absurd messageId is refused rather than kept as a key',
 }
 
 // ── 4. the recorded message always wins, exactly once ───────────────────────
+// ONE rule decides a settle: the messageId matches. Two live reviews found the
+// same class of bug from guessing without one — first a finding card claiming a
+// preview (a second bubble), then, once the recorded answer was painted into
+// the preview's place, an unrelated message claiming a finished preview and
+// DELETING Jarvis's answer. There is no id-less path left.
 {
   const s = CW9B.createStream();
   s.accept(delta('m1', 'partial'));
-  ok('the final message is matched to its preview by id', s.finalFor({ messageId: 'm1', text: 'whole' }) === 'm1');
-  ok('a final for an answer we never previewed matches nothing', s.finalFor({ messageId: 'zz' }) === null);
-  // The id-less fallback is deliberately narrow. A LIVE test caught the bug it
-  // is guarding: a finding card landing mid-answer claimed the preview, and the
-  // rest of the answer opened a second bubble. Everything on this socket except
-  // the recorded answer arrives without a messageId.
+  const hit = s.settleFor({ messageId: 'm1', text: 'whole' });
+  ok('the recorded message is matched to its preview by id', hit && hit.id === 'm1' && hit.empty === false);
+  ok('it reports how much text the operator had already seen', hit.shown === 'partial'.length);
+  ok('a record for an answer we never previewed matches nothing', s.settleFor({ messageId: 'zz', text: 'x' }) === null);
+}
+{
+  const s = CW9B.createStream();
+  s.accept(delta('m1', 'partial'));
   ok('a still-streaming preview is never claimed by an id-less message',
-    s.finalFor({ text: 'whole' }) === null);
-  s.accept(delta('m1', '', { done: true }));
-  ok('once the last piece has landed, an id-less answer may claim it',
-    s.finalFor({ text: 'whole' }) === 'm1');
+    s.settleFor({ text: 'whole' }) === null);
+  s.accept(delta('m1', ' more', { done: true }));
+  ok('a FINISHED preview is not claimed by an id-less message either',
+    s.settleFor({ text: 'whole' }) === null);
   ok('a finding card can never claim a preview',
-    s.finalFor({ kind: 'finding', finding: { line: 'CRC climbing' } }) === null);
+    s.settleFor({ kind: 'finding', finding: { line: 'CRC climbing' } }) === null &&
+    s.settleFor({ kind: 'finding', messageId: 'm1', text: 'CRC' }) === null);
   ok('a roster or verdict card cannot either',
-    s.finalFor({ kind: 'roster', roster: {} }) === null && s.finalFor({ kind: 'verdict', text: 'x' }) === null);
-  ok('a message with no text at all cannot claim a preview',
-    s.finalFor({ text: '   ' }) === null && s.finalFor({ proposal: {} }) === null);
-  s.accept(delta('m2', 'another', { done: true }));
-  ok('with two previews open an id-less final is NOT guessed at', s.finalFor({ text: 'whole' }) === null);
-  ok('a delta is never treated as a final', s.finalFor(delta('m1', 'x')) === null);
-  ok('dropping a settled preview removes it', s.drop('m1') === true && s.size() === 1 && s.get('m1') === null);
+    s.settleFor({ kind: 'roster', roster: {} }) === null && s.settleFor({ kind: 'verdict', text: 'x' }) === null);
+  ok('a delta is never treated as a record', s.settleFor(delta('m1', 'x')) === null);
+  ok('the preview is still intact after all of that', s.get('m1').text === 'partial more' && s.size() === 1);
+  ok('dropping a preview removes it', s.drop('m1') === true && s.size() === 0 && s.get('m1') === null);
   ok('dropping twice is harmless', s.drop('m1') === false);
+}
+// BLOCKER (review round 2): a recorded copy with EMPTY text used to destroy the
+// preview and leave nothing behind — the answer the operator had just read
+// vanished. An empty record is reported, never obeyed.
+{
+  const s = CW9B.createStream();
+  s.accept(delta('m1', 'Looking at sw1 — the uplink flapped at 10:17.', { done: true }));
+  const m = s.settleFor({ messageId: 'm1', text: '' });
+  ok('an empty recorded copy does NOT replace the answer', m && m.empty === true);
+  ok('the text the operator read is handed back intact',
+    m.html.indexOf('Looking at sw1 — the uplink flapped at 10:17.') !== -1);
+  ok('the empty record is reported honestly', /came back empty/.test(m.html));
+  ok('the caret is gone — nothing is still being written', !/cw9-caret/.test(m.html));
+  ok('it no longer waits for a record that already came', !/Waiting for the recorded/.test(m.html));
+  ok('the answer stops being live, so it is never swept as an orphan',
+    s.size() === 0 && s.isLive('m1') === false);
+  ok('whitespace-only counts as empty', (() => {
+    const s2 = CW9B.createStream();
+    s2.accept(delta('x', 'text', { done: true }));
+    return s2.settleFor({ messageId: 'x', text: '   \n ' }).empty === true;
+  })());
+  ok('a second empty record changes nothing', s.settleFor({ messageId: 'm1', text: '' }) === null);
+  const late = s.settleFor({ messageId: 'm1', text: 'the real answer' });
+  ok('a LATE real record can still replace what the empty one left', late && late.empty === false);
+}
+// The backend flags an interrupted stream with done+aborted (BE PR #74).
+{
+  const s = CW9B.createStream();
+  s.accept(delta('m1', 'Half an answer before the'));
+  const r = s.accept(delta('m1', ' stream died', { done: true, aborted: true }));
+  ok('an aborted stream settles immediately', r.aborted === true && r.settled === 'aborted');
+  ok('the partial text is kept, in full', r.html.indexOf('Half an answer before the stream died') !== -1);
+  ok('it is labelled as partial, not as an answer', /Answer interrupted/.test(r.html) && /partial text/.test(r.html));
+  ok('it never waits for a record that is not coming',
+    !/Waiting for the recorded/.test(r.html) && !/cw9-caret/.test(r.html));
+  ok('an aborted answer is not live, so the sweeper leaves it alone',
+    s.size() === 0 && s.isLive('m1') === false && s.stale(1, 99999999).length === 0);
+  ok('the partial text is still readable afterwards', s.get('m1').text.indexOf('stream died') !== -1);
+  const late = s.settleFor({ messageId: 'm1', text: 'what the server kept' });
+  ok('a record arriving after an abort still replaces the partial', late && late.empty === false);
+  ok('done WITHOUT aborted still waits for the record normally', (() => {
+    const s2 = CW9B.createStream();
+    const r2 = s2.accept(delta('n1', 'all of it', { done: true }));
+    return r2.aborted === false && r2.settled === null && s2.isLive('n1') === true;
+  })());
 }
 {
   // the answer that never finished: not deleted, not left pretending to be live
@@ -197,15 +247,38 @@ ok('an enormous member is trimmed, not dumped',
 }
 
 // ── 7. the spend panel — honest before it is pretty ─────────────────────────
-ok('no summary at all is an honest empty state', /No spend data yet/.test(CW9B.spendHtml(null)));
+// BLOCKER (review round 2): "nothing has been spent yet" is a claim about the
+// server's record. It may only be made when a summary was actually UNDERSTOOD
+// and its counters really are zero. A body this panel cannot read is a
+// different claim, and the branch that said so was dead code — normalizeSpend
+// never threw, so an unreadable shape quietly claimed zero spend.
 ok('an empty summary never shows a zero as if it were measured',
   /No spend data yet/.test(CW9B.spendHtml({ today: {}, week: {}, byPurpose: {}, byModel: {} })));
+ok('a summary that IS understood and really is zero says nothing was spent',
+  /nothing has been spent yet/.test(CW9B.spendHtml({ today: {}, week: {} })));
 ok('the empty state says nothing is being estimated',
   /Nothing is being estimated/.test(CW9B.spendNoteHtml('')));
 ok('a 404 reason is shown, escaped', CW9B.spendNoteHtml(XSS).indexOf('<img') === -1 &&
   CW9B.spendNoteHtml(XSS).indexOf('&lt;img') !== -1);
-ok('a garbage summary degrades honestly instead of throwing',
-  /No spend data yet/.test(CW9B.spendHtml('not a summary')));
+ok('a body that is not a summary at all is UNREADABLE, not zero spend',
+  /can't be read/.test(CW9B.spendHtml('not a summary')) &&
+  !/nothing has been spent/.test(CW9B.spendHtml('not a summary')));
+ok('null, a number and an array are unreadable too',
+  /can't be read/.test(CW9B.spendHtml(null)) && /can't be read/.test(CW9B.spendHtml(7)) &&
+  /can't be read/.test(CW9B.spendHtml([{ today: 1 }])));
+ok('an object naming none of the fields this panel reads is unreadable',
+  /can't be read/.test(CW9B.spendHtml({ spend: 12, currency: 'usd' })));
+ok('the unreadable state refuses to guess in either direction',
+  /may or may not be spend recorded/.test(CW9B.spendUnreadableHtml('')));
+ok('unreadable is flagged on the normalised shape, not just in the markup',
+  CW9B.normalizeSpend('nonsense').unreadable === true &&
+  CW9B.normalizeSpend({ today: {} }).unreadable === false &&
+  CW9B.normalizeSpend({ today: {} }).empty === true);
+ok('a summary that throws while being read is unreadable, never zero', (() => {
+  const hostile = { get today() { throw new Error('boom'); } };
+  const html = CW9B.spendHtml(hostile);
+  return /can't be read/.test(html) && !/nothing has been spent/.test(html);
+})());
 {
   const fx = require('../test/cw10-say-delta-fixture.js').CW10_SPEND_FIXTURE;
   const html = CW9B.spendHtml(fx);
@@ -289,7 +362,11 @@ ok('the pages only ever put MODULE output into the DOM',
 ok('a preview restored from localStorage is not shown as live',
   /cw10SweepRestoredPreviews/.test(desk) && /never recorded/.test(desk));
 ok('a preview whose recorded answer never arrives is said out loud, not deleted',
-  /stopped mid-answer/.test(desk) && /stopped mid-answer/.test(idx));
+  /CW9B\.streamSettledHtml\(st, 'orphan'\)/.test(desk) && /CW9B\.streamSettledHtml\(st, 'orphan'\)/.test(idx));
+ok('the wording for a settled preview lives in the module, not in two pages',
+  /stopped mid-answer/.test(sharedJs) && !/stopped mid-answer/.test(desk) && !/stopped mid-answer/.test(idx));
+ok('a settled preview keeps its text on both pages (innerHTML from the module, never emptied)',
+  /body\.innerHTML = html;/.test(desk) && /body\.innerHTML = html;/.test(idx));
 ok('old messages with no deltas render exactly as before (nothing was removed)',
   /jvMsg\(d\.agentName \|\| d\.agent \|\| 'Jarvis', d\.text \|\| '', d\.timestamp\);/.test(desk));
 
@@ -302,6 +379,30 @@ ok('an unreachable server is admitted too', /could not be read/.test(desk));
 ok('the panel draws through the shared module, not its own markup',
   /CW9B\.spendHtml\(d\)/.test(desk) && /CW9B\.spendNoteHtml\(/.test(desk));
 ok('a closed panel does not poll the server', /if\(!p\.open\) return;/.test(desk));
+// BLOCKER (review round 2): an open Spend panel grew the queue footer until the
+// incident queue and the "Open a new triage" button were pushed out of a column
+// that clips its overflow (620px and 760px shells). The panel's contents scroll
+// inside the panel, and the footer can never take more than half the column.
+ok('the panel contents scroll inside the panel',
+  /\.sp-body\{[^}]*max-height:clamp\([^}]*overflow-y:auto/.test(sharedCss.replace(/\s+/g, '')));
+ok('the queue footer can never take the whole column',
+  /\.qfoot\{[^}]*max-height:50%[^}]*overflow-y:auto/.test(desk.replace(/\s+/g, '')));
+ok('the reason is written down where the next person will see it',
+  /pushed out of a column/.test(sharedCss) && /never push the work queue/.test(desk));
+
+// BLOCKER (review round 2): an empty recorded copy must not delete the answer.
+ok('both pages relabel the preview instead of deleting it on an empty record',
+  /if\(m\.empty\)\{/.test(desk) && /if\(m\.empty\)\{/.test(idx));
+ok('both pages then paint NOTHING in its place (no empty bubble)',
+  /if\(slot && slot\.empty\) return;/.test(desk) && /if\(sayslot && sayslot\.empty\) return;/.test(idx));
+ok('the bridge path refuses an empty record the same way', /if\(tslot && tslot\.empty\) break;/.test(desk));
+ok('the settled node stops being a live preview but is still replaceable later',
+  /data-say-settled/.test(desk) && /data-say-settled/.test(idx));
+
+// An interrupted stream (BE PR #74: done + aborted).
+ok('both pages settle an aborted stream at once', /if\(r\.settled\)\{/.test(desk) && /if\(r\.settled\)\{/.test(idx));
+ok('the abort wording lives in the module', /Answer interrupted/.test(sharedJs) &&
+  !/Answer interrupted/.test(desk) && !/Answer interrupted/.test(idx));
 ok('the panel styles live with the shared module', /\.spendpanel\{/.test(sharedCss) && /\.sp-fill\{/.test(sharedCss));
 ok('the streamed-answer styles do too', /\.cw9-caret\{/.test(sharedCss));
 ok('the caret respects reduced motion', /prefers-reduced-motion[\s\S]*cw9-caret/.test(sharedCss));

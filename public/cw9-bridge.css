@@ -123,7 +123,14 @@
 .spendpanel[open]>summary::before{content:"▾"}
 .spendpanel>summary .sp-hint{margin-left:auto;font-size:.63rem;font-weight:600;letter-spacing:0;
   text-transform:none;color:var(--ink3);white-space:nowrap}
-.sp-body{border-top:1px solid var(--line);padding:.5rem .6rem}
+/* The panel's contents scroll INSIDE the panel. Without this an open Spend
+   panel grew the queue footer until the incident queue and the "Open a new
+   triage" button were pushed out of a column that clips its overflow — a
+   reviewer found it at short shell heights (620px and 760px). */
+.sp-body{
+  border-top:1px solid var(--line);padding:.5rem .6rem;
+  max-height:clamp(96px, 26vh, 300px);overflow-y:auto;overscroll-behavior:contain
+}
 .sp-tiles{display:grid;grid-template-columns:1fr 1fr;gap:.4rem}
 .sp-tile{border:1px solid var(--line);border-radius:8px;padding:.4rem .5rem;display:flex;flex-direction:column;gap:.1rem}
 .sp-tl{font-size:.61rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--ink3)}

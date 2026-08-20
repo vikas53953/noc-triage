@@ -166,7 +166,14 @@ button,input,select,textarea{font-family:inherit}
 .sla.ok{color:var(--ok);background:var(--ok-bg)}
 .sla.late{color:var(--bad);background:var(--bad-bg)}
 .sla.unk{color:var(--ink3);background:rgba(148,163,184,.14)}
-.qfoot{padding:.6rem;border-top:1px solid var(--line);flex-shrink:0;background:var(--panel)}
+/* The queue footer holds the Spend panel and "Open a new triage". Opening a
+   panel here must never push the work queue — or the button itself — out of a
+   column that clips its overflow. So the footer can never take more than half
+   the column, and scrolls inside itself if it somehow still needs to. */
+.qfoot{
+  padding:.6rem;border-top:1px solid var(--line);flex-shrink:0;background:var(--panel);
+  max-height:50%;overflow-y:auto;overscroll-behavior:contain
+}
 .newform{display:none;flex-direction:column;gap:.4rem;margin-bottom:.5rem}
 .newform.on{display:flex}
 .newform select,.newform textarea{
@@ -1474,6 +1481,21 @@ function onSayDelta(d){
         if(atBottom()) $('chat').scrollTop = $('chat').scrollHeight;
       }
     }
+    /* CW-10: the backend flagged a stream it could not finish (done+aborted).
+       The partial text stays on screen, labelled as partial, and this stops
+       being a live preview at once — no recorded message is coming, so the
+       caret must not blink at the operator waiting for one. The node is KEPT
+       in the map so a late record can still replace it. */
+    if(r.settled){
+      var sn = sayNodeFor(r.id);
+      if(sn){
+        sn.removeAttribute('data-say-preview');
+        sn.setAttribute('data-say-settled', r.id);
+        var sb = sn.querySelector('.cw9-saybody');
+        if(sb) sb.innerHTML = r.html;
+      }
+      persistWork();
+    }
   }catch(e){ /* a preview must never break the thread */ }
   return true;
 }
@@ -1493,19 +1515,29 @@ function onSayDelta(d){
    explanation reads like lost text, so how long the preview got is returned
    with the marker and the caller says so plainly. */
 function saySettle(d){
-  if(!SAY || !SAY.size()) return null;
-  var id = null;
-  try{ id = SAY.finalFor(d); }catch(e){ id = null; }
-  if(!id) return null;
-  var st = SAY.get(id);
-  var shown = st ? st.text.length : 0;
-  SAY.drop(id);
-  var n = SAYNODES[id];
-  delete SAYNODES[id];
+  if(!SAY) return null;
+  var m = null;
+  try{ m = SAY.settleFor(d); }catch(e){ m = null; }
+  if(!m) return null;
+  var n = SAYNODES[m.id];
+  /* CW-10 BLOCKER fix: a recorded copy with NO text must never delete what the
+     operator already read. The preview's text stays exactly where it is and is
+     relabelled — the empty record is reported, not obeyed. */
+  if(m.empty){
+    if(n && n.parentNode){
+      n.removeAttribute('data-say-preview');
+      n.setAttribute('data-say-settled', m.id);
+      var eb = n.querySelector('.cw9-saybody');
+      if(eb) eb.innerHTML = m.html;
+      persistWork();
+    }
+    return { empty:true };             /* nothing is painted in its place */
+  }
+  delete SAYNODES[m.id];
   if(!n || !n.parentNode) return null;
   var mark = document.createComment('say-slot');
   n.parentNode.replaceChild(mark, n);
-  return { mark: mark, shown: shown };
+  return { mark: mark, shown: m.shown };
 }
 
 /* Move whatever the paint just appended into the slot the preview held, and
@@ -1532,14 +1564,15 @@ function sayTakeSlot(slot, from, finalLen){
 function saySweep(){
   if(!SAY || !SAY.size()) return;
   SAY.stale(SAY_STALE_MS).forEach(function(id){
+    var st = SAY.get(id);
+    var html = st ? CW9B.streamSettledHtml(st, 'orphan') : '';
     SAY.drop(id);
     var n = SAYNODES[id]; delete SAYNODES[id];
-    if(!n || !n.parentNode) return;
+    if(!n || !n.parentNode || !html) return;
     n.removeAttribute('data-say-preview');
+    n.setAttribute('data-say-settled', id);
     var body = n.querySelector('.cw9-saybody');
-    if(body) body.insertAdjacentHTML('beforeend',
-      '<span class="cw9-stream-note">Jarvis stopped mid-answer and the recorded version never arrived. What is above is only what reached this screen — ask again if it matters.</span>');
-    var c = n.querySelector('.cw9-caret'); if(c) c.remove();
+    if(body) body.innerHTML = html;     /* text kept, caret gone, reason said */
   });
 }
 setInterval(saySweep, 5000);
@@ -4260,6 +4293,9 @@ function scheduleReconnect(){ wsRetry = Math.min(wsRetry + 1, 6); setTimeout(con
 function onChat(d){
   if(d && d.type === 'outgoing') return;
   var slot = saySettle(d);
+  /* An empty recorded copy is already reported on the preview itself — there is
+     no text to paint, and an empty bubble under it would say nothing. */
+  if(slot && slot.empty) return;
   if(!slot) return onChatPaint(d);
   var from = $('chat').children.length;
   try{ onChatPaint(d); }
@@ -4303,6 +4339,7 @@ function onTriage(type, d){
       /* CW-10: same rule on the bridge path — the recorded message clears the
          preview it belongs to and is painted into its slot. */
       var tslot = d.operator ? null : saySettle(d);
+      if(tslot && tslot.empty) break;
       var tfrom = $('chat').children.length;
       try{
       if(d.operator) bubble('me', esc(d.agentName || 'Operator') + ' · ' + clockOf(d.ts), md(d.text||''));

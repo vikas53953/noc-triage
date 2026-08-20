@@ -23,6 +23,8 @@
  *   cw10StreamXss()   — hostile text in the pieces: printed, never executed
  *   cw10StreamOrphan()— pieces, done, and NO final (the honest stale note)
  *   cw10StreamShort() — the recorded answer is much shorter than the preview
+ *   cw10StreamEmpty() — the recorded copy comes back EMPTY (text must survive)
+ *   cw10StreamAborted()— the backend cuts the stream short (done + aborted)
  *   cw10Spend()       — draw the Spend panel from a fixture (desk only)
  *   cw10SpendEmpty()  — the honest empty state
  */
@@ -61,7 +63,8 @@ function cw10Play(id, pieces, opts) {
   (function step() {
     if (i >= pieces.length) {
       if (!opts.noFinal) setTimeout(function () {
-        cw10Final(id, cw10Capped(opts.finalText || CW10_ANSWER));
+        var txt = opts.finalText === undefined ? CW10_ANSWER : opts.finalText;
+        cw10Final(id, txt === '' ? '' : cw10Capped(txt));
       }, 700);
       return;
     }
@@ -119,6 +122,33 @@ function cw10StreamShort() {
     { gap: 40, finalText: long });
 }
 
+/* 6 — the recorded copy comes back EMPTY. What the operator already read must
+   stay on screen, relabelled — an empty record is reported, never obeyed. */
+function cw10StreamEmpty() {
+  var id = 'fx-empty-' + Date.now().toString(36);
+  cw10Play(id, cw10Chunks(CW10_ANSWER, 14).map(function (c, n) { return { delta: c, seq: n }; }),
+    { finalText: '' });
+}
+
+/* 7 — the backend could not finish the stream: the closing delta carries
+   {done:true, aborted:true}. The partial text stays, labelled as partial, and
+   the screen stops waiting for a record that is not coming. */
+function cw10StreamAborted() {
+  var id = 'fx-abort-' + Date.now().toString(36);
+  var cs = cw10Chunks(CW10_ANSWER, 14).map(function (c, n) { return { delta: c, seq: n }; }).slice(0, 6);
+  var i = 0;
+  (function step() {
+    if (i >= cs.length) return;
+    var last = i === cs.length - 1;
+    window.__cw10DevDelta({
+      kind: 'say-delta', messageId: id, delta: cs[i].delta, seq: cs[i].seq,
+      done: last, aborted: last || undefined,
+    });
+    i++;
+    setTimeout(step, 60);
+  }());
+}
+
 /* ---------- Spend panel (desk only) ---------- */
 var CW10_SPEND_FIXTURE = {
   today: { input_tokens: 184320, output_tokens: 21440, cache_read: 96110, cache_creation: 12800, calls: 37 },
@@ -137,6 +167,8 @@ var CW10_SPEND_FIXTURE = {
 };
 function cw10Spend() { window.__cw10DevSpend(CW10_SPEND_FIXTURE); }
 function cw10SpendEmpty() { window.__cw10DevSpend({ today: {}, week: {}, byPurpose: {}, byModel: {} }); }
+/* A body this panel cannot read is NOT a claim that nothing was spent. */
+function cw10SpendUnreadable() { window.__cw10DevSpend({ spend: 12, currency: 'usd' }); }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
