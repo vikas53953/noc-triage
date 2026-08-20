@@ -182,6 +182,52 @@ ok('an absurd messageId is refused rather than kept as a key',
     return r2.aborted === false && r2.settled === null && s2.isLive('n1') === true;
   })());
 }
+// A SAFETY-DECLINED abort (done + aborted + discard): the guardrail refused the
+// draft, so the text is not "what reached the screen" — it is content that was
+// thrown out. It must not survive on screen OR in the saved thread.
+{
+  const s = CW9B.createStream();
+  s.accept(delta('m1', 'REFUSED-CONTENT-ONE the safety check will throw out'));
+  const r = s.accept(delta('m1', ' REFUSED-CONTENT-TWO', { done: true, aborted: true, discard: true }));
+  ok('a discarded draft is flagged as a discard, not a plain abort',
+    r.discard === true && r.settled === 'discarded' && r.aborted === true);
+  ok('NOTHING of the draft text is rendered',
+    r.html.indexOf('REFUSED-CONTENT-ONE') === -1 && r.html.indexOf('REFUSED-CONTENT-TWO') === -1);
+  ok('the operator is told plainly what happened',
+    /withdrawn by the safety check/.test(r.html) && /recorded message below is what stands/.test(r.html));
+  ok('no caret, no waiting line, no leftover caveats',
+    !/cw9-caret/.test(r.html) && !/Waiting for the recorded/.test(r.html) && !/did not reach the screen/.test(r.html));
+  ok('the text is dropped from the STATE too, not just from the markup',
+    s.get('m1').text === '');
+  ok('re-rendering the settled answer can never bring the text back',
+    CW9B.streamSettledHtml(s.get('m1'), 'discarded').indexOf('REFUSED-CONTENT') === -1 &&
+    CW9B.streamSettledHtml({ text: 'REFUSED-CONTENT-THREE' }, 'discarded').indexOf('REFUSED-CONTENT-THREE') === -1);
+  ok('a discarded answer is not live and is never swept as an orphan',
+    s.size() === 0 && s.isLive('m1') === false && s.stale(1, 99999999).length === 0);
+  const late = s.settleFor({ messageId: 'm1', text: 'What the server actually recorded.' });
+  ok('the follow-up record with the same id settles normally',
+    late && late.empty === false && late.shown === 0);
+  ok('a discarded draft that was capped or holed carries none of that over', (() => {
+    const s2 = CW9B.createStream();
+    s2.accept(delta('d1', 'x'.repeat(30000)));
+    const r2 = s2.accept(delta('d1', 'tail', { seq: 9, done: true, aborted: true, discard: true }));
+    return !/longer than the live preview/.test(r2.html) && s2.get('d1').text === '';
+  })());
+}
+// aborted WITHOUT discard is unchanged — the partial is the operator's evidence.
+{
+  const s = CW9B.createStream();
+  const r = s.accept(delta('m1', 'Half an answer', { done: true, aborted: true }));
+  ok('a plain abort still KEEPS the partial text', r.html.indexOf('Half an answer') !== -1);
+  ok('a plain abort is not a discard', r.discard === false && r.settled === 'aborted');
+  ok('and it still says it was interrupted, not withdrawn',
+    /Answer interrupted/.test(r.html) && !/withdrawn by the safety check/.test(r.html));
+  ok('discard:true without an abort changes nothing', (() => {
+    const s2 = CW9B.createStream();
+    const r2 = s2.accept(delta('q1', 'still streaming', { discard: true }));
+    return r2.settled === null && s2.get('q1').text === 'still streaming';
+  })());
+}
 {
   // the answer that never finished: not deleted, not left pretending to be live
   const s = CW9B.createStream();
@@ -403,6 +449,18 @@ ok('the settled node stops being a live preview but is still replaceable later',
 ok('both pages settle an aborted stream at once', /if\(r\.settled\)\{/.test(desk) && /if\(r\.settled\)\{/.test(idx));
 ok('the abort wording lives in the module', /Answer interrupted/.test(sharedJs) &&
   !/Answer interrupted/.test(desk) && !/Answer interrupted/.test(idx));
+// The persistence half of the discard: the desk SAVES its thread, so removing a
+// withdrawn draft from the screen is not enough — the saved copy must be
+// rewritten at once, not in 300ms, or a reload brings it back.
+ok('the desk flushes its saved thread immediately on a discard',
+  /if\(r\.discard\) persistNow\(\); else persistWork\(\);/.test(desk));
+ok('persistNow writes on the spot, not on the debounce',
+  /function persistNow\(\)\{\s*clearTimeout\(persistT\);/.test(desk));
+ok('the ordinary path is still debounced', /persistT = setTimeout\(persistNow, 300\);/.test(desk));
+ok('the reason is written down where the next person will see it',
+  /reload must never bring back what the safety check refused/.test(desk));
+ok('the classic console has no local copy of the thread to clear',
+  !/localStorage\.setItem\([^)]*chat/i.test(idx));
 ok('the panel styles live with the shared module', /\.spendpanel\{/.test(sharedCss) && /\.sp-fill\{/.test(sharedCss));
 ok('the streamed-answer styles do too', /\.cw9-caret\{/.test(sharedCss));
 ok('the caret respects reduced motion', /prefers-reduced-motion[\s\S]*cw9-caret/.test(sharedCss));

@@ -1492,9 +1492,13 @@ function onSayDelta(d){
         sn.removeAttribute('data-say-preview');
         sn.setAttribute('data-say-settled', r.id);
         var sb = sn.querySelector('.cw9-saybody');
-        if(sb) sb.innerHTML = r.html;
+        if(sb) sb.innerHTML = r.html;   /* discarded → the module returns no text at all */
       }
-      persistWork();
+      /* A withdrawn draft must not survive anywhere: the module has already
+         dropped it from the state, the line above takes it off the screen, and
+         this writes the saved thread IMMEDIATELY rather than in 300ms — a
+         reload must never bring back what the safety check refused. */
+      if(r.discard) persistNow(); else persistWork();
     }
   }catch(e){ /* a preview must never break the thread */ }
   return true;
@@ -4430,9 +4434,17 @@ function cw9FitHtml(container, budget){
   return { html: out.join(''), dropped: dropped };
 }
 var persistT = null;
+/* Saving is debounced — except when what is being saved is a REMOVAL. A
+   discarded draft that is still sitting in localStorage is the console keeping
+   content the safety check threw out, and a browser closed inside the debounce
+   window would leave it there. persistNow() writes on the spot. */
 function persistWork(){
   clearTimeout(persistT);
-  persistT = setTimeout(function(){
+  persistT = setTimeout(persistNow, 300);
+}
+function persistNow(){
+  clearTimeout(persistT);
+  (function(){
     try{
       /* CW-9: the live session pane is part of what the operator had on screen,
          so it is kept with the thread. Every block in it was built by
@@ -4459,7 +4471,7 @@ function persistWork(){
         sysMsg('This conversation is now larger than this browser can keep. The newest messages are still saved for a reload; the oldest ones are only in the incident record from here on.');
       }
     }catch(e){}
-  }, 300);
+  }());
 }
 function restoreWork(){
   var raw = null; try{ raw = localStorage.getItem(workKey()); }catch(e){}

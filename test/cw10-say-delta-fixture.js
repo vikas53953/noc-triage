@@ -25,6 +25,7 @@
  *   cw10StreamShort() — the recorded answer is much shorter than the preview
  *   cw10StreamEmpty() — the recorded copy comes back EMPTY (text must survive)
  *   cw10StreamAborted()— the backend cuts the stream short (done + aborted)
+ *   cw10StreamDiscarded()— the safety check WITHDRAWS the draft (+ discard)
  *   cw10Spend()       — draw the Spend panel from a fixture (desk only)
  *   cw10SpendEmpty()  — the honest empty state
  */
@@ -143,6 +144,31 @@ function cw10StreamAborted() {
     window.__cw10DevDelta({
       kind: 'say-delta', messageId: id, delta: cs[i].delta, seq: cs[i].seq,
       done: last, aborted: last || undefined,
+    });
+    i++;
+    setTimeout(step, 60);
+  }());
+}
+
+/* 8 — the safety check refused the draft: the closing delta carries
+   {done:true, aborted:true, discard:true}. The partial text is REMOVED from the
+   screen and from the saved thread — reload after running this and nothing of
+   it comes back — and the recorded message that follows stands on its own. */
+function cw10StreamDiscarded() {
+  var id = 'fx-discard-' + Date.now().toString(36);
+  var cs = cw10Chunks(CW10_ANSWER, 14).map(function (c, n) { return { delta: c, seq: n }; }).slice(0, 8);
+  var i = 0;
+  (function step() {
+    if (i >= cs.length) {
+      setTimeout(function () {
+        cw10Final(id, 'I cannot share that draft. Here is what I can say: the uplink is up. [FIXTURE]');
+      }, 900);
+      return;
+    }
+    var last = i === cs.length - 1;
+    window.__cw10DevDelta({
+      kind: 'say-delta', messageId: id, delta: cs[i].delta, seq: cs[i].seq,
+      done: last, aborted: last || undefined, discard: last || undefined,
     });
     i++;
     setTimeout(step, 60);

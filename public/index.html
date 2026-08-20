@@ -3287,7 +3287,11 @@ function onSayDeltaClassic(d){
     }
     /* CW-10: an interrupted stream (done+aborted). The partial text stays,
        labelled as partial, and stops being live at once — nothing is coming.
-       The node stays in the map so a late record can still replace it. */
+       The node stays in the map so a late record can still replace it.
+       With discard:true (the safety check refused the draft) the module returns
+       no text at all, so the same line below removes it from the screen. This
+       console keeps no local copy of the thread, so there is nothing else to
+       clear — the desk, which does, flushes its saved copy. */
     if(r.settled){
       var sn = SAYC_NODES[r.id];
       if(sn && sn.parentNode){

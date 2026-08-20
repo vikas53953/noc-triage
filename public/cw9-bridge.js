@@ -351,6 +351,8 @@
     aborted: 'Answer interrupted — this is the partial text Jarvis had written when the stream stopped. Nothing further is coming; ask again if you need the rest.',
     /* nothing more ever arrived and no record came */
     orphan: 'Jarvis stopped mid-answer and the recorded version never arrived. What is above is only what reached this screen — ask again if it matters.',
+    /* the safety check refused the draft (delta done+aborted+discard) */
+    discarded: 'The draft answer was withdrawn by the safety check — the recorded message below is what stands.',
   };
 
   function streamBody(st) {
@@ -382,6 +384,12 @@
      record that never came. */
   function streamSettledHtml(st, reason) {
     if (!st) return '';
+    /* A DISCARDED draft is the one case where the text must NOT survive: the
+       safety check refused that content, so leaving it on screen (or in the
+       saved thread) would be the console keeping what the guardrail threw out.
+       Nothing of it is rendered — not the text, not the "part of this did not
+       arrive" caveats about it — only the line saying it was withdrawn. */
+    if (reason === 'discarded') return note(SETTLE_NOTES.discarded);
     var body = st.text ? esc(st.text).replace(/\n/g, '<br>')
       : '<span class="cw9-stream-wait">Nothing of this answer reached the screen.</span>';
     return '<span class="cw9-stream done">' + body + '</span>' +
@@ -479,12 +487,20 @@
            coming, so waiting for one would leave a caret blinking at an
            operator for no reason. A late record can still replace it. */
         if (st.done && d.aborted === true) {
-          closeOut(id, 'aborted');
+          /* discard = the safety check refused the draft. The partial text is
+             not "what reached the screen" any more, it is content a guardrail
+             threw out, so it is DELETED here — from the state as well as the
+             screen, because the state is what the page saves. The page flushes
+             its saved copy straight after, so a reload cannot bring it back. */
+          var discard = d.discard === true;
+          if (discard) { st.text = ''; st.capped = false; st.gaps = false; }
+          var reason = discard ? 'discarded' : 'aborted';
+          closeOut(id, reason);
           return { id: id, first: first, done: true, stale: stale, aborted: true,
-                   settled: 'aborted', html: streamSettledHtml(st, 'aborted') };
+                   discard: discard, settled: reason, html: streamSettledHtml(st, reason) };
         }
         return { id: id, first: first, done: st.done, stale: stale, aborted: false,
-                 settled: null, html: streamPreviewHtml(st) };
+                 discard: false, settled: null, html: streamPreviewHtml(st) };
       },
 
       /* What (if anything) this ORDINARY message does to a preview.
