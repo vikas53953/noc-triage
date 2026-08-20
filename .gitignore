@@ -34,3 +34,6 @@ Thumbs.db
 autoresume.log
 autoresume-launcher.log
 autoresume-probe*
+demo-captures/
+
+.claude/

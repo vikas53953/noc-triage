@@ -1,147 +1,97 @@
-# noc-triage — session handoff (any Claude session can resume from this)
+# noc-triage — HANDOFF (any tool — Claude Code, Cursor, anything — resumes from this + TRACKER.md)
 
 Live, honest NOC/SOC triage console for Vikas. Private repo **vikas53953/noc-triage**.
-Run: `cd C:\Users\vikasmit\noc-triage && PORT=3000 node server.js` → http://localhost:3000
-`.env.local` (gitignored) holds Cisco DevNet sandbox creds + `ANTHROPIC_API_KEY` (credits topped up 2026-08-17).
-Jarvis default model = `claude-opus-5` (`JARVIS_MODEL` env overrides). Never fake data — see "Laws".
+Run: `cd C:\Users\vikasmit\noc-triage && npm install && PORT=3000 node server.js` → open
+**http://localhost:3000/desk.html** (the real console; the root page is the older classic view).
+Tests: `npm test` (33 suites, ~1800 assertions, must stay green — chain exits non-zero on any failure).
+`.env.local` (gitignored) holds Cisco DevNet sandbox creds + `ANTHROPIC_API_KEY`.
+Jarvis default model `claude-opus-5`; ALL testing uses `JARVIS_MODEL=claude-sonnet-5` (Vikas's spend rule).
 
-## How work is done here (follow this)
-- One coherent feature at a time, in WAVES. Each feature: split BACKEND vs `public/index.html` (UI) to a
-  PINNED CONTRACT so two agents run in PARALLEL on DISJOINT files. Almost everything shares
-  server.js / sources/triage.js / sources/jarvis.js / public/index.html, so features are SEQUENTIAL.
-- Each agent works in its OWN clone (`git clone … "$HOME/noc-xxx"`), branch, PR — NOT the main checkout
-  (worktree isolation is flaky on this machine). Build → a DIFFERENT agent reviews LIVE → merge → restart
-  the :3000 server → verify → next. The :3000 background node process gets reaped between turns; relaunch
-  when down.
-- Vikas reviews finished work as a VISUAL HTML PAGE with the feedback layer
-  (`~/.claude/review-kit/feedback-layer.js`, inlined). Short plain replies. One question at a time with a
-  recommendation. Fix the CLASS, not the case. No "done" without fresh live evidence — he confirms, never discovers.
+## Laws (absolute, never regress — every reviewer checks these)
+1. **No static bindings — intent first** (Vikas 2026-08-17): the LLM understands intent and routes;
+   deterministic code is for SAFETY ONLY (refusals, gates, scrubbing). Keyword→answer shortcuts are defects.
+2. **Ambiguity → ask, never assume**: underspecified ask → Jarvis runs NOTHING and asks (the conduct layer
+   enforces this on EVERY entry path — chat and triage share ONE gate in sources/conduct.js).
+3. **Never fabricate**: real data or an honest "not connected / unread / unreachable / nothing new".
+   Narration is composed FROM evidence (per-round diffs), never from intent. Verdicts trace every claim to
+   evidence ids from THIS incident; unsupported = "suspected — unverified".
+4. **Permission gate**: deny = ZERO wire calls; writes blocked BEFORE the gate; write asks in any phrasing
+   get an honest out-loud refusal (never silence, never execution). Read-only guardrail (show/ping/traceroute/dir/more).
+5. **Secrets never persist**: session-log scrubber covers 40+ IOS/SNMP/WPA/TACACS forms (table-driven tests
+   in sources/scrubber.cw9.test.js — new forms are one-line additions). XSS-escape every DOM sink.
+6. **Short messages**: Jarvis chat text hard-capped (conduct.TEXT_MAX=280) in code, including the
+   streamed preview. Raw evidence lives in collapsible cards + the terminal pane, never text walls.
+7. **Adopt, don't hand-write, integrations** (2026-08-20): new integrations = security-vetted MCP servers
+   through the CW-8 connector; prefer Anthropic server-side features (web search/fetch, compaction).
+8. Timezones: bare clock times anchored in operatorTz, most-recent-past. Vikas reviews everything as a
+   visual HTML page (feedback layer at ~/.claude/review-kit/feedback-layer.js) — never walls of text.
 
-## Laws (absolute, never regress)
-**No static bindings — intent first** (Vikas, 2026-08-17): this is a purely agentic console. Jarvis
-UNDERSTANDS the operator's intent (LLM), delegates to the agent capable of serving it, and composes the
-answer from what comes back. Hardcoded phrase→action bindings, keyword regexes that ANSWER (rather than
-safety-refuse), and fixed assumptions about what the operator meant are defects. Deterministic code is
-for SAFETY ONLY (write refusal, gates, scrubbing) — it may refuse, it must never answer or route in
-place of intent. When a rule and intent disagree: safety refuses; everything else follows intent.
-**Ambiguity → ask, never assume** (Vikas, 2026-08-17): when an operator request is ambiguous (device not
-named / several candidates / unclear target), Jarvis runs NOTHING and asks, listing the real options.
-Auto-run only when exactly one candidate can serve the ask. The chosen answer is remembered for the rest
-of that conversation. Reviewers must run an operator-experience pass: "would a senior NOC engineer behave
-this way?" — wrong-but-honest guessing is a defect, not a feature.
-Real data or an honest "not connected/unread/unreachable" — NEVER fabricate. Permission gate: deny = ZERO
-wire calls, writes blocked BEFORE the gate. Read-only guardrail (only show/ping/traceroute/dir/more).
-Secrets scrubbed from everything persisted. XSS-escape every DOM sink. Timezone: bare clock times anchored
-in the operator's tz (sent as `operatorTz`), most-recent-past, never a future window.
-**Adopt, don't hand-write, integrations** (Vikas, 2026-08-20): new external integrations arrive as
-security-vetted MCP servers through the CW-8 connector (gate + read-only posture unchanged), not as
-hand-written adapters. Hand-write only when no trustworthy MCP server exists. Prefer Anthropic server-side
-features (web search/fetch, compaction) over building equivalents.
+## How work is done (the wave process — follow it exactly)
+One feature = one **CW wave** (CW = "Copilot Wave", OUR numbering, not PR numbers). Pin a contract in
+docs/copilot-cwN-*-contract.md → backend + frontend built in PARALLEL in OWN CLONES (`git clone … ~/noc-x`;
+worktrees are flaky on this machine) against the pinned envelope → PR each → a DIFFERENT agent adversarially
+reviews (fresh attacks, live on a spare port, operator-experience pass: "would a senior NOC engineer accept
+this?") → fix at CLASS level, re-review until "VERDICT: APPROVE" → merge BE first → restart :3000 → live
+verify on the merged build → visual evidence page. NOTE: `gh pr review --approve` self-rejects (same
+account) — the approval signal is a PR comment starting "VERDICT: APPROVE".
 
-## What's BUILT + MERGED (on master)
-Evidence Split Console UI (its own identity, not mission-control). Triage brain: symptom window/scope
-parsing, baseline deltas, top-3 alarm groups (chronic vs new), running-config diff finding, blind spots
-ranked by symptom, committed ranked hypothesis + if/then + confidence. Severity-driven cadence (P1 parallel
-/ P3 sequential). Permission gate (auto/ask/deny) + approval log. Jarvis = real Claude (Opus 5) delegation.
-Agents run REAL reads; **Config-Keeper runs real CLI via Catalyst Center Command Runner** (`runShowCommand`,
-`getRunningConfig` in sources/catalyst-center.js — verified live: `show version` sw1 → 17.12.01prd9).
-Artifacts + leadership/engineer docs + structured ServiceNow export. Incident id (INC-YYYYMMDD-NNN),
-time-to-verdict. Reload persistence (chat + activity, sources/chat-store.js). Professional chat (right/left
-bubbles, chevron collapse, markdown, auto-scroll). **Roadmap Wave 1** bridge roles + SLA clocks + MTTA +
-lifecycle roll-up. **Wave 2** alert-driven ingestion (`POST /api/alerts` auto-opens a triage, ⚡ badge).
-**Wave 3** multi-incident queue + `relatedTo` dedupe + on-call notifier (`ONCALL_WEBHOOK`, honest
-not-configured) + opt-in approval timeout (`APPROVAL_TIMEOUT_MS`, default off). All reported QA bugs fixed
-(timezone anchor, retry-404, silent-422, dup activity, MTTR→"time to verdict", etc.).
-
-## IN FLIGHT / NEXT (sequence; shared files → mostly one at a time)
-1. **CLI routing fix** — DONE (PR #38, 4 adversarial review rounds, merged 2026-08-17, verified live on
-   :3000: Jarvis "run show version on sw2" → real sw2 output). One choke point `executeDeviceCli()` in
-   live-agents.js owns write-refusal, guardrail (raw fragment), named-device resolution, re-entrant
-   permission gate (AsyncLocalStorage), scrub. Known backlog (reviewer-logged, fails safe): checkIntent
-   judges a delegated sub-question's RATIONALE ("after the upgrade") and can refuse a legit read.
-2. **Roadmap Wave 4 — cross-domain correlation** — DONE. PRs #39+#37 adversarially reviewed (2 blockers
-   fixed at class level: candidate evidence never decided by a display cap), merged 2026-08-17, verified
-   live on :3000 (honest null on the real estate; positive path proven with widened window). sources/correlation.js.
-3. **SSH/Netmiko backend** — DONE (PR #40, 3 adversarial review rounds incl. mutation-tested test suite,
-   merged 2026-08-17). sources/ssh_sidecar.py + ssh-runner.js; NOT yet wired into live-agents (deliberate —
-   that is copilot wave CW-5). DNAC sw1–sw4 stay on Command Runner (not SSH-reachable). A real SSH success
-   needs Vikas to reserve the DevNet always-on IOS-XE sandbox and paste creds (SSH_IOSXE_USER/PASS in
-   .env.local) — DevNet retired public static passwords; all failure paths verified honest.
-4. **Roadmap Wave 5 — change-context injection** — surface recent changes (reuse config-store diffs +
-   maintenance/suppression windows) into the bridge; external sources (FortiManager) = interface + not-connected.
-5. **Roadmap Wave 6 — two-way ServiceNow** — real INC create/update via API + work notes + CMDB CI.
-   NEEDS Vikas's ServiceNow instance URL + API creds (env SNOW_INSTANCE/SNOW_USER/SNOW_PASS); build the
-   client + honest not-connected until set; the structured export stays as fallback.
-
-## Roadmap the user picked (roadmap page: they WANT these): alert ingestion(done W2), cross-domain
-## correlation(W4), two-way ServiceNow(W6), change-context(W5), multi-incident+on-call(done W3),
-## bridge roles+SLA(done W1). Parked/backlog: FortiGate/F5/threat-feed coverage, HA-health front, RBAC/SSO,
-## source-of-truth stamping, confidence-as-sortable, PDF/email doc export.
+## What is BUILT + MERGED (all live-verified; state 2026-08-20 end of day)
+- **CW-1..CW-8 + waves 1-6 + 7 QA classes + netclaw A1-A8** (see TRACKER history): desk + capability
+  honesty, change engine (apply honestly frozen — observer sandbox), tickets, Teams (needs webhook),
+  SSH engine (needs creds), ServiceNow (needs creds), CW-7 investigation loop, CW-8 MCP connector
+  (no real external server wired yet — needs security vetting), Catalyst Center catalogue, syslog/SNMP
+  feeds, Batfish/pcap/Nautobot (honest-if-absent).
+- **CW-9 bridge conduct**: ask-first on every path (sources/conduct.js), pinned chat envelope
+  (say/ask/roster/finding/verdict/change), V2 split terminal (chat left, SSH-style session pane right,
+  shared module public/cw9-bridge.js), honest roster (stand-downs + "systems still get read" overlap
+  disclosure, AGENT_SOURCES + drift test), per-delegation evidence tagging (evidenceId — no cross-talk),
+  evidence-diffed round narration, honest write refusals at the conduct layer.
+- **CW-10 plumbing**: sources/claude.js = official @anthropic-ai/sdk (same wrapper surface: hasKey/model/
+  reason). Prompt caching (stable system first + cache_control; verified cache_read hits). Streaming:
+  WS type `say_delta` {messageId, delta, done, aborted?, discard?}; final chat_message with same messageId
+  is authoritative; discard:true (safety-declined) wipes preview from screen+localStorage. Spend store
+  (sources/spend-store.js, GET /api/spend/summary, desk Spend panel — never stores prompt text). Web
+  search/fetch on REASONING calls only, answers honestly labeled as web sources (never in finding.cli).
+  Compaction plumbed w/ silent fallback.
+- **CW-11 Reflexion** (sources/reflexion.js + lessons.js): round reflection (nothing-new line + changed
+  approach + deterministic repeat-refusal, mustChange fed to the probe prompt); verdict self-check
+  (verified[]/suspected[]/causeSupported from causeEvidenceIds; unsupported cause renders amber
+  "Suspected — unverified"); prediction follow-through (parked on every close; POST
+  /api/copilot/predictions/:id/check; failed → honest reopen); lessons memory (squad/lessons/*.md via
+  scrubber, LLM similarity — no keywords, desk Lessons panel, lesson.lookFirst biases round 1 only,
+  never bypasses ask-first). Reflection/lesson/prediction ride chat envelopes additively.
 
 ## Key files
-server.js (routes, broadcast, agent registry, detectAgentIntent) · sources/triage.js (bridge engine,
-roles/SLA/incident/dedupe/correlation) · sources/jarvis.js (Claude reasoning + delegation/routing) ·
-sources/live-agents.js (per-agent reads; Config-Keeper CLI) · sources/catalyst-center.js (Command Runner)
-· sources/aci.js, sdwan.js (adapters w/ timestamps+clustering) · sources/approvals.js (gate) ·
-sources/notifier.js (on-call) · sources/chat-store.js (persistence) · sources/artifacts.js (records/docs/
-ServiceNow) · baseline-store.js, config-store.js, incident-store.js. public/index.html (entire UI).
-Specs: docs/roadmap-build-spec.md, triage-intelligence-spec.md, qa-bugs-spec.md, chat-ux-spec.md,
-transparency-contract.md, triage-contract.md.
+server.js (routes, WS broadcast, gate wiring — NAMED_WRITE_SURFACES lists gated non-/api/copilot surfaces)
+· sources/conduct.js (THE conduct layer: understanding gate, envelope, caps, write screening) ·
+sources/jarvis.js (planner, delegation, synthesis+streaming, reflectionFlag) · sources/investigation.js
+(round engine) · sources/reflexion.js · sources/lessons.js · sources/claude.js (SDK wrapper) ·
+sources/spend-store.js · sources/live-agents.js (per-agent reads, AGENT_SOURCES) · sources/session-log.js
+(scrubber — single ordered pass) · sources/guardrails.js · sources/approvals.js · sources/triage.js ·
+public/desk.html + public/cw9-bridge.js/.css (shared UI module; dev fixtures in test/) · public/index.html
+(classic view). Contracts: docs/copilot-cw9/10/11/12-*.md. Live state: TRACKER.md (append-only log).
 
-## Copilot waves (2026-08-18)
-- CW-1 (desk + identity + capability honesty): MERGED + live.
-- CW-2 (change engine five-step wrap + drift): MERGED 2026-08-18 (#45+#44, 2 review rounds).
-  Sandbox account is observer-role → apply honestly freezes "no-write-path" on a real 403; every other
-  step real; per-device change lock enforced. change=available:false/engineBuilt:true, drift=available:true.
-  A real APPLY needs write-capable creds or CW-5 SSH path.
-- Ambiguity fix (#46) MERGED + live: "show version on sw" → lists sw1-sw4 and asks, runs nothing.
-- NEXT: QA fix-classes (docs/qa-findings-spec.md). Class 1 (kill keyword shell) now unblocked.
+## NEXT (in order, nothing in flight right now)
+1. **CW-12 Live Presence** — RECORDED, NOT BUILT. Contract: docs/copilot-cw12-presence-contract.md
+   (Vikas's words inside). Typing/working indicators + message receipt states, driven ONLY by real events.
+2. **CW-13 candidate** — vet + wire the first real external MCP server through the CW-8 connector
+   (Vikas saw the recommendation; not yet approved — ask him).
+3. Polish backlog: probe planner sometimes asks bare "ping"/"traceroute" (Config-Keeper honestly refuses —
+   wasted rounds); lesson consult chip dark until a first real lesson exists; 2 LOW review leftovers in
+   PR #74/#76 comments; short-device-error prose over-scrub LOW.
+4. Parked features (need Vikas's pick): FortiGate/F5/threat feeds, RBAC/SSO, PDF/email export, HA front.
 
-## ALL COPILOT WAVES COMPLETE (2026-08-18)
-CW-1 desk+identity, CW-2 change engine+drift, CW-3 tickets, CW-4 Teams, CW-5 SSH-live, CW-6 ServiceNow —
-ALL built, adversarially reviewed (operator-experience pass each), merged, deterministically verified. 474
-tests green. Honest capability map: ask/run-command/drift/tickets/investigate/bridge available; change/teams/
-servicenow honest "not connected" until Vikas provides (write-path/webhook/SNOW creds). Plus all 7 QA
-fix-classes merged (intent-first shell removal, ambiguity-ask, intake, guardrail, gate-fail-closed, errors,
-chat-sees-incidents, docs, UI). ONLY REMAINING: one end-to-end LIVE-LLM test pass, gated on Anthropic credit
-top-up (+ optionally TEAMS_WEBHOOK, SNOW_INSTANCE/USER/PASS, DevNet SSH creds to exercise the live externals).
+## Needs Vikas (each flips a BUILT feature live; all honest-if-absent today)
+TEAMS_WEBHOOK · SNOW_INSTANCE/SNOW_USER/SNOW_PASS · DevNet always-on IOS-XE sandbox SSH creds
+(SSH_IOSXE_USER/PASS) · real devices pointing syslog/traps here (*_BIND=0.0.0.0) · write-capable sandbox
+creds (change-apply + prediction follow-through live proof) · a vetted external MCP server.
 
-## NetClaw pull — A1/A2/A4 DONE (2026-08-19)
-- A1 (CW-8) MCP connector for Jarvis: MERGED. Hand-rolled zero-dep JSON-RPC/stdio client (mcp-client.js) +
-  mcp-connector.js; every tool call through approvals.gate (deny=zero external call), read-only posture
-  (write-flagged tools refused unless approved), 16MB buffer cap (hostile flood → honest disconnect), honest
-  external-tools capability (off until a server configured), audit (argKeys not values). NO real external MCP
-  server auto-wired — that's the next security-vetted step. Jarvis CHOOSING a tool = live-LLM test (credits).
-- A2 Catalyst Center adapter: MERGED. 11 new live-verified reads in catalyst-center.js (health/interfaces/
-  vlans/sites/topology/clients/pathtraces/compliance/images), honest envelopes, read-only, netclaw attribution.
-- A4 native syslog + SNMP-trap feeds: MERGED. sources/syslog-feed.js + snmptrap-feed.js + live-events.js; UDP
-  receivers, robust parse (no crash on hostile input), secret+community scrub (shared session-log scrubber),
-  honest not-receiving when off, localhost bind by default; folded into triage evidence by time window.
-  Needs Vikas to point real devices' logging/traps at host:port + set *_BIND=0.0.0.0 for real events.
-- All 17 test suites green. Assessment: docs/netclaw-assessment.md. Not yet done from the assessment: A5
-  (batfish), A6 (packet/Nautobot), the MCP client's SSE/HTTP transport, wiring a REAL external MCP server.
-
-## NetClaw pull COMPLETE (2026-08-19) — A1/A2/A4/A5/A6/A8 all merged
-- A5 Batfish offline change-validation (batfish.js): advisory pre-apply check in the change engine (never
-  blocks), honest not-available without BATFISH_HOST. capability batfish-validation.
-- A6 packet-capture analysis (pcap.js): native zero-dep .pcap parser, bounded/safe on hostile input, payloads
-  never dumped, path-traversal blocked; POST /api/copilot/pcap/analyze (base64 or a filename in squad/shared/
-  pcaps). capability packet-analysis (available:true, local).
-- A8 Nautobot source-of-truth (nautobot.js): reconcile live vs intended, single-stem interface canonicalization
-  (no phantom drift), honest not-connected without NAUTOBOT_URL/TOKEN, token never leaks. capability nautobot-sot.
-- 20 test suites green. Capability map verified honest live. Remaining netclaw ideas NOT done (need Vikas):
-  wire a REAL external MCP server through the connector (security vetting), MCP SSE/HTTP transport, a real
-  Batfish coordinator shim, a real Nautobot instance. All new features ship honest-if-absent.
-
-## LIVE-LLM TEST DONE (2026-08-19, Sonnet — credits reloaded, spend-wise)
-- All 4 flagship behaviours verified live on claude-sonnet-5: intent-first (greeting-wrapped question → real
-  reasoning, NOT a canned standup); plain-words intake (accepted, opened INC); chat sees its OWN incidents
-  (listed the real INC-… by id, no "no record" silo); investigation loop (real round-by-round probes to
-  Config-Keeper, honest round-cap stop, no fabrication).
-- BUG the live test caught + FIXED: investigation invProbe json_schema used a nullable ENUM as
-  type:['string','null']+enum → Anthropic 400 "Enum value 'netops' does not match declared type". The stub-
-  planner deterministic tests bypassed the real schema so it was never exercised. Fixed to anyOf form
-  (jarvis.js:951). Also added claude.reason transient-retry (429/529/500/timeout/network) so a blip doesn't
-  kill a multi-step flow. 20 suites green; investigation re-verified live (starting→investigating→3 rounds→capped honestly).
-- Model note: run on Sonnet via JARVIS_MODEL (cheap tier). Keep reasoning-heavy paths (routing, investigation)
-  on Sonnet; Haiku only for trivial one-shot. Results page: https://claude.ai/code/artifact/9e07d163-e5ec-42f2-88cc-482ac137eff5
+## Operational notes
+- Auto-resume: Windows scheduled task "noc-triage-autoresume" (every 30 min, autonomous-resume.ps1) —
+  survives reboots/quota walls; a fresh session resumes from TRACKER without Vikas. If moving to Cursor,
+  this task only launches Claude Code sessions — disable it (`schtasks /change /tn noc-triage-autoresume
+  /disable`) if it would conflict, or leave it as a safety net.
+- The :3000 node process gets reaped between sessions — relaunch when down. Kill strays first (multiple
+  server.js processes have accumulated before): match node.exe with CommandLine like 'server.js'.
+- DevNet sandboxes reset themselves — tenants/faults vanish; honest "not found" from Jarvis is CORRECT.
+- git: master protected against force-push/deletion; merge-commit style; every merge pushed immediately.

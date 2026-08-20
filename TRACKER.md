@@ -685,3 +685,13 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   real external MCP server).
 - Polish backlog logged: probe planner bare ping/traceroute asks; 2 LOW leftovers; lesson consult chip
   dark until first real lesson.
+
+## 2026-08-20 ~23:50 — Vikas final feedback + Cursor handoff (HIS WORDS)
+- NEW FEATURE RECORDED (CW-12, not built): "it should be showing who is typing, like when we type in
+  whatsapp or in ms chat... showing that the question has been picked up, like by showing the emojis on
+  the message... whenever jarvis or any agent is writing, it should be showing who is writing... so that
+  it feels like the application is alive." Contract: docs/copilot-cw12-presence-contract.md.
+- Vikas: weekly quota ~90% exhausted → STOPPING Claude Code builds; he will continue in CURSOR.
+  HANDOFF.md fully rewritten as the deep-dive pickup doc (laws, wave process, complete built map, key
+  files, NEXT queue, creds list, operational notes incl. how to disable the auto-resume task).
+- Everything pushed. Nothing in flight. Desk live on :3000 (default Opus).
