@@ -448,6 +448,81 @@ function scriptedInvestigation(probeImpl, rosterIds = ['config-keeper', 'monitor
       reflexion.attachChange('PRED-nope', 'chg-1') === null);
   }
 
+  // ═══ THE CHAT ENVELOPE — what the DESK actually reads ══════════════════════
+  // The reflection/lesson/prediction markers must ride the CHAT message, not only
+  // the investigation WS payload — otherwise the desk's markers stay dark on real
+  // traffic. The plain `text` never changes, so an old client is unaffected.
+  section('CHAT ENVELOPE — reflection / lesson / prediction ride the chat message:');
+  {
+    const jarvis = require('./jarvis');
+    const said = [];
+    jarvis.init({
+      say: (agentId, text, env) => said.push({ agentId, text, env: env || {} }),
+      status: () => {}, log: () => {}, nameOf: (id) => id,
+      roster: () => [{ id: 'config-keeper', name: 'config-keeper', connected: true, sees: ['cli'] }],
+    });
+
+    // 1. A round that turned up nothing new.
+    const obs = jarvis._test.bridgeObserver();
+    obs.onRound({}, {
+      round: 2, agent: 'config-keeper', probe: { agentId: 'config-keeper', question: 'q' },
+      report: { agentName: 'config-keeper', stance: 'evidence', text: 't',
+        cli: [ev('GET /x', 'same body')] },
+      hypotheses: [], confidence: 0.2, status: 'ok',
+      reflection: { nothingNew: true, line: 'Round 2 turned up nothing new — that angle is exhausted.',
+        nextAngle: 'read the alarm history instead', avoidAgentIds: ['config-keeper'] },
+    });
+    const marked = said.filter((m) => m.env && m.env.reflection);
+    ok('the nothing-new chat message carries the reflection flag shape',
+      marked.length >= 1 && marked[0].env.reflection.nothingNew === true);
+    ok('with the line and the next angle the desk renders',
+      /nothing new/i.test(marked[0].env.reflection.line)
+      && /alarm history/.test(marked[0].env.reflection.nextAngle), JSON.stringify(marked[0].env.reflection));
+    ok('the plain text is unchanged for a client that only reads text',
+      /nothing new/i.test(marked[0].text));
+    ok('the changing-approach line is marked too', marked.length === 2 && /Changing approach/.test(marked[1].text));
+
+    // 2. A round that added something says nothing extra AND carries no marker.
+    said.length = 0;
+    const obs2 = jarvis._test.bridgeObserver();
+    obs2.onRound({}, {
+      round: 1, agent: 'config-keeper', probe: { agentId: 'config-keeper', question: 'q' },
+      report: { agentName: 'config-keeper', stance: 'evidence', text: 't', cli: [ev('GET /new', 'new body')] },
+      hypotheses: [], confidence: 0.2, status: 'ok', reflection: null,
+    });
+    ok('SILENT WHEN CLEAN: a clean round posts no reflection marker at all',
+      said.every((m) => !m.env || !m.env.reflection));
+
+    // 3. The parked prediction message.
+    said.length = 0;
+    reflexion.init({ probe: async () => ({ stance: 'evidence', text: 'x' }), say: () => {}, audit: () => {} });
+    const parked = reflexion.registerPrediction({ key: 'env1', hypothesis: 'h', then: 't',
+      check: { agentId: 'config-keeper', question: 'is it up', device: 'sw2' }, operatorTriggered: true });
+    jarvis._test.parkPrediction({ id: 'INV-ENV-1', prediction: parked, hypotheses: [] }, { changeId: null });
+    ok('the prediction message carries the prediction for the desk chip',
+      said.length === 1 && said[0].env.prediction && said[0].env.prediction.id === parked.id);
+    ok('and it still says plainly that nothing was applied',
+      /nothing has been applied/i.test(said[0].text));
+
+    // 4. The follow-through result, as the host receives it.
+    const heard = [];
+    reflexion.init({
+      probe: async () => ({ stance: 'evidence', text: 'still down', cli: [ev('show ip int brief', 'down')] }),
+      say: (line, extra) => heard.push({ line, extra }), audit: () => {}, reopen: async () => ({ id: 'INV-R' }),
+    });
+    reflexion.setPlanner({ available: () => true, judge: async () => ({ held: false, line: 'My call was WRONG — reopening.' }) });
+    const p = reflexion.registerPrediction({ key: 'env2', hypothesis: 'the port was shut', then: 'it comes up',
+      check: { agentId: 'config-keeper', question: 'is it up', device: 'sw2' } });
+    const res = await reflexion.runFollowThrough(p.id, {});
+    ok('a settled follow-through hands the host BOTH flag shapes',
+      heard.length === 1 && heard[0].extra.prediction.id === p.id && Boolean(heard[0].extra.reflection));
+    ok('and the failed one points at the reopen as its next angle',
+      /reopening/i.test(heard[0].extra.reflection.nextAngle) && heard[0].extra.reflection.nothingNew === false,
+      JSON.stringify(heard[0].extra.reflection));
+    ok('the route result carries the same reflection shape', res.reflection === heard[0].extra.reflection
+      || (res.reflection && res.reflection.nextAngle === heard[0].extra.reflection.nextAngle));
+  }
+
   section('PART 4 — a lesson id can never write outside squad/lessons:');
   {
     ok('a traversal id is refused', lessons.safeId('../../server') === null);

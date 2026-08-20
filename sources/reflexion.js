@@ -52,7 +52,8 @@ const conduct = require('./conduct');
 //   reopen({ prediction, report, line }) -> void|Promise     (start a fresh
 //        investigation carrying the falsified hypothesis as context)
 //   audit({ who, what, device, result, detail }) -> void
-//   say(line) -> void                                        (one honest line to the desk)
+//   say(line, { prediction, reflection }) -> void            (one honest line to the
+//        desk, plus the additive flag shapes the desk marks the message with)
 // }
 let ctx = {};
 function init(hostCtx) { ctx = hostCtx || {}; }
@@ -530,7 +531,19 @@ async function runFollowThrough(id, { who } = {}) {
   p.result = { line: conduct.capText(line), report, at: new Date().toISOString(), who: who || null };
   p.updatedAt = p.result.at;
   audit(`prediction follow-through (${p.id})`, p.state, conduct.capLine(line), p.check.device);
-  try { if (typeof ctx.say === 'function') ctx.say(p.result.line, predictionSnapshot(p)); } catch (e) { /* never break the check */ }
+  // The desk marks a follow-through message with the SAME flag shape a round
+  // reflection uses — this IS reflexion, just on the verdict rather than a round.
+  // nothingNew is false here: a follow-through always reports a real result.
+  const reflection = {
+    nothingNew: false,
+    line: p.result.line,
+    nextAngle: p.state === 'failed'
+      ? 'reopening the investigation with the falsified hypothesis ruled out'
+      : (p.state === 'inconclusive' ? 'the proving check still has to be run against a real reading' : null),
+  };
+  try {
+    if (typeof ctx.say === 'function') ctx.say(p.result.line, { prediction: predictionSnapshot(p), reflection });
+  } catch (e) { /* never break the check */ }
 
   // FAILED → reopen, carrying the falsified hypothesis as context. Never a silent close.
   let reopened = null;
@@ -544,7 +557,7 @@ async function runFollowThrough(id, { who } = {}) {
       });
     } catch (err) { reopened = null; }
   }
-  return { prediction: predictionSnapshot(p), held, line: p.result.line, report, reopened };
+  return { prediction: predictionSnapshot(p), held, line: p.result.line, reflection, report, reopened };
 }
 
 // ── small shared helpers ────────────────────────────────────────────────────

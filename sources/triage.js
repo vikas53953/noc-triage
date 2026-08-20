@@ -753,8 +753,11 @@ async function runBridge(triage) {
   try {
     const hit = await lessons.consult({ problem: triage.description, understood: triage.title });
     if (hit) {
-      triage.lesson = { id: hit.id, lookFirst: hit.lookFirst, why: hit.why };
-      post(triage, { agent: 'jarvis', tier: 'L4', round: 1, text: `📓 ${hit.line}` });
+      triage.lesson = { id: hit.id, lookFirst: hit.lookFirst || null, why: hit.why || null };
+      // The lesson chip the desk renders reads this off the MESSAGE, additively —
+      // the plain 📓 line is untouched for a client that only reads `text`.
+      post(triage, { agent: 'jarvis', tier: 'L4', round: 1, text: `📓 ${hit.line}`,
+        envelope: { lesson: { ...triage.lesson } } });
     }
   } catch (e) { /* a missing memory never changes how a bridge runs */ }
   if (understandFirstOn() && ctx && typeof ctx.understand === 'function') {

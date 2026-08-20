@@ -407,7 +407,9 @@ function followThroughOnChange(rec, who) {
           `The change did not apply (${rec.status}), so I have proved nothing. When the fix is in — ` +
           `by your hand if I have no write path — trigger my check with ` +
           `POST /api/copilot/predictions/${p.id}/check and I will tell you honestly whether my call was right.`,
-          { kind: 'say', prediction: p });
+          { kind: 'say', prediction: p, reflection: { nothingNew: false,
+            line: `The change did not apply (${rec.status}) — nothing is proved yet.`,
+            nextAngle: 'run the parked proving check once the fix is really in' } });
       }
     }
   } catch (e) { /* the follow-through never breaks a change */ }
@@ -1330,8 +1332,13 @@ reflexion.init({
       ? mcp.gather(agentId, question, { who: 'jarvis', approved: false })
       : live.gatherWithEvidence(agentId, question, device || null, null),
   audit: (entry) => session.audit(entry),
-  say: (line, prediction) => jarvisSay('jarvis', line,
-    { kind: 'say', text: line, prediction: prediction || null }),
+  // The desk marks these messages from the ADDITIVE fields — the plain `text` is
+  // unchanged, so a client that never heard of CW-11 sees exactly what it saw.
+  say: (line, extra) => jarvisSay('jarvis', line, {
+    kind: 'say', text: line,
+    prediction: (extra && extra.prediction) || null,
+    reflection: (extra && extra.reflection) || null,
+  }),
   // A FALSIFIED prediction never closes on hope: a fresh investigation opens
   // carrying the wrong hypothesis as context so the loop cannot walk back into it.
   reopen: ({ prediction, report, falsified, who }) => {

@@ -864,7 +864,10 @@ async function runBridge(q, gate, opts) {
     lesson = await lessons.consult({ problem: gate.problem, understood: gate.understood });
   } catch (e) { lesson = null; }
   if (lesson) {
-    speak('jarvis', conduct.envelope.say(lesson.line));
+    // The lesson chip the desk renders reads this off the chat message; the plain
+    // line stays exactly as it was for a client that only reads `text`.
+    speak('jarvis', { ...conduct.envelope.say(lesson.line),
+      lesson: { id: lesson.id, lookFirst: lesson.lookFirst || null, why: lesson.why || null } });
     session.recordReasoning({
       command: 'LESSON',
       raw: `Matched ${lesson.id}: ${lesson.why || 'similar symptoms'}\nLook first: ${lesson.lookFirst || 'not recorded'}`,
@@ -902,6 +905,19 @@ async function runBridge(q, gate, opts) {
 // investigations. Now each round is described by the checks it ACTUALLY
 // produced, diffed against every earlier round: a round that turned up nothing
 // new says so in plain words, and its repeated evidence is not posted again.
+// CW-11 — the ONE flag shape the desk reads off a chat message to mark a
+// reflection: { nothingNew, line, nextAngle }. Built in one place so the bridge,
+// the follow-through and any later path can never post three different shapes.
+// null in, null out — a clean round posts no marker at all (silent when clean).
+function reflectionFlag(r) {
+  if (!r || !r.line) return null;
+  return {
+    nothingNew: r.nothingNew === true,
+    line: conduct.capText(r.line),
+    nextAngle: r.nextAngle ? conduct.capLine(r.nextAngle) : null,
+  };
+}
+
 function bridgeObserver(opts) {
   let closed = false;
   const seen = new Set();                       // source|command already evidenced
@@ -935,18 +951,27 @@ function bridgeObserver(opts) {
       // which is the half CW-9 left out. Absent, the CW-9 wording stands exactly
       // as before.
       const reflection = round.reflection || null;
+      // The ENGINE's reflection wins when it is present: it is computed over the
+      // whole investigation's evidence book, so it can never contradict itself,
+      // and it is only ever set when every check in the round repeated. Saying
+      // "1 new check" under a nothing-new marker would be exactly the "says more
+      // than it does" defect this wave exists to kill.
       const head = !cli.length
         ? `Round ${round.round} — ${round.agent}: no reading came back (${report.stance}).`
-        : !fresh.length
-          ? (reflection && reflection.line
-            ? `Round ${round.round} — ${round.agent}: ${reflection.line}`
-            : `Round ${round.round} — ${round.agent}: ${cli.length} check(s) ran and returned the same picture as before — nothing new.`)
-          : `Round ${round.round} — ${round.agent}: ${fresh.length} new check(s) — ${fresh.slice(0, 2).map((e) => e.command).join(', ')}.`;
-      speak('jarvis', conduct.envelope.say(head + tail));
+        : (reflection && reflection.line)
+          ? `Round ${round.round} — ${round.agent}: ${reflection.line}`
+          : !fresh.length
+            ? `Round ${round.round} — ${round.agent}: ${cli.length} check(s) ran and returned the same picture as before — nothing new.`
+            : `Round ${round.round} — ${round.agent}: ${fresh.length} new check(s) — ${fresh.slice(0, 2).map((e) => e.command).join(', ')}.`;
+      // The FE reads the reflection off the CHAT message (the flag shape below),
+      // not off the investigation WS payload — so it rides here too, additively.
+      // The plain text is unchanged for a client that only reads `text`.
+      speak('jarvis', { ...conduct.envelope.say(head + tail), reflection: reflectionFlag(reflection) });
       // The new angle is its own short line so it is never clipped off the end of
       // the round line by the 280-char cap.
       if (reflection && reflection.nextAngle) {
-        speak('jarvis', conduct.envelope.say(`Changing approach: ${reflection.nextAngle}`));
+        speak('jarvis', { ...conduct.envelope.say(`Changing approach: ${reflection.nextAngle}`),
+          reflection: reflectionFlag(reflection) });
       }
 
       // Only NEW evidence is posted as findings; a repeat is not re-dumped.
@@ -1047,7 +1072,7 @@ function parkPrediction(snap, { changeId }) {
   try {
     if (changeId) rec = reflexion.attachChange(p.id, changeId) || p;
   } catch (e) { rec = p; }
-  speak('jarvis', conduct.envelope.say(rec.message));
+  speak('jarvis', { ...conduct.envelope.say(rec.message), prediction: rec });
   return rec;
 }
 
