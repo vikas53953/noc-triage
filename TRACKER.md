@@ -387,3 +387,12 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - Prototype delivered (3 looks: bridge chat / split terminal / war-room ticker), replaying his EPG test:
   https://claude.ai/code/artifact/3a0a9d67-634f-4d87-a20a-42227fcd426c — AWAITING HIS VERDICT. Do NOT build until he approves.
 - Pickup report page: https://claude.ai/code/artifact/9535c85a-e802-4583-9db9-54d5a718ffb0
+
+## 2026-08-20 — VERDICT IN: build V2 (his words: "i want v2 to build — V2 (split terminal)")
+- All 7 prototype elements LIKED: ask-first opening, short messages, bridge roster, SSH terminal output,
+  round-by-round narrowing, fix under change management, the 3-look choice.
+- BUILD = CW-9 "bridge conduct" wave: contract docs/copilot-cw9-bridge-contract.md. Backend (feat/cw9-bridge-be)
+  + UI (feat/cw9-bridge-fe) in parallel own clones, PR each, DIFFERENT-agent review, merge, restart :3000,
+  live verify. Fable orchestrates; Opus executes. Jarvis test model = claude-sonnet-5 (spend-wise).
+- Class law for this wave: ONE conduct layer shared by EVERY operator entry point (chat + triage intake +
+  future paths) — never a per-path fix again.
