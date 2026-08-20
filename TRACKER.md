@@ -589,3 +589,17 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   prose gets over-scrubbed. Builder on surgical final fix (single-pass ordered rules, value-not-syntax
   redaction, table-driven tests). Then scrubber-only verify → merge train.
 - Session-limit note: the wall killed the reviewer mid-run pre-2pm; resumed immediately post-reset.
+
+## 2026-08-20 ~15:45 — CW-9 SHIPPED ✅ (merged + live-verified)
+- Final BE verdict APPROVE (3 review rounds, every finding closed under fresh attack). MERGED: #72 then #73
+  (order raced; seam verified compatible both ways; package.json test lists merged keeping both). Master
+  green: 26 suites, full chain exit 0.
+- LIVE VERIFY on merged :3000 (Sonnet, by Fable directly): "hey jarvis facing issue in epg" → kind:ask,
+  3 questions, ZERO reads. Answer → roster (Router-Expert engaged w/ why, NetOps/Config-Keeper stood down,
+  honest overlap disclosure), round 1 = 7 real checks w/ cli evidence (host·api·GET·output), round 2 =
+  "same picture — nothing new", honest stop: tenant absent from the reset DevNet sandbox — no fabrication,
+  0 write calls audited.
+- :3000 restarted clean on DEFAULT Opus for Vikas (killed 4 stray server processes first).
+- Evidence page to Vikas: https://claude.ai/code/artifact/033ae37f-aaf6-41f1-a607-aa885b010a2c
+- Tasks #1-3 complete. NEXT: await Vikas's hands-on confirm → CW-10 (contract first). Two LOW review
+  leftovers ride along in CW-10 (short-device-error prose over-scrub; FE cosmetic F4).
