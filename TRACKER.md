@@ -654,3 +654,16 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   (2 calls, tokens + cache_creation recorded, no prompt text). Capability answer path correctly non-streamed.
 - :3000 restarted on DEFAULT Opus for Vikas. Task #4 complete. CW-11 builders launching next (contract
   docs/copilot-cw11-reflexion-contract.md).
+
+## 2026-08-20 ~22:00 — CW-11 both halves BUILT; reviews running
+- BE PR #77: sources/reflexion.js + lessons.js. Round reflection LIVE-verified ("Round 3 added nothing
+  new... confirmed dead ground" + changed approach + avoidAgentIds + deterministic repeat-refusal);
+  verdict self-check (verified/suspected/causeSupported from causeEvidenceIds — builder self-caught a
+  string-match defect); prediction follow-through parked on every closing path + POST check endpoint
+  (observer-honest); lessons via scrubber + LLM similarity (no keywords). 32 suites 1649 assertions green.
+  Honest not-proven-live: different-agent round landing + failed-prediction reopen (sandbox has no real
+  fault / no write path — same limitation as CW-9/10).
+- FE PR #76 fixed after FIX-FIRST (per-ROW lesson honesty — mixed/unreadable states; bridge-path marker
+  passthrough; claim corrected; fixture race). 1687 assertions. Field-name pinning to #77 in flight.
+- BE adversarial review launched (guardrails-as-laws focus incl. lesson-as-instruction injection attack).
+  Then: FE re-verify → merge #77 → #76 → restart :3000 → live verify → Vikas's combined 23:30 page.
