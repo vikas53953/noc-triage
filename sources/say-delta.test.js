@@ -153,8 +153,13 @@ function script() {
     ok('the half-written word is never shown (the forwarder holds it back)',
       !/so f$/.test(previewed), JSON.stringify(previewed));
     ok('the stream is closed', closing.done === true);
-    ok('the closing delta carries aborted:true — "throw the preview away"',
+    ok('the closing delta carries aborted:true — the answer was abandoned',
       closing.aborted === true, JSON.stringify(closing));
+    // A PLAIN failure refused nothing. The partial that arrived is honest model
+    // text, so it may stay on screen under the failure line — wiping it would
+    // hide a real, if incomplete, reading of what the model was saying.
+    ok('a plain error does NOT set discard — nothing was declined, so nothing is wiped',
+      closing.discard === undefined, JSON.stringify(closing));
     ok('the closing delta carries the messageId (nothing anonymous ever goes out)',
       typeof closing.messageId === 'string' && closing.messageId.length > 0);
     // THE SEAM (PR #75): the FE has NO id-less fallback — a final message
@@ -184,6 +189,11 @@ function script() {
     const closing = deltas[deltas.length - 1];
     ok('a declined summary also closes with aborted:true', closing && closing.done === true && closing.aborted === true,
       JSON.stringify(closing));
+    // THE SAFETY CASE (joint fix with the FE review). The model deliberately did
+    // not publish this text; a fragment of it must not survive on screen or in
+    // anything that persisted it.
+    ok('a SAFETY refusal also sets discard:true — the partial is wiped, not kept',
+      closing && closing.discard === true, JSON.stringify(closing));
     const relayed = said.find((m) => /Summary skipped on this one/.test(m.text));
     ok('and its honest relay message is posted', Boolean(relayed));
     ok('carrying the SAME messageId as the deltas it settles',
@@ -199,6 +209,10 @@ function script() {
   ok('a finished answer closes with done:true and NO aborted flag',
     deltas[deltas.length - 1].done === true && !deltas[deltas.length - 1].aborted,
     JSON.stringify(deltas[deltas.length - 1]));
+  ok('and certainly no discard flag — a real answer is never wiped',
+    deltas[deltas.length - 1].discard === undefined, JSON.stringify(deltas[deltas.length - 1]));
+  ok('no delta on a normal answer carries either flag',
+    deltas.every((d) => d.aborted === undefined && d.discard === undefined));
   ok('and the buffered message with that messageId does arrive',
     said.some((m) => m.env && m.env.messageId === deltas[0].messageId));
 
@@ -243,13 +257,85 @@ function script() {
       deltas.every((d) => d.messageId === id));
   }
 
+  // ── ONE PREVIEW PER ANSWER, even when the synthesis retries ──────────────
+  // A refused synthesis is retried ONCE on neutralised findings. If the first
+  // attempt already streamed text, the retry must NOT append to it: the two are
+  // different answers, and concatenating them would show the operator a
+  // sentence neither model wrote. (Caught live against a stand-in endpoint that
+  // streamed text and then refused — the preview read the same sentence twice.)
+  console.log('\nA RETRIED SYNTHESIS NEVER WRITES THE PREVIEW TWICE:');
+  initJarvis(true);
+  {
+    let k = 0;
+    claude.reason = async (args) => {
+      k += 1;
+      if (k === 1) return { refused: false, stopReason: 'end_turn', text: JSON.stringify({
+        selfAnswer: null,
+        delegations: [{ agentId: 'netops', question: 'check campus health', why: 'owns campus', device: null }],
+        standDown: [], note: '' }) };
+      // Both synthesis attempts stream text and then decline.
+      if (typeof args.onDelta === 'function') args.onDelta('Campus reads clean so far. ');
+      return { refused: true, stopReason: 'refusal', text: '' };
+    };
+    await planAndAnswer('what is going on in the campus?');
+    const preview = deltas.filter((d) => !d.done).map((d) => d.delta).join('');
+    ok('the sentence is shown ONCE, not once per attempt',
+      preview === 'Campus reads clean so far. ', JSON.stringify(preview));
+    ok('and the closing delta still says discard (a refusal drove it)',
+      deltas[deltas.length - 1].discard === true);
+  }
+  initJarvis(true);
+  {
+    // The common shape: the first attempt refuses BEFORE writing anything, so
+    // the retry is free to stream — the operator loses no live preview.
+    let k = 0;
+    claude.reason = async (args) => {
+      k += 1;
+      if (k === 1) return { refused: false, stopReason: 'end_turn', text: JSON.stringify({
+        selfAnswer: null,
+        delegations: [{ agentId: 'netops', question: 'check campus health', why: 'owns campus', device: null }],
+        standDown: [], note: '' }) };
+      if (k === 2) return { refused: true, stopReason: 'refusal', text: '' };
+      if (typeof args.onDelta === 'function') args.onDelta('Campus reads clean.');
+      return { refused: false, stopReason: 'end_turn', text: 'Campus reads clean.' };
+    };
+    await planAndAnswer('what is going on in the campus?');
+    const preview = deltas.filter((d) => !d.done).map((d) => d.delta).join('');
+    ok('a retry that is the FIRST to write does stream (nothing is lost)',
+      preview === 'Campus reads clean.', JSON.stringify(preview));
+    ok('and that answer closes normally — no aborted, no discard',
+      !deltas[deltas.length - 1].aborted && !deltas[deltas.length - 1].discard);
+  }
+
   // ── PR #74 review, FIX 2: the preview obeys the 280-char cap ──────────────
   // The conduct layer caps every Jarvis message at TEXT_MAX. A cap enforced in
   // code and then bypassed by a display path is not a cap: the operator briefly
   // read 292 chars of text the cap exists to prevent, then watched the bubble
   // shrink to 278. This is a property test, not one example — many lengths and
   // many chunkings, all asserted.
-  console.log('\nTHE PREVIEW OBEYS THE SAME 280-CHAR CAP AS THE MESSAGE (property test):');
+  // ── What the preview really guarantees ───────────────────────────────────
+  // HONESTY CORRECTION (round 2 review): the earlier version of this test — and
+  // the PR body — claimed the preview is always a strict PREFIX of the final
+  // message and "never shrinks". That is false, and asserting it here made the
+  // suite look like it had proved something it had not.
+  //
+  // conduct.clip() does two things to the authoritative message that the raw
+  // stream cannot: it COLLAPSES runs of whitespace, and it prefers to cut at a
+  // SENTENCE boundary. So a 279-char preview can legitimately be replaced by a
+  // 267-char final that reads better — the message REFLOWS, it does not merely
+  // extend. That was judged acceptable (the final is authoritative and replaces
+  // the preview wholesale); the claim was the defect, not the behaviour.
+  //
+  // What IS guaranteed, and is what this property test asserts:
+  //   1. the preview never exceeds conduct.TEXT_MAX — the cap is enforced on
+  //      the display path too, which was the whole point of the fix;
+  //   2. every character shown is genuine model text, in order — the preview is
+  //      a prefix of what the model actually wrote, never anything invented;
+  //   3. the preview never ends mid-word;
+  //   4. the final message is capped and is AUTHORITATIVE — it may be shorter
+  //      than the preview after reflow, and the client replaces rather than
+  //      appends.
+  console.log('\nWHAT THE PREVIEW GUARANTEES (property test over lengths x chunkings):');
   const WORDS = ['campus', 'health', 'score', 'is', 'clean', 'across', 'every', 'switch', 'and', 'nothing',
     'points', 'at', 'a', 'fault', 'yet', 'sw1', 'sw2', 'reads', 'fine', 'right', 'now'];
   function answerOf(len) {
@@ -263,47 +349,83 @@ function script() {
     for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size));
     return out;
   }
+  // Run one streamed answer end to end; returns { preview, final }.
+  async function streamed(answer, size) {
+    initJarvis(true);
+    let n = 0;
+    claude.reason = async (args) => {
+      n += 1;
+      if (n === 1) return { refused: false, stopReason: 'end_turn', text: JSON.stringify({
+        selfAnswer: null,
+        delegations: [{ agentId: 'netops', question: 'check campus health', why: 'owns campus', device: null }],
+        standDown: [], note: '' }) };
+      if (typeof args.onDelta === 'function') for (const c of chunksOf(answer, size)) args.onDelta(c);
+      return { refused: false, stopReason: 'end_turn', text: answer };
+    };
+    await planAndAnswer('what is going on in the campus?');
+    return {
+      preview: deltas.filter((d) => !d.done).map((d) => d.delta).join(''),
+      final: said.filter((m) => m.env && m.env.kind === 'say').pop().text,
+    };
+  }
 
-  let propChecked = 0, propBad = [];
+  let propChecked = 0;
+  const propBad = [];
+  let reflowed = 0;
+  // Two SHAPES of answer, because they exercise different halves of clip():
+  // a plain run of words (word-boundary cut) and prose with sentence stops
+  // (sentence-boundary cut, which is what makes a final come back shorter).
+  const shapes = {
+    plain: (len) => answerOf(len),
+    // Sentence stops every 8 words, so clip()'s sentence-boundary branch is
+    // really exercised — that branch is what returns a SHORTER final.
+    prose: (len) => answerOf(len).split(' ')
+      .map((w, i) => ((i + 1) % 8 === 0 ? `${w}.` : w)).join(' '),
+  };
   for (const len of [40, 120, 279, 281, 400, 900, 2000]) {
     for (const size of [1, 3, 17, 64, 500]) {
-      const ANSWER_N = answerOf(len);
-      initJarvis(true);
-      let n = 0;
-      claude.reason = async (args) => {
-        n += 1;
-        if (n === 1) return { refused: false, stopReason: 'end_turn', text: JSON.stringify({
-          selfAnswer: null,
-          delegations: [{ agentId: 'netops', question: 'check campus health', why: 'owns campus', device: null }],
-          standDown: [], note: '' }) };
-        if (typeof args.onDelta === 'function') for (const c of chunksOf(ANSWER_N, size)) args.onDelta(c);
-        return { refused: false, stopReason: 'end_turn', text: ANSWER_N };
-      };
-      await planAndAnswer('what is going on in the campus?');
-
-      const preview = deltas.filter((d) => !d.done).map((d) => d.delta).join('');
-      const finalM = said.filter((m) => m.env && m.env.kind === 'say').pop();
+     for (const shape of Object.keys(shapes)) {
+      const answer = shapes[shape](len);
+      const { preview, final } = await streamed(answer, size);
       const why = [];
-      // 1. never longer than the cap the conduct layer enforces
+      // 1. the cap is enforced on the display path
       if (preview.length > conduct.TEXT_MAX) why.push(`preview ${preview.length} > ${conduct.TEXT_MAX}`);
-      // 2. always a real prefix of what the model actually wrote (never invented)
-      if (!ANSWER_N.startsWith(preview)) why.push('preview is not a prefix of the answer');
-      // 3. the authoritative message is capped as it always was
-      if (finalM.text.length > conduct.TEXT_MAX) why.push(`final ${finalM.text.length} > ${conduct.TEXT_MAX}`);
-      // 4. when the whole answer fits the cap, preview and final are the SAME
-      //    text — nothing to shrink, nothing to correct
-      if (len <= conduct.TEXT_MAX - 1 && preview !== finalM.text) why.push(`short answer differs: ${preview.length} vs ${finalM.text.length}`);
-      // 5. the preview never ends mid-word once it has been cut at the cap
-      if (preview.length === conduct.TEXT_MAX && /\S$/.test(preview) && !ANSWER_N.startsWith(preview + ' ') && ANSWER_N.length > preview.length) {
-        // a cut at exactly the cap is only allowed on a word boundary
-        if (!/\s$/.test(ANSWER_N.slice(preview.length - 1, preview.length + 1))) why.push('preview ends mid-word');
-      }
+      // 2. every character is genuine model text, in order
+      if (!answer.startsWith(preview)) why.push('preview is not a prefix of the model text');
+      // 3. never mid-word: the preview ends on whitespace, or is the whole answer
+      if (preview && preview.length < answer.length && !/\s$/.test(preview)) why.push('preview ends mid-word');
+      // 4. the authoritative message is capped as it always was
+      if (final.length > conduct.TEXT_MAX) why.push(`final ${final.length} > ${conduct.TEXT_MAX}`);
+      if (final.length < preview.length) reflowed += 1;   // legitimate — see above
       propChecked += 1;
-      if (why.length) propBad.push(`len=${len} chunk=${size}: ${why.join('; ')}`);
+      if (why.length) propBad.push(`${shape} len=${len} chunk=${size}: ${why.join('; ')}`);
+     }
     }
   }
-  ok(`${propChecked} length x chunking combinations all obey the cap and the prefix rule`,
+  ok(`${propChecked} length x chunking combinations: capped, genuine, never mid-word`,
     propBad.length === 0, propBad.slice(0, 4).join(' | '));
+  // Said out loud rather than hidden: the reflow is common, not exotic.
+  console.log(`       (${reflowed} of ${propChecked} finals came back SHORTER than the preview — clip() reflowing, as designed)`);
+
+  // The reflow is REAL and is documented here rather than asserted away: text
+  // whose cap lands after a sentence boundary comes back shorter than the
+  // preview, and that is the authoritative message doing its job.
+  {
+    const proseAnswer = 'Campus estate is clean right now. ' + answerOf(400);
+    const { preview, final } = await streamed(proseAnswer, 12);
+    ok('a final message MAY be shorter than the preview (clip cuts at a sentence) — the client replaces, never appends',
+      final.length <= conduct.TEXT_MAX && preview.length <= conduct.TEXT_MAX, `preview=${preview.length} final=${final.length}`);
+    ok('and the preview was still genuine model text throughout', proseAnswer.startsWith(preview));
+  }
+  {
+    // Whitespace collapse: the model writes double spaces, the cap collapses
+    // them, so the final is shorter than the preview by construction.
+    const spaced = answerOf(300).replace(/ /g, '  ');
+    const { preview, final } = await streamed(spaced, 9);
+    ok('collapsed whitespace REFLOWS the final away from the preview — expected, not a defect',
+      final !== preview && final.length <= conduct.TEXT_MAX, `preview=${preview.length} final=${final.length}`);
+    ok('the preview still never exceeded the cap', preview.length <= conduct.TEXT_MAX, `preview=${preview.length}`);
+  }
 
   // The observed live case from the review: 292 streamed vs 278 final.
   initJarvis(true);
@@ -325,6 +447,8 @@ function script() {
       preview.length <= conduct.TEXT_MAX, `preview=${preview.length}`);
     ok('and the model text past the cap is simply never forwarded',
       LONG.startsWith(preview) && preview.length < LONG.length);
+    ok('the authoritative message is capped too (it may reflow shorter — it replaces the preview)',
+      said.filter((m) => m.env && m.env.kind === 'say').pop().text.length <= conduct.TEXT_MAX);
   }
 
   claude.reason = realReason;

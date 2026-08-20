@@ -319,7 +319,7 @@ function speak(agentId, env) {
 //     shrinks when the real message lands.
 let deltaSeq = 0;
 function newMessageId() { return `jv-${Date.now().toString(36)}-${(deltaSeq += 1).toString(36)}`; }
-function sayDelta(messageId, delta, done, aborted) {
+function sayDelta(messageId, delta, done, flags) {
   if (!ctx || typeof ctx.sayDelta !== 'function') return;
   try {
     const payload = {
@@ -327,9 +327,22 @@ function sayDelta(messageId, delta, done, aborted) {
       delta: String(delta == null ? '' : delta),
       done: Boolean(done),
     };
-    // Only ever present when it is TRUE — an additive signal, so a client that
-    // has not been taught about it is exactly as well off as before.
-    if (aborted) payload.aborted = true;
+    // Both flags are only ever present when TRUE — additive signals, so a client
+    // that has not been taught about them is exactly as well off as before.
+    //
+    //   aborted — the answer was abandoned; no recorded message is coming for
+    //             this id beyond the honest failure line. The partial may stay
+    //             on screen, honestly labelled: it is real model text, and an
+    //             operator watching a blip is better served by seeing what did
+    //             arrive than by a bubble that silently empties.
+    //
+    //   discard — the SAFETY layer declined this content, so the partial must be
+    //             WIPED: from the screen and from anything that persisted it.
+    //             Text the model refused to publish must not linger anywhere
+    //             just because some of it arrived before the refusal landed.
+    //             Only refusal-driven exits set it; a plain error never does.
+    if (flags && flags.aborted) payload.aborted = true;
+    if (flags && flags.discard) payload.discard = true;
     ctx.sayDelta('jarvis', payload);
   } catch (e) { /* a display optimisation must never break the answer */ }
 }
@@ -378,6 +391,13 @@ function cappedDeltas(messageId) {
     if (out.length < whole.length) stopped = true;   // the cap ends the preview
     emit(out);
   }
+
+  // Has anything been shown to the operator yet? The synthesis path may make a
+  // SECOND model call (the neutral retry after a refusal); if the first attempt
+  // already wrote a preview, the second must not append to it — the two are
+  // different answers, and concatenating them would show the operator a
+  // sentence neither model wrote. Same rule as the wrapper's own re-run guard.
+  forward.emitted = function emitted() { return shownLen > 0; };
 
   // The stream ended cleanly: release the last word if it still fits.
   forward.flush = function flush() {
@@ -685,13 +705,23 @@ async function planAndAnswer(q) {
     // so the preview must be thrown away rather than left on screen. The honest
     // failure message still gets posted by relayFindings, as its own chat
     // message, exactly as it was before streaming existed.
-    sayDelta(messageId, '', true, true);
+    // A plain failure (network, timeout, an API error): aborted, NOT discarded.
+    // Nothing was refused, so the partial that already arrived is honest model
+    // text and may stay on screen while the failure line explains it.
+    sayDelta(messageId, '', true, { aborted: true });
     return relayFindings(q, findings, `the write-up step could not run (${err && err.message ? err.message : 'error'})`, messageId);
   }
   // The optional summary was declined even after the one neutral retry — the reads
   // are already on screen, so relay honestly with the SHORT, calm message. Same
   // abandonment rule: nothing will carry this messageId, so drop the preview.
-  if (result.relayed) { sayDelta(messageId, '', true, true); return relayFindings(q, findings, result.why, messageId); }
+  // DECLINED BY THE SAFETY LAYER, twice (the neutral retry refused as well). The
+  // model deliberately did not publish this text, so whatever fragment of it
+  // reached the screen has to be wiped rather than left sitting there — the one
+  // case where the preview is discarded, not merely closed.
+  if (result.relayed) {
+    sayDelta(messageId, '', true, { aborted: true, discard: true });
+    return relayFindings(q, findings, result.why, messageId);
+  }
   const answer = result.answer;
 
   session.recordReasoning({
@@ -1017,7 +1047,10 @@ async function synthesizeAnswer(q, findings, onDelta = null) {
   // refusal — we fall through to the honest short relay. The reads are on screen.
   const safeBlock = list.map((f) =>
     `[${f.name}] (${f.stance})\n${neutralizeFindingText(f.text)}`).join('\n\n');
-  const retry = await runSynthesis(q, safeBlock, null, onDelta);
+  // Stream the retry ONLY if nothing has been shown yet (see cappedDeltas
+  // .emitted): a preview is written once, by whichever attempt got there first.
+  const retryDelta = (onDelta && typeof onDelta.emitted === 'function' && onDelta.emitted()) ? null : onDelta;
+  const retry = await runSynthesis(q, safeBlock, null, retryDelta);
   if (!retry.refused) return { answer: retry.text, retried: true };
   return { relayed: true, why: 'the write-up step was declined by the model' };
 }

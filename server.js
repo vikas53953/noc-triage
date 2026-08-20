@@ -1113,10 +1113,14 @@ function jarvisSayDelta(agentId, payload) {
     messageId: String(payload.messageId || ''),
     delta: String(payload.delta == null ? '' : payload.delta),
     done: Boolean(payload.done),
-    // Present only when TRUE: the answer was abandoned mid-stream, so no
-    // buffered chat_message will ever carry this messageId and the preview must
-    // be discarded rather than left on screen as if it were Jarvis's answer.
+    // Present only when TRUE.
+    //   aborted — the answer was abandoned mid-stream; the honest failure line
+    //             that follows carries the same messageId and settles the bubble.
+    //   discard — the safety layer declined the content, so the partial must be
+    //             wiped from the screen AND from anything that persisted it,
+    //             rather than left readable. Only refusal-driven aborts set it.
     ...(payload.aborted ? { aborted: true } : {}),
+    ...(payload.discard ? { discard: true } : {}),
     timestamp: new Date().toISOString(),
   });
 }
