@@ -427,3 +427,20 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   triage keeps its 4th question and now posts kind:'ask'; operatorTz carried on HTTP; change steps = record.
 - 24 suites / 966 assertions green (CW-9 suite 119). Live Sonnet: EPG ask-first 0 reads; abandonment opens
   no bridge; concurrent delegations do not swap evidence; roster claims no false stand-down.
+
+## 2026-08-20 — CW-9 backend re-review pass (F1, F2, M1-M4, L1)
+- F1: a change ask can no longer be met with silence. The dead isDeviceCliRequest-gated branch is gone;
+  the shared conduct layer screens the operator's own text (LLM `changeAsk` primary + guardrails.splitIntent
+  backstop) on EVERY path, refuses out loud, and still lets the rest of the message be understood. The
+  change is kept OUT of `understood`, so the investigation never spends rounds chasing it (M4 root cause).
+- F2: scrubber now treats key/secret/community as secret-bearing with or without an encoding digit, plus the
+  positional `snmp-server host … <community>` form; algorithm names and free-text (description/remark/banner)
+  lines survive. All 12 reviewer forms + 6 more scrub; real evidence untouched.
+- M1: round dedupe signs on normalised identity (volatile query params stripped, params sorted) AND an output
+  hash — a cache-busting timestamp can no longer make a repeat look like a new check.
+- M2: the overlap line names each agent's OWN shared systems. M3: drift test asserts every builder's touched
+  sources are declared in AGENT_SOURCES. L1: thin-proceed keeps the assumption + the invitation, full text in
+  a structured `assumption` field.
+- 24 suites / 1026 assertions green (CW-9 suite 179). Live Sonnet: bare write refused (0 reads); mixed
+  answer+write → refusal before roster, bridge opened, understood free of the reload; cache-busted repeat →
+  "nothing new", 1 finding.

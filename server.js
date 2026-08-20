@@ -1693,17 +1693,16 @@ function runAgentAction(agentId, command) {
     && screenThis
     && live.isDeviceCliRequest(command)
     && guardrails.splitIntent(command).compound;
-  // CW-9 (reviewer finding #4, second half): while a conduct thread is PARKED
-  // awaiting the operator's answer, a safety refusal must refuse the change —
-  // and must NOT swallow the answer with it. The operator wrote "…since 2pm,
-  // general throughput. Also reload sw2" — the reload is refused out loud, and
-  // the scoping half still resumes the parked understanding, so the turn is not
-  // lost and the thread is not orphaned.
-  if (writeIntent.destructive && !compoundGoesToChokePoint
-      && agentId === 'jarvis' && conduct.pending((currentRequest() || {}).conversationId || 'default')) {
-    live.refuseWrite(agentId, command, writeIntent);
-    return simulateJarvisAction(agentId, command);
-  }
+  // CW-9 re-review F1: the "refuse the write out loud, then still resume" branch
+  // that used to sit here was DEAD CODE — on the Jarvis surface `screenThis`
+  // depends on isDeviceCliRequest(), which is false for "reload sw2" and for a
+  // scoping answer with a reload tacked on, so `writeIntent.destructive` was
+  // hardcoded false and the branch could never run for the case it existed for.
+  // A conversational change ask is now screened where it actually enters — the
+  // shared conduct layer (sources/conduct.js writeAsk + jarvis.ask) — which sees
+  // the operator's text on EVERY path, refuses out loud, and still lets the rest
+  // of the message be understood. This block keeps its original job: the
+  // device-CLI class, refused before anything reaches the wire.
   if (writeIntent.destructive && !compoundGoesToChokePoint) {
     // The audit + activity record is written inside live.refuseWrite — the ONE
     // sink every refused write passes through. Logging it here as well would

@@ -310,7 +310,22 @@ async function ask(question, opts) {
   try {
     gate = await conduct.assess({ conversationId, text: q, operatorTz });
   } catch (err) {
-    gate = { decision: 'unavailable', why: (err && err.message) || 'the gate failed' };
+    gate = { decision: 'unavailable', reason: 'failed', changeAsk: conduct.writeAsk(q),
+      why: (err && err.message) || 'the gate failed' };
+  }
+
+  // A CHANGE ASK IS NEVER MET WITH SILENCE (re-review F1). Whatever the gate
+  // decides next, if the operator asked for something that changes a device it is
+  // refused OUT LOUD first — including inside a scoping answer ("…since 2pm.
+  // Also reload sw2"), where the old screen could not fire at all. This refuses
+  // the change and nothing else: the rest of the message carries on below.
+  if (gate && gate.changeAsk) {
+    speak('jarvis', conduct.envelope.say(conduct.writeRefusalText(gate.changeAsk)));
+    session.audit({
+      what: `change asked in chat: ${String((gate.changeAsk.clause || q)).slice(0, 200)}`,
+      result: 'refused out loud on the read-only path — zero device calls, nothing applied',
+    });
+    ctx.log(`[Jarvis] Change ask refused out loud (${gate.changeAsk.source}) — nothing ran — "${q.slice(0, 60)}"`);
   }
 
   // Underspecified problem report → ASK. Zero engagements, zero reads.
@@ -660,15 +675,27 @@ async function runBridge(q, gate, opts) {
   // The gate ran out of narrowing rounds and we are working a thin problem —
   // say so plainly, and say what is being assumed (ambiguity law).
   if (gate.thin) {
-    speak('jarvis', conduct.envelope.say(
-      `Heads up: this is still under-specified after ${conduct.MAX_ASK_ROUNDS} rounds of questions. ` +
-      `I am proceeding on the assumption that it means: ${gate.understood} — correct me and I will re-scope.`));
+    // The ASSUMPTION is the payload of this message, so it is what gets the room
+    // (re-review L1): the preamble and the invitation are fixed and short, the
+    // assumption is fitted to what is left, and the full text also rides the
+    // envelope as a structured field so nothing is lost to the cap.
+    const lead = 'Still under-specified after my questions — proceeding on: ';
+    const invite = ' Correct me and I will re-scope.';
+    const room = conduct.TEXT_MAX - lead.length - invite.length;
+    speak('jarvis', {
+      ...conduct.envelope.say(lead + conduct.clip(gate.understood, room) + invite),
+      assumption: gate.understood,
+    });
   }
   speak('jarvis', conduct.envelope.roster(
     `On the bridge: ${engaged.map((e) => e.agent).join(', ')}.` +
       (stoodDown.length ? ` Standing down: ${stoodDown.map((e) => e.agent).join(', ')}.` : '') +
+      // PER AGENT (re-review M2): printing the first agent's shared list against
+      // everyone named the wrong system for all but one of them — on the very
+      // line added to fix an honesty blocker.
       (overlapping.length
-        ? ` Not on the call, but their systems (${overlapping[0].shared.join(', ')}) still get read: ${overlapping.map((o) => o.agent).join(', ')}.`
+        ? ` Not on the call, but their systems still get read: ` +
+          overlapping.map((o) => `${o.agent} (${o.shared.join(', ')})`).join(', ') + '.'
         : ''),
     engaged, stoodDown));
   session.recordReasoning({
@@ -717,9 +744,17 @@ function bridgeObserver(opts) {
       if (!round) return;
       const report = round.report || {};
       const cli = Array.isArray(report.cli) ? report.cli : [];
-      const sig = (e) => `${e.source || 'unknown'}|${e.command || ''}`;
-      const fresh = cli.filter((e) => !seen.has(sig(e)));
-      cli.forEach((e) => seen.add(sig(e)));
+      // A check is NEW only if neither its normalised identity (volatile query
+      // params stripped — re-review M1) nor its exact output has been shown
+      // before. A cache-buster in the URL can no longer make a repeat look new.
+      // Marked as they are walked, so a duplicate WITHIN one round is caught too.
+      const fresh = [];
+      for (const e of cli) {
+        const id = conduct.identityKey(e);
+        const out = conduct.outputKey(e);
+        if (!seen.has(id) && !seen.has(out)) fresh.push(e);
+        seen.add(id); seen.add(out);
+      }
       const lead = (round.hypotheses || []).find((h) => h.status === 'confirmed')
         || (round.hypotheses || []).find((h) => h.status !== 'eliminated');
       const tail = lead ? ` Leading line: ${lead.text} (${Math.round((round.confidence || 0) * 100)}%).` : '';
@@ -1363,6 +1398,16 @@ version on sw2", "who is on INC-20260817-013?"). Those are false. Reason about w
 never decide this from keywords. Everything below only matters when problemReport is true — when
 it is false, set specific=true, questions to an empty list, and do not grill anyone.
 
+IS THE OPERATOR ASKING YOU TO CHANGE SOMETHING? Put it in "changeAsk", in their own words
+("reload sw2 to clear it"), whenever any part of the message asks for an action that would
+alter a device — reload, restart, shut/no shut, clear, configure, reset, apply. null when
+they are only describing or asking. Reporting a PAST change ("since the reload last night")
+is NOT a change ask. This path is read-only, so a change ask is refused out loud and routed
+to the change engine — it is never performed.
+CRITICAL: "understood" must describe the PROBLEM ONLY. Never fold the change they asked for
+into it — an investigation that inherits "the operator wants sw2 reloaded" spends its rounds
+chasing an action nobody may take.
+
 WHEN THE OPERATOR IS REPLYING to clarifying questions you already asked, you are also given
 their latest reply on its own. Judge it in "replyIntent":
   - "answers"   — it narrows the SAME problem (even partially, even badly).
@@ -1405,7 +1450,13 @@ more, or a read query an agent already supports) — never a change. For a devic
 target device in "device" as its bare name or mgmt IP; else null. If NOTHING you can reach would
 narrow this further — you need a device you cannot reach, an operator input, or credentials you do
 not have — set "stuck" to a plain sentence saying exactly what it needs, and pick no probe. Never
-invent a probe just to look busy; a real dead-end is an honest stuck, not a wasted round.`;
+invent a probe just to look busy; a real dead-end is an honest stuck, not a wasted round.
+
+LEARN FROM A REFUSAL (CW-9 re-review M4). If a previous round came back REFUSED because the probe
+was not read-only, do NOT re-ask for that action in other words — reload / reset / restart / clear
+are all refused, every time, by design. Either pick a READ that would show you the same thing, or
+declare stuck. A round spent bouncing off the read-only guardrail is a round the operator paid for
+and got nothing from.`;
 
 const INV_ASSESS_SYSTEM =
 `You are Jarvis, L4 / Principal Engineer, narrowing an investigation from ONE real agent report.
@@ -1433,12 +1484,16 @@ Compose a fix, grounded ONLY in the evidence gathered (the rounds/reports). Retu
 async function invUnderstand({ problem, operatorTz, answers, reply }) {
   const format = { type: 'json_schema', schema: {
     type: 'object', additionalProperties: false,
-    required: ['problemReport', 'replyIntent', 'specific', 'understood', 'hypotheses', 'questions', 'relevantFronts'],
+    required: ['problemReport', 'replyIntent', 'changeAsk', 'specific', 'understood', 'hypotheses', 'questions', 'relevantFronts'],
     properties: {
       // CW-9 (resume): does the operator's latest reply answer the parked
       // questions, change the subject, or drop it? An abandoned problem must
       // never be quietly investigated anyway.
       replyIntent: { type: 'string', enum: ['answers', 'new-topic', 'abandons'] },
+      // CW-9 re-review F1: the change the operator asked for, in their words —
+      // refused out loud on this read-only path, and deliberately kept OUT of
+      // `understood` so the investigation never chases it.
+      changeAsk: { type: ['string', 'null'] },
       // CW-9: is this a problem report at all? The shared conduct gate only
       // narrows PROBLEMS — a greeting or a direct command is never grilled.
       problemReport: { type: 'boolean' },
@@ -1474,6 +1529,7 @@ async function invUnderstand({ problem, operatorTz, answers, reply }) {
     problemReport: p.problemReport !== false,
     // 'answers' | 'new-topic' | 'abandons' — only meaningful on a resume.
     replyIntent: ['answers', 'new-topic', 'abandons'].includes(p.replyIntent) ? p.replyIntent : 'answers',
+    changeAsk: typeof p.changeAsk === 'string' && p.changeAsk.trim() ? p.changeAsk.trim() : null,
     specific: p.specific !== false,
     understood: p.understood || String(problem || ''),
     hypotheses: Array.isArray(p.hypotheses) ? p.hypotheses : [],

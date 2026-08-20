@@ -101,10 +101,44 @@ function scrub(text) {
   // the line still reads as evidence: `password 0 «redacted»`.
   s = s.replace(/\b(password|passwd|secret|key-string|key-hash|pre-shared-key|ppp\s+chap\s+password|md5)(\s+(?:\d\s+|encrypted\s+|0x)?)(?!«)([^\s,;"'<>]{3,})/gi,
     (m, k, sep) => k + sep + '«redacted»');
-  // `username admin privilege 15 password 0 Cisco123!` is covered by the rule
-  // above (it redacts from `password`), and `snmp-server user … auth md5 <x>`
-  // by the md5 keyword. A bare `key 7 04585A150C2E` (interface/EIGRP auth):
-  s = s.replace(/\b(key)(\s+\d\s+)(?!«)([^\s,;"'<>]{3,})/gi, (m, k, sep) => k + sep + '«redacted»');
+  // SHARED SECRETS ARE SECRET WITH OR WITHOUT AN ENCODING DIGIT (CW-9 re-review
+  // F2). The commonest plaintext forms in a real running-config carry no `7`/`0`
+  // type byte at all — `tacacs-server host 1.1.1.1 key MyTacKey123`,
+  // `radius-server key SuperRadius99`, `crypto isakmp key VpnPsk2026 address …`,
+  // `wpa-psk ascii 0 MyWifiPass`. So the CLASS is "these keywords introduce a
+  // secret", and the optional type byte / encoding word is just noise in between.
+  // The few `key <word>` forms that are NOT secrets (`key chain KC1`,
+  // `crypto key generate rsa`, `key config-key …`) are excluded by name, so a
+  // config still reads as a config.
+  // What may FOLLOW one of these keywords and not be a secret: sub-commands
+  // (`key chain KC1`, `crypto key generate rsa`) and algorithm names, which are
+  // part of the syntax — the secret is the token after them.
+  const NOT_A_SECRET = 'chain|config-key|generate|zeroize|mypubkey|pubkey|rsa|exchange|id|lifetime|address|local|remote|length|modulus|label|import|export|decrypt|encrypt|cached|management' +
+    // An algorithm name is syntax, not the secret — the secret is the token
+    // after it (already redacted by the md5/hash rule above, whose «redacted»
+    // marker this rule then refuses to redact twice).
+    '|md5|sha|sha1|sha256|sha512|hmac|hmac-sha1|hmac-sha256|aes|des|3des';
+  const ALGORITHMS = '(?:\\s+(?:md5|sha|sha1|sha256|sha512|hmac(?:-sha\\d*)?|aes|des|3des))?';
+  const SECRET_KEYWORD = new RegExp(
+    // (?<![\w-]) so the `key` inside `config-key` / `message-digest-key` is not a
+    // separate match, and a free-text line ("to key customer") is handled below.
+    '(?<![\\w-])(key|pre-shared-key|wpa-psk|psk|authentication-key|message-digest-key)' +
+    '((?:\\s+(?:ascii|hex|clear|encrypted|cleartext))?(?:\\s+\\d+)?' + ALGORITHMS +
+    '(?:\\s+(?:ascii|hex|clear|encrypted|cleartext))?\\s+)' +
+    `(?!«)(?!(?:${NOT_A_SECRET})\\b)([^\\s,;"'<>]{3,})`, 'gi');
+  // FREE-TEXT COMMANDS ARE NOT CONFIG VALUES. `description uplink to key customer`
+  // and `remark`/`banner` lines are prose an engineer typed; redacting a word out
+  // of them corrupts real evidence without protecting anything. Everything else
+  // on the line is screened as config.
+  s = s.split('\n').map((line) =>
+    /^\s*(?:description|remark|banner|!)\b/i.test(line) ? line : line.replace(SECRET_KEYWORD, (m, k, sep) => k + sep + '«redacted»')
+  ).join('\n');
+  // `snmp-server host <ip> [vrf X] [traps|informs] [version 1|2c|3 [auth|noauth|priv]] <COMMUNITY>`
+  // — the community/user is a positional token with no keyword in front of it, so
+  // no keyword rule can see it. Matched structurally instead.
+  s = s.replace(
+    /\b(snmp-server\s+host\s+\S+(?:\s+vrf\s+\S+)?(?:\s+(?:traps|informs))?(?:\s+version\s+(?:1|2c|3(?:\s+(?:auth|noauth|priv))?))?\s+)(?!«)([^\s,;"'<>]{3,})/gi,
+    (m, head) => head + '«redacted»');
   // `Authorization: Bearer <token>` / a bare `Bearer <token>` in free text.
   s = s.replace(/\b(Bearer\s+)(?!«)[A-Za-z0-9._~+/=-]{8,}/g, (m, k) => k + '«redacted»');
   return s;

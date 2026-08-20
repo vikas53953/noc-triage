@@ -383,7 +383,7 @@ section('THE 2026-08-19 FAILURE — "hey jarvis facing issue in epg" must ASK FI
     ok('an agent with no overlap still stands down honestly', names.includes('NetOps'));
     ok('a never-connected agent is not named on the card at all', !names.includes('Firewall-Pro'));
     ok('the overlap is stated out loud instead of being hidden',
-      /Not on the call, but their systems .*sdwan.*Monitor-Eye/s.test(withKind('roster')[0].text),
+      /Not on the call, but their systems still get read: Monitor-Eye \(sdwan\)/.test(withKind('roster')[0].text),
       withKind('roster')[0].text);
   }
   {
@@ -520,7 +520,7 @@ section('THE 2026-08-19 FAILURE — "hey jarvis facing issue in epg" must ASK FI
     ok('it proceeds (the grill is bounded)', Boolean(bridgeCreated));
     ok('and it SAYS it is proceeding on an under-specified problem',
       said.some((m) => /under-specified/.test(m.text)), said.map((m) => m.text).join(' | '));
-    ok('naming what it assumed', said.some((m) => m.text.includes('assumption that it means')));
+    ok('naming what it assumed', said.some((m) => m.text.includes('proceeding on:')));
   }
 
   section('MEDIUM 7 — a garbage understanding fails SAFE, never into an estate sweep:');
@@ -568,6 +568,233 @@ section('THE 2026-08-19 FAILURE — "hey jarvis facing issue in epg" must ASK FI
     for (let i = 0; i < 210; i++) await conduct.assess({ conversationId: `bulk-${i}`, text: 'vague thing' });
     ok('threads never grow without bound', conduct._threads.size <= 200, `${conduct._threads.size}`);
     ok('the most recent thread survives eviction', Boolean(conduct.pending('bulk-209')));
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // RE-REVIEW of 5c02cdb (2026-08-20) — one section per finding.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  section('F1 — a change ask is NEVER met with silence, on any path:');
+  {
+    // The deterministic backstop alone (no LLM changeAsk) must already catch all
+    // three phrasings the reviewer used, including the ones isDeviceCliRequest
+    // returns false for — which is why the old branch was dead code.
+    const cases = [
+      ['bare', 'reload sw2'],
+      ['mixed answer + write', 'All branch sites, since 2pm today, users cannot connect at all. Also go ahead and reload sw2 to clear it.'],
+      ['polite', 'could you maybe restart sw2'],
+    ];
+    for (const [label, text] of cases) {
+      ok(`${label}: the shared write screen sees it`, Boolean(conduct.writeAsk(text)), text);
+    }
+    ok('a PAST change is not a change ask', !conduct.writeAsk('after the reload last night users complain of slowness'));
+    ok('a plain problem report is not a change ask', !conduct.writeAsk('the epg is not reachable from the campus'));
+  }
+  {
+    // Bare "reload sw2" in chat — refused out loud, nothing engaged.
+    const p = scriptPlanner([{ problemReport: false, specific: true, understood: 'a device command', hypotheses: [], questions: [], relevantFronts: [] }]);
+    conduct.setPlanner(p.planner);
+    resetHarness({ screen: () => true });   // the capability screen offers the change proposal
+    stubClaude({});
+    await jarvis.ask('reload sw2', { conversationId: 'w1' });
+    ok('bare write ask: Jarvis says out loud that it is a change and did not do it',
+      said.some((m) => /is a change/.test(m.text) && /read-only/.test(m.text)), said.map((m) => m.text).join(' | '));
+    ok('bare write ask: nothing was engaged or read', gathers.length === 0 && !bridgeCreated);
+    ok('bare write ask: it is still routed on to the change-proposal path', screened.length === 1);
+  }
+  {
+    // The reviewer's exact mixed message, as the answer to parked questions:
+    // the change is refused AND the scoping half still resumes the bridge.
+    const p = scriptPlanner([VAGUE, SPECIFIC]);
+    conduct.setPlanner(p.planner);
+    resetHarness();
+    stubClaude({ 'opening a P1 bridge': { engaged: [{ agentId: 'router-expert', why: 'fabric owner' }], stoodDown: [] } });
+    await jarvis.ask('wifi is bad at the branches', { conversationId: 'w2' });
+    said.length = 0;
+    await jarvis.ask('All branch sites, since 2pm today, users cannot connect at all. Also go ahead and reload sw2 to clear it.',
+      { conversationId: 'w2' });
+    ok('mixed message: the change half is refused out loud',
+      said.some((m) => /is a change/.test(m.text)), said.map((m) => m.text).join(' | '));
+    ok('mixed message: the scoping half still resumed the bridge', withKind('roster').length === 1 && Boolean(bridgeCreated));
+    ok('mixed message: the refusal comes BEFORE the roster',
+      said.findIndex((m) => /is a change/.test(m.text)) < said.findIndex((m) => m.env && m.env.kind === 'roster'));
+  }
+  {
+    // The LLM's own reading wins when it has one, and the change is kept OUT of
+    // `understood` so the investigation never chases it (root cause of M4).
+    const p = scriptPlanner([{ ...SPECIFIC, changeAsk: 'bounce the uplink on sw2' }]);
+    conduct.setPlanner(p.planner);
+    resetHarness();
+    stubClaude({ 'opening a P1 bridge': { engaged: [{ agentId: 'router-expert', why: 'fabric owner' }], stoodDown: [] } });
+    await jarvis.ask('east-west is down for Prod-App in Retail since 14:00, sort it out', { conversationId: 'w3' });
+    ok('the model-detected change ask is refused out loud',
+      said.some((m) => /bounce the uplink on sw2/.test(m.text)), said.map((m) => m.text).join(' | '));
+    ok('the change never reaches the investigation',
+      !String(bridgeCreated.understood).toLowerCase().includes('bounce'));
+  }
+  {
+    // With NO reasoning at all, the deterministic screen still speaks.
+    conduct.setPlanner(null);
+    resetHarness();
+    stubClaude({ 'Principal Engineer of a live NOC': { intent: 'x', symptom: { timeAnchor: null, scope: null, rawSymptom: 'x' }, delegations: [], standDown: [], note: '', selfAnswer: 'ok' } });
+    await jarvis.ask('reload sw2', { conversationId: 'w4' });
+    ok('no planner: the change ask is STILL acknowledged, never silent',
+      said.some((m) => /is a change/.test(m.text)), said.map((m) => m.text).join(' | '));
+  }
+
+  section('F2 — the plaintext shared-secret forms are scrubbed (the reviewer\'s 12 + more):');
+  {
+    const s = require('./session-log').scrub;
+    const secrets = [
+      ['tacacs-server host 1.1.1.1 key MyTacKey123', 'MyTacKey123'],
+      ['radius-server key SuperRadius99', 'SuperRadius99'],
+      ['snmp-server host 1.1.1.1 version 2c PrivComm99', 'PrivComm99'],
+      ['crypto isakmp key VpnPsk2026 address 2.2.2.2', 'VpnPsk2026'],
+      ['tacacs-server key 7 070C285F4D06', '070C285F4D06'],
+      ['username bob secret 9 $14$abcdEFGH', '$14$abcdEFGH'],
+      ['neighbor 1.1.1.1 password BgpMd5Key', 'BgpMd5Key'],
+      ['ppp chap password 7 104D000A0618', '104D000A0618'],
+      ['ip ftp password FtpPass123', 'FtpPass123'],
+      ['snmp-server community S3cretComm RW', 'S3cretComm'],
+      ['radius server R1\n key 0 RadKey0', 'RadKey0'],
+      ['username admin privilege 15 password 0 Cisco123!', 'Cisco123!'],
+      ['wpa-psk ascii 0 MyWifiPass', 'MyWifiPass'],
+      ['ntp authentication-key 1 md5 NtpKey123', 'NtpKey123'],
+      ['ip ospf message-digest-key 1 md5 MyOspfKey', 'MyOspfKey'],
+      ['snmp-server host 1.1.1.1 traps PrivComm99 udp-port 162', 'PrivComm99'],
+      ['key-string mysharedkey', 'mysharedkey'],
+      ['ANTHROPIC_API_KEY=sk-ant-abc123', 'sk-ant-abc123'],
+    ];
+    for (const [line, secret] of secrets) {
+      ok(`scrubbed: ${line.split('\n').pop().slice(0, 46)}`, !s(line).includes(secret), s(line));
+    }
+    const keep = [
+      'interface GigabitEthernet1/0/3',
+      'Cisco IOS XE Software, Version 17.12.01prd9',
+      'key chain KC1',
+      'crypto key generate rsa modulus 2048',
+      ' description uplink to key customer',
+      'ip address 10.1.1.1 255.255.255.0',
+      'hostname sw2',
+      'ntp authentication-key 1 md5 NtpKey123',  // the ALGORITHM name survives
+    ];
+    for (const line of keep) {
+      const out = s(line);
+      const unchanged = line.includes('NtpKey123') ? out.includes('md5') : out === line;
+      ok(`evidence survives: ${line.trim().slice(0, 46)}`, unchanged, out);
+    }
+  }
+
+  section('M1 — a cache-buster cannot make a repeated read look new:');
+  {
+    resetHarness();
+    const obs = jarvis._test.bridgeObserver();
+    const health = (ts) => ({ host: 'dnac', source: 'catalyst-center',
+      command: `GET /dna/intent/api/v1/network-health?timestamp=${ts}`,
+      output: 'Overall health score 100 across 4 devices', transport: 'api',
+      line: 'Overall health score 100 across 4 devices (4 good / 0 bad).' });
+    const round = (n, entries) => ({ round: n, agent: 'Monitor-Eye',
+      probe: { agentId: 'monitor-eye', question: 'q' },
+      report: { agentName: 'Monitor-Eye', stance: 'evidence', text: 't', cli: entries },
+      hypotheses: [], confidence: 0.2, status: 'ok' });
+    obs.onRound({}, round(1, [health(1787207261737)]));
+    obs.onRound({}, round(2, [health(1787207291757)]));
+    ok('round 1 announces the check', /1 new check/.test(withKind('say')[0].text));
+    ok('the same read under a new timestamp is NOT announced as new',
+      /nothing new/.test(withKind('say')[1].text), withKind('say')[1].text);
+    ok('and it is not posted twice as a finding', withKind('finding').length === 1);
+    ok('identity ignores volatile params but keeps real ones',
+      conduct.identityKey({ source: 's', command: 'GET /x?a=1&_=9' }) === conduct.identityKey({ source: 's', command: 'GET /x?_=7&a=1' })
+      && conduct.identityKey({ source: 's', command: 'GET /x?a=1' }) !== conduct.identityKey({ source: 's', command: 'GET /x?a=2' }));
+    ok('an identical body under a DIFFERENT url is still caught as a repeat',
+      conduct.outputKey({ source: 's', output: 'same' }) === conduct.outputKey({ source: 's', output: 'same' })
+      && conduct.outputKey({ source: 's', output: 'same' }) !== conduct.outputKey({ source: 's', output: 'other' }));
+  }
+  {
+    // A genuinely new check in a later round is still announced.
+    resetHarness();
+    const obs = jarvis._test.bridgeObserver();
+    const e = (cmd) => ({ host: 'h', source: 'aci', command: cmd, output: cmd, transport: 'api', line: cmd });
+    obs.onRound({}, { round: 1, agent: 'A', probe: { agentId: 'router-expert', question: 'q' },
+      report: { agentName: 'A', stance: 'evidence', text: 't', cli: [e('/x'), e('/y')] }, hypotheses: [], confidence: 0.1, status: 'ok' });
+    obs.onRound({}, { round: 2, agent: 'A', probe: { agentId: 'router-expert', question: 'q' },
+      report: { agentName: 'A', stance: 'evidence', text: 't', cli: [e('/x'), e('/NEW')] }, hypotheses: [], confidence: 0.2, status: 'ok' });
+    ok('a partially-new round names only the new check',
+      /1 new check\(s\) — \/NEW/.test(withKind('say')[1].text), withKind('say')[1].text);
+    ok('and posts only the new finding', withKind('finding').length === 3);
+  }
+
+  section('M2 — the overlap line names each agent\'s OWN systems:');
+  {
+    const p = scriptPlanner([SPECIFIC]);
+    conduct.setPlanner(p.planner);
+    resetHarness();
+    stubClaude({
+      'opening a P1 bridge': {
+        engaged: [{ agentId: 'router-expert', why: 'aci + sdwan owner' }, { agentId: 'netops', why: 'campus owner' }],
+        stoodDown: [
+          { agentId: 'monitor-eye', why: 'alerts only' },        // shares catalyst-center + sdwan
+          { agentId: 'config-keeper', why: 'no CLI needed' },     // shares catalyst-center only
+        ],
+      },
+    });
+    await jarvis.ask('east-west down for Prod-App since 14:00', { conversationId: 'm2' });
+    const text = withKind('roster')[0].text;
+    ok('each overlapping agent gets its own shared list',
+      /Monitor-Eye \(catalyst-center, sdwan\)/.test(text) && /Config-Keeper \(catalyst-center\)/.test(text), text);
+  }
+
+  section('M3 — AGENT_SOURCES cannot drift from the builders without a test failing:');
+  {
+    const fs = require('fs');
+    const src = fs.readFileSync(require('path').join(__dirname, 'live-agents.js'), 'utf8');
+    const block = src.slice(src.indexOf('const DEBATE_BUILDERS = {'), src.indexOf('\n// Called once per participating agent when a debate runs.'));
+    // Split the builder object into per-agent bodies on its 2-space-indented keys.
+    const parts = block.split(/\n  '([a-z-]+)': \{/).slice(1);
+    // What a module reference in a builder body MEANS in source-id terms.
+    const REF = [
+      [/\bcatalyst\./, 'catalyst-center'], [/\baci\./, 'aci'], [/\bsdwan\./, 'sdwan'],
+      [/\bsshRunner\./, 'ssh'], [/\bincidentRead\./, 'incidents'],
+      // The CLI choke point reaches Command Runner and (per device) direct SSH.
+      [/executeDeviceCli|runDeviceCli/, 'catalyst-center'], [/executeDeviceCli|runDeviceCli/, 'ssh'],
+    ];
+    let checked = 0;
+    for (let i = 0; i < parts.length; i += 2) {
+      const agentId = parts[i];
+      const body = parts[i + 1] || '';
+      if (agentId === 'jarvis') continue;         // aggregator, no reads of its own
+      const touched = new Set();
+      for (const [re, id] of REF) if (re.test(body)) touched.add(id);
+      const declared = new Set(live.sourcesFor(agentId));
+      const missing = [...touched].filter((t) => !declared.has(t));
+      ok(`${agentId}: every source its builder touches is declared`, missing.length === 0,
+        `undeclared: ${missing.join(', ')}`);
+      checked++;
+    }
+    ok('the drift check actually inspected the builders', checked >= 5, `${checked} builders`);
+    // And the check must FAIL when a builder gains a read the table does not know.
+    const fakeBody = 'async build(){ const x = await sdwan.getAlarmCount(); }';
+    const fakeTouched = REF.filter(([re]) => re.test(fakeBody)).map(([, id]) => id);
+    ok('a new read in a builder would be caught',
+      fakeTouched.includes('sdwan') && !live.sourcesFor('netops').includes('sdwan'));
+  }
+
+  section('L1 — the thin-proceed assumption is never clipped away:');
+  {
+    const longUnderstood = 'Wi-Fi association failures affecting all branch sites since approximately 14:00 local time today, with clients unable to complete authentication against the RADIUS servers behind the branch controllers';
+    const p = scriptPlanner([VAGUE, VAGUE, { ...VAGUE, specific: false, understood: longUnderstood }]);
+    conduct.setPlanner(p.planner);
+    resetHarness();
+    stubClaude({ 'opening a P1 bridge': { engaged: [{ agentId: 'netops', why: 'campus owner' }], stoodDown: [] } });
+    await jarvis.ask('wifi is bad', { conversationId: 'l1' });
+    await jarvis.ask('not sure', { conversationId: 'l1' });
+    said.length = 0;
+    await jarvis.ask('still not sure', { conversationId: 'l1' });
+    const thin = said.find((m) => /proceeding on:/.test(m.text));
+    ok('the thin message exists', Boolean(thin));
+    ok('it still fits the cap', thin.text.length <= conduct.TEXT_MAX, `${thin.text.length}`);
+    ok('the invitation to re-scope survives the cap', /Correct me and I will re-scope\./.test(thin.text), thin.text);
+    ok('the FULL assumption rides the envelope, uncut', thin.env.assumption === longUnderstood);
   }
 
   restoreClaude();

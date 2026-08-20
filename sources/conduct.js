@@ -32,6 +32,11 @@
 // deterministically testable offline. The real planner (sources/jarvis.js →
 // conductPlanner) drops into the same seam unchanged.
 
+// Deterministic safety only (never routing, never answering): the clause-level
+// write screen the CLI choke point already uses. Here it is the BACKSTOP behind
+// the LLM's own judgement, so a change ask is never met with silence.
+const guardrails = require('./guardrails');
+
 // ── Hard caps (contract-pinned, enforced in code) ───────────────────────────
 const TEXT_MAX = 280;      // any jarvis say/ask text
 const LINE_MAX = 200;      // finding.line — one sentence of meaning
@@ -181,6 +186,86 @@ function changeMsg(text, { id, steps } = {}) {
 
 const envelope = { say: sayMsg, ask: askMsg, roster: rosterMsg, finding: findingMsg, verdict: verdictMsg, change: changeMsg };
 
+// ── Evidence identity: is this the same check we already showed? ────────────
+// (re-review M1). Signing on the literal command let a cache-buster defeat the
+// round dedupe: `/network-health?timestamp=1787207261737` and
+// `/network-health?timestamp=1787207291757` are the SAME read, and announcing
+// the second as a new check — with an identical body and an identical finding
+// line — is the "says more than it does" defect in miniature.
+//
+// Two keys, and a repeat on EITHER means it is not new:
+//   • identityKey — method + path + the stable query params (volatile ones
+//     dropped, the rest sorted so order cannot fake a difference);
+//   • outputKey   — the source plus a hash of the raw output, which catches a
+//     re-read that arrives under a different URL entirely.
+const VOLATILE_PARAMS = /^(?:_|t|ts|time|timestamp|nonce|rand|random|cache|cachebust|cb|__|v|version_ts|epoch|requestid|request_id|traceid|trace_id)$/i;
+
+function normalizeCommand(command) {
+  const raw = String(command || '').trim();
+  const qi = raw.indexOf('?');
+  if (qi < 0) return raw;
+  const head = raw.slice(0, qi);
+  // The trailing "(fetch command output)"-style annotation the session log adds
+  // must survive; split it off the query string before parsing.
+  const rest = raw.slice(qi + 1);
+  const spaceAt = rest.search(/\s/);
+  const query = spaceAt < 0 ? rest : rest.slice(0, spaceAt);
+  const tail = spaceAt < 0 ? '' : rest.slice(spaceAt);
+  const kept = query.split('&')
+    .filter(Boolean)
+    .filter((pair) => !VOLATILE_PARAMS.test(decodeURIComponent(pair.split('=')[0] || '')))
+    .sort();
+  return head + (kept.length ? `?${kept.join('&')}` : '') + tail;
+}
+
+// Small, fast, dependency-free content hash (djb2). Not a security hash — it
+// only answers "is this the same body we already showed?".
+function hashOf(text) {
+  const s = String(text == null ? '' : text);
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return `${s.length}:${h.toString(36)}`;
+}
+
+function identityKey(entry) {
+  return `${(entry && entry.source) || 'unknown'}|${normalizeCommand(entry && entry.command)}`;
+}
+function outputKey(entry) {
+  return `${(entry && entry.source) || 'unknown'}|${hashOf(entry && entry.output)}`;
+}
+
+// ── The shared write screen (re-review F1) ──────────────────────────────────
+// A CHANGE ASK MAY NEVER BE MET WITH SILENCE. The old screen only ran when
+// `isDeviceCliRequest()` said the text was a device-CLI request — which is false
+// for "reload sw2" and for a scoping answer with a reload tacked on, so the
+// refusal branch could never fire and the operator was told nothing at all.
+//
+// This screen lives at the conduct layer, so EVERY operator entry point gets it,
+// and it works on the operator's own text. It has two halves, in the order the
+// intent-first law demands:
+//   • the LLM's judgement (`changeAsk` from the understanding) decides what the
+//     operator MEANT — that is reasoning, and it is primary;
+//   • this deterministic clause screen is the SAFETY BACKSTOP behind it, so a
+//     change ask the model missed is still acknowledged.
+// Neither half BLOCKS anything: the change is refused out loud and the rest of
+// the message carries on being understood. Nothing here can run a change; the
+// gate + choke point are unchanged.
+function writeAsk(text) {
+  try {
+    const v = guardrails.splitIntent(String(text || ''));
+    if (!v || !v.destructive || !v.change) return null;
+    return { keyword: v.change.keyword, clause: v.change.clause || String(text || ''), source: 'guardrail' };
+  } catch (e) { return null; }
+}
+
+// The one honest sentence said when the operator asks for a change on a
+// read-only path. Built here so chat, intake and any future path say the same.
+function writeRefusalText(ask) {
+  const what = capLine((ask && (ask.clause || ask.keyword)) || 'that');
+  return `That is a change ("${what}") — this path is read-only, so I have not done it and nothing was sent to any device. ` +
+    `Changes go through the change engine, approve-first.`;
+}
+
 // ── The injected planner (the LLM half) ─────────────────────────────────────
 // planner = { available(): boolean,
 //             understand({ problem, operatorTz, answers }) -> {
@@ -242,7 +327,10 @@ async function assess({ conversationId, text, operatorTz, _depth } = {}) {
   if (!available()) {
     // No planner at all (no key / not wired). The caller keeps its own honest
     // path — this is not a reasoning FAILURE, it is reasoning being absent.
-    return { decision: 'unavailable', reason: 'no-planner', why: 'no reasoning planner is wired up or it has no key' };
+    // Even with no reasoning at all, a change ask is acknowledged, never met
+    // with silence — the deterministic screen is the safety net.
+    return { decision: 'unavailable', reason: 'no-planner', changeAsk: writeAsk(said),
+      why: 'no reasoning planner is wired up or it has no key' };
   }
 
   const open = pending(conversationId);
@@ -262,7 +350,8 @@ async function assess({ conversationId, text, operatorTz, _depth } = {}) {
       reply: open ? said : null,
     });
   } catch (err) {
-    return { decision: 'unavailable', reason: 'failed', why: (err && err.message) || 'the understanding step failed' };
+    return { decision: 'unavailable', reason: 'failed', changeAsk: writeAsk(said),
+      why: (err && err.message) || 'the understanding step failed' };
   }
 
   // FAIL SAFE, NOT OPEN (reviewer finding #7). A null, a number, or a
@@ -270,13 +359,20 @@ async function assess({ conversationId, text, operatorTz, _depth } = {}) {
   // an understanding we do not have. Step aside honestly; engage nobody.
   if (!u || typeof u !== 'object' || Array.isArray(u)
       || typeof u.specific !== 'boolean' || typeof u.understood !== 'string') {
-    return { decision: 'unavailable', reason: 'failed',
+    return { decision: 'unavailable', reason: 'failed', changeAsk: writeAsk(said),
       why: 'the understanding step came back in a shape I could not read, so I did not act on it' };
   }
 
   const understood = (u && u.understood) || problem;
   const hypotheses = (u && Array.isArray(u.hypotheses)) ? u.hypotheses : [];
   const relevantFronts = (u && Array.isArray(u.relevantFronts)) ? u.relevantFronts : [];
+  // Did they ask for a CHANGE anywhere in this message? The model's reading of
+  // it wins; the deterministic clause screen is the backstop for what it missed.
+  // Carried on EVERY decision so no path can drop it (re-review F1).
+  const detected = writeAsk(said);
+  const changeAsk = (u && typeof u.changeAsk === 'string' && u.changeAsk.trim())
+    ? { keyword: null, clause: u.changeAsk.trim(), source: 'reasoning' }
+    : detected;
 
   // ── A REPLY to parked questions is judged by the LLM, not assumed ──────────
   // (reviewer finding #5). It either answers them, changes the subject, or walks
@@ -286,21 +382,21 @@ async function assess({ conversationId, text, operatorTz, _depth } = {}) {
     const intent = typeof u.replyIntent === 'string' ? u.replyIntent : 'answers';
     if (intent === 'abandons') {
       clear(conversationId);
-      return { decision: 'not-a-problem', understood: said, abandoned: true, dropped: problem };
+      return { decision: 'not-a-problem', understood: said, abandoned: true, dropped: problem, changeAsk };
     }
     if (intent === 'new-topic') {
       clear(conversationId);
       // Start again on what they ACTUALLY said now. One level only — a planner
       // that kept saying "new topic" could otherwise loop.
       if ((_depth || 0) < 1) return assess({ conversationId, text: said, operatorTz, _depth: (_depth || 0) + 1 });
-      return { decision: 'not-a-problem', understood: said, switched: true };
+      return { decision: 'not-a-problem', understood: said, switched: true, changeAsk };
     }
   } else if (u.problemReport === false) {
     // Not a problem report at all (a greeting, a meta ask, "run show version on
     // sw2") — the gate stays out of the way. It never asks narrowing questions
     // about something that is not a problem.
     clear(conversationId);
-    return { decision: 'not-a-problem', understood };
+    return { decision: 'not-a-problem', understood, changeAsk };
   }
 
   const vague = Boolean(u && u.specific === false);
@@ -320,6 +416,7 @@ async function assess({ conversationId, text, operatorTz, _depth } = {}) {
     return {
       decision: 'ask',
       questions: asked,
+      changeAsk,
       problem,
       understood,
       // The short line that goes with the questions — composed by the caller if
@@ -337,6 +434,7 @@ async function assess({ conversationId, text, operatorTz, _depth } = {}) {
   });
   return {
     decision: 'proceed',
+    changeAsk,
     problem,
     understood,
     hypotheses,
@@ -374,9 +472,13 @@ async function understand({ problem, priorAnswers, operatorTz } = {}) {
 module.exports = {
   setPlanner, getPlanner, available,
   assess, understand,
+  // The shared write screen + its one honest sentence (re-review F1).
+  writeAsk, writeRefusalText,
+  // Evidence identity for the round dedupe (re-review M1).
+  identityKey, outputKey, normalizeCommand, hashOf,
   pending, clear,
   envelope,
-  capText, capLine, transportOf,
+  capText, capLine, clip, transportOf,
   TEXT_MAX, LINE_MAX, MAX_QUESTIONS, MAX_ASK_ROUNDS, TRANSPORTS,
   // Exposed for the deterministic tests only.
   _threads: threads,
