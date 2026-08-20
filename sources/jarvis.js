@@ -30,6 +30,11 @@ const session = require('./session-log');
 // Jarvis (no cycle): Jarvis hands it a planner, and every operator entry point
 // goes through the same gate.
 const conduct = require('./conduct');
+// CW-11: the reflexion layer (round reflection, verdict self-check, prediction
+// follow-through) and the lessons memory. Both take an injected planner exactly
+// like conduct.js, so neither knows anything about Jarvis and there is no cycle.
+const reflexion = require('./reflexion');
+const lessons = require('./lessons');
 
 let ctx = null;
 // ctx: { say(agentId,text), status(agentId,state,label), log(line),
@@ -849,7 +854,29 @@ async function runBridge(q, gate, opts) {
     interpretation: 'Opened a bridge on a problem the shared conduct gate judged specific enough to work — the engaged set is the only set the investigation loop may task.',
   });
 
+  // ── CW-11 Part 4 — CONSULT THE LESSONS ────────────────────────────────────
+  // Have we closed something like this before? The MODEL judges similarity (no
+  // keyword matching — intent-first law). This runs AFTER the ask-first gate has
+  // already let the bridge open, and it produces exactly one sentence: a lesson
+  // BIASES where to look first, it never runs a check and never skips a question.
+  let lesson = null;
+  try {
+    lesson = await lessons.consult({ problem: gate.problem, understood: gate.understood });
+  } catch (e) { lesson = null; }
+  if (lesson) {
+    // The lesson chip the desk renders reads this off the chat message; the plain
+    // line stays exactly as it was for a client that only reads `text`.
+    speak('jarvis', { ...conduct.envelope.say(lesson.line),
+      lesson: { id: lesson.id, lookFirst: lesson.lookFirst || null, why: lesson.why || null } });
+    session.recordReasoning({
+      command: 'LESSON',
+      raw: `Matched ${lesson.id}: ${lesson.why || 'similar symptoms'}\nLook first: ${lesson.lookFirst || 'not recorded'}`,
+      interpretation: 'A past closed incident looks similar. It biases where I look first — it runs nothing and skips no questions.',
+    });
+  }
+
   const observer = bridgeObserver({
+    lesson,
     // The backstop for the roster claim: if a round's REAL evidence touches a
     // system belonging to someone we announced as standing down, Jarvis says so
     // out loud instead of leaving a false claim standing.
@@ -863,6 +890,11 @@ async function runBridge(q, gate, opts) {
     hypotheses: gate.hypotheses,
     operatorTz: (opts && opts.operatorTz) || null,
     agents: engagedIds.map((e) => e.agentId),
+    // CW-11 Part 4: the matched lesson goes to the LOOP, not just to the chat
+    // line. Saying "checking X first" and then not routing it is the very class
+    // of defect this wave exists to kill. It stays a bias: the planner may ignore
+    // it, and nothing in the engine acts on it.
+    lesson: lesson ? { id: lesson.id, lookFirst: lesson.lookFirst, why: lesson.why } : null,
     observer,
   });
   ctx.log(`[Jarvis] Bridge ${rec.id} opened from chat — engaged ${engagedIds.map((e) => e.agentId).join(', ')} — "${q.slice(0, 50)}"`);
@@ -878,6 +910,23 @@ async function runBridge(q, gate, opts) {
 // investigations. Now each round is described by the checks it ACTUALLY
 // produced, diffed against every earlier round: a round that turned up nothing
 // new says so in plain words, and its repeated evidence is not posted again.
+// CW-11 — the ONE flag shape the desk reads off a chat message to mark a
+// reflection: { nothingNew, confirmed, reopened, line, nextAngle }. Built in one
+// place so the bridge, the follow-through and any later path can never post three
+// different shapes. null in, null out — a clean round posts no marker at all
+// (silent when clean). A round reflection is never a confirm or a reopen; those
+// two belong to the prediction follow-through and are set there.
+function reflectionFlag(r) {
+  if (!r || !r.line) return null;
+  return {
+    nothingNew: r.nothingNew === true,
+    confirmed: r.confirmed === true,
+    reopened: r.reopened === true,
+    line: conduct.capText(r.line),
+    nextAngle: r.nextAngle ? conduct.capLine(r.nextAngle) : null,
+  };
+}
+
 function bridgeObserver(opts) {
   let closed = false;
   const seen = new Set();                       // source|command already evidenced
@@ -904,12 +953,35 @@ function bridgeObserver(opts) {
       const tail = lead ? ` Leading line: ${lead.text} (${Math.round((round.confidence || 0) * 100)}%).` : '';
 
       // What actually happened this round, in the order of what is TRUE.
+      //
+      // CW-11 Part 1: when the ENGINE's reflection pass has already judged this
+      // round (it only ever does so when every check repeated a reading we hold),
+      // its line is what gets said — because it carries the CHANGE OF APPROACH,
+      // which is the half CW-9 left out. Absent, the CW-9 wording stands exactly
+      // as before.
+      const reflection = round.reflection || null;
+      // The ENGINE's reflection wins when it is present: it is computed over the
+      // whole investigation's evidence book, so it can never contradict itself,
+      // and it is only ever set when every check in the round repeated. Saying
+      // "1 new check" under a nothing-new marker would be exactly the "says more
+      // than it does" defect this wave exists to kill.
       const head = !cli.length
         ? `Round ${round.round} — ${round.agent}: no reading came back (${report.stance}).`
-        : !fresh.length
-          ? `Round ${round.round} — ${round.agent}: ${cli.length} check(s) ran and returned the same picture as before — nothing new.`
-          : `Round ${round.round} — ${round.agent}: ${fresh.length} new check(s) — ${fresh.slice(0, 2).map((e) => e.command).join(', ')}.`;
-      speak('jarvis', conduct.envelope.say(head + tail));
+        : (reflection && reflection.line)
+          ? `Round ${round.round} — ${round.agent}: ${reflection.line}`
+          : !fresh.length
+            ? `Round ${round.round} — ${round.agent}: ${cli.length} check(s) ran and returned the same picture as before — nothing new.`
+            : `Round ${round.round} — ${round.agent}: ${fresh.length} new check(s) — ${fresh.slice(0, 2).map((e) => e.command).join(', ')}.`;
+      // The FE reads the reflection off the CHAT message (the flag shape below),
+      // not off the investigation WS payload — so it rides here too, additively.
+      // The plain text is unchanged for a client that only reads `text`.
+      speak('jarvis', { ...conduct.envelope.say(head + tail), reflection: reflectionFlag(reflection) });
+      // The new angle is its own short line so it is never clipped off the end of
+      // the round line by the 280-char cap.
+      if (reflection && reflection.nextAngle) {
+        speak('jarvis', { ...conduct.envelope.say(`Changing approach: ${reflection.nextAngle}`),
+          reflection: reflectionFlag(reflection) });
+      }
 
       // Only NEW evidence is posted as findings; a repeat is not re-dumped.
       if (fresh.length) {
@@ -936,9 +1008,23 @@ function bridgeObserver(opts) {
       if (snap.status === 'resolved') {
         closed = true;
         const rounds = (snap.rounds || []).length;
+        // CW-11 Part 2: the self-check already ran inside the engine, BEFORE the
+        // verdict was committed. Its result rides the verdict additively, and an
+        // unsupported cause is labelled out loud rather than stated as fact.
+        const sc = snap.selfCheck && snap.selfCheck.ran ? snap.selfCheck : null;
+        const causeLabel = sc && sc.causeSupported === false ? 'Suspected — unverified: ' : 'Cause: ';
         speak('jarvis', conduct.envelope.verdict(
-          `Cause: ${snap.rootCause || (snap.fixPlan && snap.fixPlan.summary) || 'isolated — see the rounds above'}`,
-          { cause: snap.rootCause || '', confidence: snap.confidence, rounds }));
+          `${causeLabel}${snap.rootCause || (snap.fixPlan && snap.fixPlan.summary) || 'isolated — see the rounds above'}`,
+          { cause: snap.rootCause || '', confidence: snap.confidence, rounds,
+            verified: sc ? sc.verified : [], suspected: sc ? sc.suspected : [],
+            causeSupported: sc ? sc.causeSupported : undefined }));
+        if (sc && sc.suspected.length) {
+          speak('jarvis', conduct.envelope.say(
+            `Self-check: ${sc.verified.length} claim(s) trace to a real reading from this incident, ` +
+            `${sc.suspected.length} do not — I have marked those suspected, not proven.`));
+        }
+        // The lesson is written by the investigation ENGINE when it resolves, so
+        // every closing path gets one — not only the bridge (fix the class).
         offerChange(snap);
         return;
       }
@@ -955,7 +1041,14 @@ function bridgeObserver(opts) {
 // operator approves it (or does not) exactly as before.
 function offerChange(snap) {
   const proposal = snap && snap.fixPlan && snap.fixPlan.proposal;
-  if (!proposal || !ctx.proposeChange) return;
+  // CW-11 Part 3 — NO WRITE PATH. A manual/external fix (or a console with no
+  // change engine) means Jarvis cannot apply anything itself, and it says so
+  // rather than implying it will. The proving check is still parked, and the
+  // operator can trigger it after THEIR fix.
+  if (!proposal || !ctx.proposeChange) {
+    parkPrediction(snap, { changeId: null, operatorTriggered: true });
+    return;
+  }
   try {
     const rec = ctx.proposeChange({
       device: proposal.device,
@@ -969,10 +1062,27 @@ function offerChange(snap) {
       // the approval card can never show a different list from what would run.
       { id: rec.id, steps: Array.isArray(rec.commands) && rec.commands.length ? rec.commands : proposal.commands }));
     ctx.log(`[Jarvis] Change ${rec.id} drafted from bridge ${snap.id} — held for approval, nothing applied`);
+    // The if/then gets its proving check parked against THIS change record, so
+    // when (and only when) the change really applies, the follow-through runs.
+    parkPrediction(snap, { changeId: rec.id, operatorTriggered: false });
   } catch (err) {
     speak('jarvis', conduct.envelope.say(
       `I could not open the change record (${(err && err.message) || 'error'}), so nothing was drafted and nothing ran.`));
   }
+}
+
+// CW-11 Part 3 — the verdict's proving check is PARKED BY THE ENGINE (so every
+// closing path gets one). All the bridge does here is bind it to the change record
+// it just drafted, when there is one, and say the honest line out loud.
+function parkPrediction(snap, { changeId }) {
+  const p = snap && snap.prediction;
+  if (!p || !p.id) return null;
+  let rec = p;
+  try {
+    if (changeId) rec = reflexion.attachChange(p.id, changeId) || p;
+  } catch (e) { rec = p; }
+  speak('jarvis', { ...conduct.envelope.say(rec.message), prediction: rec });
+  return rec;
 }
 
 // ── The bridge roster call ──────────────────────────────────────────────────
@@ -1712,7 +1822,7 @@ async function invUnderstand({ problem, operatorTz, answers, reply }) {
   };
 }
 
-async function invProbe({ problem, understood, hypotheses, rounds, roster }) {
+async function invProbe({ problem, understood, hypotheses, rounds, roster, mustChange, lesson }) {
   const format = { type: 'json_schema', schema: {
     type: 'object', additionalProperties: false,
     required: ['stuck', 'agentId', 'question', 'device', 'rationale'],
@@ -1820,6 +1930,290 @@ const investigationPlanner = {
   fix: invFix,
 };
 
+// ── CW-11 — the reasoning half of REFLEXION ─────────────────────────────────
+// Four small calls, each one bounded by the engine that calls it (one reflection
+// per round, one trace per verdict). Every one of them is told, in the system
+// prompt, that it may only speak about readings it has been shown — and the
+// engine then THROWS AWAY anything that names a record it was not shown, so the
+// honesty is enforced in code, not hoped for here.
+
+const REFLECT_SYSTEM =
+`You are Jarvis, L4 / Principal Engineer, mid-investigation on a live NOC. The round that just
+finished produced NOTHING NEW — every check in it repeated a reading already on the record. That
+is a fact computed from the real readings; do not dispute it and do not soften it.
+
+Your job is two sentences' worth of work:
+- "line": ONE short, honest sentence for the operator saying the round added nothing. Plain words,
+  no filler, no fake progress, under 200 characters. Never narrate a check as if it revealed
+  something. A senior engineer on a bridge would say "same picture, that angle is dead" and move on.
+- "nextAngle": the DIFFERENT approach to take next — a different check, a different agent, or a
+  different system from the ones already tried. Be concrete and short. This is the whole point:
+  repeating the same angle and calling it an investigation is the defect you exist to prevent.
+- "avoidAgentIds" / "avoidChecks": who and what has already been exhausted, so the next probe does
+  not land on them again. Use only agent ids and commands you were shown.
+State no network fact of your own — you are reflecting on what was read, not adding to it.`;
+
+async function reflReflect({ understood, roundNo, repeatedCount, repeated, priorChecks, agentsTried, sourcesTried, roster }) {
+  const format = { type: 'json_schema', schema: {
+    type: 'object', additionalProperties: false,
+    required: ['line', 'nextAngle', 'avoidAgentIds', 'avoidChecks'],
+    properties: {
+      line: { type: 'string' },
+      nextAngle: { type: ['string', 'null'] },
+      avoidAgentIds: { type: 'array', items: { type: 'string' } },
+      avoidChecks: { type: 'array', items: { type: 'string' } },
+    },
+  } };
+  const res = await claude.reason({
+    system: REFLECT_SYSTEM,
+    messages: [{ role: 'user', content:
+      `Understood problem: ${understood}\n\n` +
+      `Round ${roundNo} just finished. ${repeatedCount} check(s) in it repeated readings already on the record:\n` +
+      (repeated || []).map((r) => `- [${r.eid}] ${r.source || 'unknown source'}: ${r.command}`).join('\n') + '\n\n' +
+      `Every check run so far on this incident:\n` +
+      (priorChecks || []).map((r) => `- [${r.eid}] round ${r.round} · ${r.source || 'unknown source'}: ${r.command}`).join('\n') + '\n\n' +
+      `Agents already tasked: ${(agentsTried || []).join(', ') || 'none'}\n` +
+      `Systems already read: ${(sourcesTried || []).join(', ') || 'none'}\n\n` +
+      `The squad you can still task:\n${rosterTextFrom(roster)}\n\n` +
+      `Say it honestly in one line, and name the DIFFERENT angle to take next.` }],
+    maxTokens: 1200, effort: 'high', format,
+    purpose: 'reflect', conversationId: conversationId(),
+  });
+  if (res.refused) throw new Error('reasoning declined');
+  const p = JSON.parse(res.text);
+  return {
+    line: p.line || '',
+    nextAngle: p.nextAngle || null,
+    avoidAgentIds: Array.isArray(p.avoidAgentIds) ? p.avoidAgentIds : [],
+    avoidChecks: Array.isArray(p.avoidChecks) ? p.avoidChecks : [],
+  };
+}
+
+const TRACE_SYSTEM =
+`You are Jarvis, L4 / Principal Engineer, checking your OWN verdict before you commit it on a live
+NOC bridge. You are shown the verdict you are about to give and EVERY evidence record this incident
+produced, each with a short id (E1, E2 …).
+
+Break the verdict into its individual CLAIMS — each a single factual statement it makes about this
+network. For each claim, list the evidence ids that actually SHOW it. Rules that are absolute:
+- Cite an id ONLY if that record really shows the claim. Do not cite a record because it is about the
+  same device or sounds related. A weak match is not a match.
+- If nothing you were shown supports a claim, return it with an EMPTY evidenceIds list. That is the
+  right answer, not a failure — the claim will be labelled "suspected — unverified", which is exactly
+  what an honest engineer does with a hunch.
+- Never invent an id. Ids you were not shown are discarded, and citing one is worse than citing none.
+- "causeEvidenceIds": the ids that back the ROOT CAUSE itself. Same rule — only ids that really show
+  it, and an empty list when nothing does.
+Say nothing about the network beyond splitting up and tracing the verdict you were given.`;
+
+async function reflTrace({ cause, summary, hypotheses, rounds, evidence }) {
+  const format = { type: 'json_schema', schema: {
+    type: 'object', additionalProperties: false,
+    required: ['claims', 'causeEvidenceIds'],
+    properties: {
+      // The ids that back the ROOT CAUSE itself. Empty means nothing you were
+      // shown proves it — which is the honest answer, and it gets labelled
+      // "suspected — unverified" rather than stated as fact.
+      causeEvidenceIds: { type: 'array', items: { type: 'string' } },
+      claims: { type: 'array', items: { type: 'object', additionalProperties: false,
+        required: ['text', 'evidenceIds'],
+        properties: { text: { type: 'string' }, evidenceIds: { type: 'array', items: { type: 'string' } } } } },
+    },
+  } };
+  const res = await claude.reason({
+    system: TRACE_SYSTEM,
+    messages: [{ role: 'user', content:
+      `The verdict about to be committed:\n` +
+      `- Root cause: ${cause || '(none named)'}\n` +
+      `- Fix plan summary: ${summary || '(none)'}\n` +
+      `- Final hypotheses:\n${hypothesesText(hypotheses)}\n` +
+      `- Rounds run: ${rounds}\n\n` +
+      `EVERY evidence record from THIS incident (the only things you may cite):\n${RULE}\n` +
+      (evidence || []).map((e) =>
+        `[${e.eid}] round ${e.round} · ${e.source || 'unknown source'} · ${e.host} · ${e.command}\n` +
+        (e.line ? `  meaning: ${e.line}\n` : '') +
+        `  reading: ${String(e.output || '').slice(0, 1200)}`).join(`\n${RULE}\n`) +
+      `\n${RULE}\n\nTrace every claim in that verdict to the records that really show it.` }],
+    maxTokens: 3000, effort: 'high', format,
+    purpose: 'verdict-self-check', conversationId: conversationId(), compact: true,
+  });
+  if (res.refused) throw new Error('reasoning declined');
+  const p = JSON.parse(res.text);
+  return { claims: Array.isArray(p.claims) ? p.claims : [],
+    causeEvidenceIds: Array.isArray(p.causeEvidenceIds) ? p.causeEvidenceIds : [] };
+}
+
+const PREDICT_SYSTEM =
+`You are Jarvis, L4 / Principal Engineer, closing a bridge on a live NOC. Your verdict carries an
+if/then. Name the ONE read-only check that would PROVE the "then" once the fix is applied — the check
+you would actually run to find out whether you were right, not one that merely looks reassuring.
+- "then": what should be TRUE after the fix, in one plain sentence.
+- agentId + question + device: the single read-only check that settles it, tasked to an agent on the
+  list. Read-only ONLY — show/get/ping/traceroute style. Never a change.
+- If no check available to this squad could settle it, return agentId null. Do not invent one.
+State no network fact.`;
+
+async function reflPredict({ cause, summary, ifThen, roster }) {
+  const ids = (roster || []).map((a) => a.id);
+  const format = { type: 'json_schema', schema: {
+    type: 'object', additionalProperties: false,
+    required: ['then', 'agentId', 'question', 'device'],
+    properties: {
+      then: { type: 'string' },
+      agentId: { anyOf: [{ type: 'string', enum: ids.length ? ids : ['none'] }, { type: 'null' }] },
+      question: { type: ['string', 'null'] },
+      device: { type: ['string', 'null'] },
+    },
+  } };
+  const res = await claude.reason({
+    system: PREDICT_SYSTEM,
+    messages: [{ role: 'user', content:
+      `Root cause committed: ${cause || '(none named)'}\n` +
+      `Fix plan: ${summary || '(none)'}\n` +
+      (ifThen ? `Existing if/then: ${ifThen}\n` : '') + `\n` +
+      `The squad you can task:\n${rosterTextFrom(roster)}\n\n` +
+      `Name the one read-only check that would prove you were right.` }],
+    maxTokens: 1200, effort: 'high', format,
+    purpose: 'predict', conversationId: conversationId(),
+  });
+  if (res.refused) throw new Error('reasoning declined');
+  const p = JSON.parse(res.text);
+  if (!p.agentId || !p.question) return null;
+  return { then: p.then || '', agentId: p.agentId, question: p.question, device: p.device || null };
+}
+
+const JUDGE_SYSTEM =
+`You are Jarvis, L4 / Principal Engineer. You predicted what would be true after a fix, the proving
+check has now run, and you are shown its REAL report. Decide honestly whether your prediction HELD.
+- held true  → the reading shows what you predicted.
+- held false → the reading shows it did NOT happen. Say so plainly and without hedging: your
+  hypothesis was wrong. That is the most useful thing you can say on a bridge, and pretending
+  otherwise is the failure this check exists to prevent.
+- held null  → the reading does not settle it either way. Do not guess.
+"line": one short sentence to the operator, ≤ 200 characters, in plain words. When you were wrong,
+say you were wrong and that you are reopening — never soften it into a partial success.`;
+
+async function reflJudge({ prediction, report }) {
+  const format = { type: 'json_schema', schema: {
+    type: 'object', additionalProperties: false,
+    required: ['held', 'line'],
+    properties: { held: { type: ['boolean', 'null'] }, line: { type: 'string' } },
+  } };
+  const res = await claude.reason({
+    system: JUDGE_SYSTEM,
+    messages: [{ role: 'user', content:
+      `You predicted: ${prediction.then}\n` +
+      `The hypothesis behind it: ${prediction.hypothesis || '(none recorded)'}\n` +
+      `The proving check: "${prediction.check.question}"` +
+      (prediction.check.device ? ` on ${prediction.check.device}` : '') + `\n\n` +
+      `The REAL report that just came back:\n${RULE}\n[${report.stance}] ${report.text}\n` +
+      (report.cli || []).map((e) => `${e.host} · ${e.command}\n${String(e.output || '').slice(0, 1500)}`).join(`\n${RULE}\n`) +
+      `\n${RULE}\n\nDid your prediction hold?` }],
+    maxTokens: 1200, effort: 'high', format,
+    purpose: 'follow-through', conversationId: conversationId(),
+  });
+  if (res.refused) throw new Error('reasoning declined');
+  const p = JSON.parse(res.text);
+  return { held: typeof p.held === 'boolean' ? p.held : null, line: p.line || '' };
+}
+
+const reflexionPlanner = {
+  available: investigationAvailable,
+  reflect: reflReflect,
+  trace: reflTrace,
+  predict: reflPredict,
+  judge: reflJudge,
+};
+
+// ── CW-11 Part 4 — the reasoning half of the LESSONS MEMORY ─────────────────
+const LESSON_COMPOSE_SYSTEM =
+`You are Jarvis, L4 / Principal Engineer, writing the post-incident note a NOC actually reads: four
+short facts, no essay.
+- "cause": what it really turned out to be, in one sentence.
+- "fastestCheck": which check, of the ones actually run, would have got there quickest if it had been
+  run first. Name it plainly.
+- "wastedTime": what burned time on this incident — a wrong direction, a repeated check that told us
+  nothing, a system that was not the problem. If nothing stood out, say so; do not invent regret.
+- "keywords": the words an operator would USE when this happens again (symptoms, not causes).
+Write only what the incident record supports. This note biases where a future bridge looks first, so
+a wrong fact here misleads a future engineer — say "not recorded" rather than guess.`;
+
+async function lessonCompose({ incidentId, problem, cause, verdict, rounds }) {
+  const format = { type: 'json_schema', schema: {
+    type: 'object', additionalProperties: false,
+    required: ['cause', 'fastestCheck', 'wastedTime', 'keywords'],
+    properties: {
+      cause: { type: 'string' }, fastestCheck: { type: 'string' }, wastedTime: { type: 'string' },
+      keywords: { type: 'array', items: { type: 'string' } },
+    },
+  } };
+  const res = await claude.reason({
+    system: LESSON_COMPOSE_SYSTEM,
+    messages: [{ role: 'user', content:
+      `Incident ${incidentId} just closed.\n` +
+      `Problem as reported: ${problem}\n` +
+      `Cause committed: ${cause || '(none named)'}\n` +
+      `Verdict / fix plan: ${verdict || '(none)'}\n\n` +
+      `What was actually run, round by round:\n` +
+      (rounds || []).map((r) => `- Round ${r.round} · ${r.agent} · "${r.question}" → [${r.stance}] ${r.text}` +
+        (r.nothingNew ? '  (this round turned up NOTHING NEW)' : '')).join('\n') + '\n\n' +
+      `Write the four facts.` }],
+    maxTokens: 1500, effort: 'high', format,
+    purpose: 'lesson', conversationId: conversationId(),
+  });
+  if (res.refused) throw new Error('reasoning declined');
+  const p = JSON.parse(res.text);
+  return {
+    cause: p.cause || '', fastestCheck: p.fastestCheck || '', wastedTime: p.wastedTime || '',
+    keywords: Array.isArray(p.keywords) ? p.keywords : [],
+  };
+}
+
+const LESSON_SIMILAR_SYSTEM =
+`You are Jarvis, L4 / Principal Engineer. A new problem has just come in, and you are shown the short
+notes from incidents this NOC has already closed. Decide whether ONE of them is genuinely similar —
+similar in what is happening on the network, not in the words used. Judge meaning, never keywords.
+- If none is genuinely similar, return matchId null. A forced match sends the next engineer down the
+  wrong path, which is worse than no memory at all.
+- If one is, return its id, a short "why", and "lookFirst": where that lesson says to look first.
+This is a HINT, not an instruction: nothing you return runs anything, and the operator still gets
+asked the questions they would have been asked anyway. Say no network fact.`;
+
+async function lessonSimilar({ problem, understood, lessons: notes }) {
+  const ids = (notes || []).map((l) => l.id);
+  const format = { type: 'json_schema', schema: {
+    type: 'object', additionalProperties: false,
+    required: ['matchId', 'why', 'lookFirst'],
+    properties: {
+      matchId: { anyOf: [{ type: 'string', enum: ids.length ? ids : ['none'] }, { type: 'null' }] },
+      why: { type: ['string', 'null'] },
+      lookFirst: { type: ['string', 'null'] },
+    },
+  } };
+  const res = await claude.reason({
+    system: LESSON_SIMILAR_SYSTEM,
+    messages: [{ role: 'user', content:
+      `New problem, as the operator gave it: "${problem}"\n` +
+      `Understood as: ${understood}\n\n` +
+      `Closed incidents on record:\n` +
+      (notes || []).map((l) =>
+        `- ${l.id}\n    problem: ${l.problem}\n    cause: ${l.cause}\n    fastest check: ${l.fastestCheck}\n` +
+        `    symptom words: ${(l.keywords || []).join(', ') || 'none'}`).join('\n') + '\n\n' +
+      `Is one of them genuinely similar to what is happening now?` }],
+    maxTokens: 1200, effort: 'high', format,
+    purpose: 'lesson-similar', conversationId: conversationId(),
+  });
+  if (res.refused) throw new Error('reasoning declined');
+  const p = JSON.parse(res.text);
+  return { matchId: p.matchId || null, why: p.why || null, lookFirst: p.lookFirst || null };
+}
+
+const lessonsPlanner = {
+  available: investigationAvailable,
+  compose: lessonCompose,
+  similar: lessonSimilar,
+};
+
 // CW-9 — the reasoning half of the SHARED conduct gate. It is deliberately the
 // SAME understanding call the investigation loop and the triage intake use, so
 // chat, intake and any future entry point can never drift into different
@@ -1835,12 +2229,17 @@ module.exports = {
   investigationPlanner,
   // CW-9: the reasoning planner injected into the shared conduct gate.
   conductPlanner,
+  // CW-11: the reasoning planners injected into the reflexion layer + lessons memory.
+  reflexionPlanner,
+  lessonsPlanner,
   // Exposed for the QA CLASS 6 offline test only (the always-surfaces guarantee):
   // a delegated read that hangs / rejects / returns null-or-empty must resolve to
   // an explicit honest finding, never silence.
   _test: { gatherGuarded, GATHER_TIMEOUT_MS, softClip, abilitiesText,
     // CW-9: the bridge pieces, exercised offline with a stubbed planner.
     askNarrowing, emitFindings, bridgeObserver, runBridge, planAndAnswer, speak,
+    // CW-11: the bridge's reflexion seams, exercised offline with stub planners.
+    parkPrediction,
     // 2026-08-19 synthesis-refusal class fix: the one-shot neutral retry + the
     // short honest fallback, exercised offline with a mocked claude.reason.
     synthesizeAnswer, relayFindings, neutralizeFindingText },

@@ -36,6 +36,15 @@
 //     so and stops. It never invents a canned investigation.
 
 const session = require('./session-log');
+// CW-11 Part 1: the round reflection. The engine OWNS the bound ("exactly one
+// reflection pass per round") by calling this once, right after the round is
+// recorded; reflexion.js enforces the same bound a second time in its own store.
+// With no reflexion planner wired up this is inert — every pre-CW-11 behaviour is
+// unchanged, because a round with no evidence records behind it is never reflected on.
+const reflexion = require('./reflexion');
+// CW-11 Part 4: the lessons memory, written when an investigation closes with a
+// verdict. Inert with no reasoning planner wired up.
+const lessons = require('./lessons');
 
 // ── Config (env-tunable, safe defaults) ──────────────────────────────────────
 // The safety cap: the loop can never run more than this many probe rounds. A
@@ -90,6 +99,8 @@ function snapshot(rec) {
     operatorTz: rec.operatorTz || null,
     // CW-9: the engaged set the bridge announced (null = the whole roster).
     agents: rec.agents ? rec.agents.slice() : null,
+    // CW-11: the past lesson biasing where this run looked first (null = none).
+    lesson: rec.lesson ? { ...rec.lesson } : null,
     who: rec.who || null,
     status: rec.status,
     understood: rec.understood || null,
@@ -100,6 +111,10 @@ function snapshot(rec) {
     rounds: rec.rounds.map((r) => ({ ...r, hypotheses: (r.hypotheses || []).map((h) => ({ ...h })) })),
     rootCause: rec.rootCause || null,
     fixPlan: rec.fixPlan ? { ...rec.fixPlan } : null,
+    // CW-11 (ADDITIVE, null until the verdict is composed): the self-check result
+    // (verified vs suspected claims) and the parked proving check for the if/then.
+    selfCheck: rec.selfCheck ? { ...rec.selfCheck } : null,
+    prediction: rec.prediction ? { ...rec.prediction } : null,
     stuckReason: rec.stuckReason || null,
     cap: rec.cap,
     threshold: rec.threshold,
@@ -139,7 +154,7 @@ function audit(rec, what, result, detail, device) {
 // ── Create (synchronous) ─────────────────────────────────────────────────────
 // The route calls this to get an id back immediately, then run(id) drives the
 // (async, LLM-backed) understand + probe loop in the background, streaming rounds.
-function create({ problem, operatorTz, who, agents, observer, understood, hypotheses } = {}) {
+function create({ problem, operatorTz, who, agents, observer, understood, hypotheses, lesson } = {}) {
   const id = nextId();
   const rec = {
     id,
@@ -166,6 +181,18 @@ function create({ problem, operatorTz, who, agents, observer, understood, hypoth
     rounds: [],
     rootCause: null,
     fixPlan: null,
+    // CW-11 Part 4 (optional): the past lesson the caller matched to this problem.
+    // It is a BIAS carried to the probe planner — "somebody looked here first last
+    // time" — and NOTHING here acts on it: the engine never picks a probe from a
+    // lesson, never skips a question, and never runs anything because of one.
+    // Absent → the loop behaves exactly as it did before CW-11.
+    lesson: (lesson && typeof lesson === 'object' && lesson.id)
+      ? { id: String(lesson.id), lookFirst: lesson.lookFirst || null, why: lesson.why || null }
+      : null,
+    // CW-11: filled in at verdict time only.
+    selfCheck: null,
+    prediction: null,
+    roster: null,
     stuckReason: null,
     cap: maxRounds(),
     threshold: confidenceThreshold(),
@@ -265,6 +292,7 @@ async function probeLoop(rec) {
   // CW-9: when the bridge engaged a named set of agents, the planner may only
   // task those — a stood-down front is never quietly swept anyway.
   const roster = rec.agents ? full.filter((a) => rec.agents.includes(a.id)) : full;
+  rec.roster = roster;   // CW-11: the prediction's proving check may only task these
   if (rec.agents && !roster.length) {
     return stopStuck(rec,
       'The agents engaged on this bridge are not on the live roster, so there is nobody I am allowed to probe. Nothing was read.');
@@ -274,20 +302,56 @@ async function probeLoop(rec) {
   while (rec.rounds.length < rec.cap) {
     const roundNo = rec.rounds.length + 1;
 
+    // CW-11: did the LAST round turn up nothing new? Then this round MUST come at
+    // it from a different angle — a different check, agent or system. The
+    // instruction is carried to the planner (reasoning picks the new angle) and
+    // enforced below (deterministic code refuses a straight repeat).
+    const mustChange = rec.rounds.length ? reflexion.reflectionOf(rec.id, rec.rounds.length) : null;
+
     // a. The planner picks the HIGHEST-VALUE probe (or says it is stuck). The
     //    engine does NOT choose here — it only asks and enforces.
     let pick;
-    try {
-      pick = await planner.probe({
-        problem: rec.problem, understood: rec.understood,
-        hypotheses: rec.hypotheses.map((h) => ({ ...h })),
-        rounds: rec.rounds.map((r) => ({ ...r })),
-        roster,
-      });
-    } catch (err) {
-      return stopReasoningUnavailable(rec,
-        `Reasoning failed while choosing the next probe — ${err && err.message ? err.message : 'error'}. ` +
-        `I stopped rather than guess. ${rec.rounds.length} round(s) had run.`);
+    let rejected = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        pick = await planner.probe({
+          problem: rec.problem, understood: rec.understood,
+          hypotheses: rec.hypotheses.map((h) => ({ ...h })),
+          rounds: rec.rounds.map((r) => ({ ...r })),
+          roster,
+          // CW-11 Part 4: where a past incident says to look FIRST. A BIAS, never
+          // a rule — the planner is told outright it may ignore it, the engine
+          // never checks whether the pick followed it, and no probe is ever
+          // chosen here. The ask-first gate ran long before this point and is
+          // untouched. Dropped after the first round: once real readings are in,
+          // THIS incident's evidence outranks a memory of another one.
+          lesson: (rec.lesson && !rec.rounds.length) ? { ...rec.lesson } : null,
+          // Additive: a planner that ignores these behaves exactly as before.
+          mustChange: mustChange ? {
+            why: mustChange.line,
+            nextAngle: mustChange.nextAngle,
+            avoidAgentIds: mustChange.avoidAgentIds,
+            avoidChecks: mustChange.avoidChecks,
+            sourcesTried: mustChange.sourcesTried,
+          } : null,
+          rejectedPick: rejected,
+        });
+      } catch (err) {
+        return stopReasoningUnavailable(rec,
+          `Reasoning failed while choosing the next probe — ${err && err.message ? err.message : 'error'}. ` +
+          `I stopped rather than guess. ${rec.rounds.length} round(s) had run.`);
+      }
+      // Only when a change of approach was REQUIRED do we screen the pick, and we
+      // give exactly ONE second chance — never a loop.
+      if (!mustChange || !pick || pick.stuck || !isRepeatProbe(rec, pick)) break;
+      if (attempt === 1) {
+        return stopStuck(rec,
+          `The last round turned up nothing new, and I could not find a different angle to try — ` +
+          `I kept coming back to ${probeKey(pick)}. I am stopping rather than running the same check again ` +
+          `and calling it progress.`);
+      }
+      rejected = { agentId: pick.agentId, question: pick.question, device: pick.device || null,
+        why: 'that is the same probe as an earlier round — pick a different check, agent or system' };
     }
 
     // STUCK: no probe would narrow further / it needs something unavailable.
@@ -340,6 +404,18 @@ async function probeLoop(rec) {
       return stopBlocked(rec);
     }
 
+    // b2. CW-11 ROUND REFLECTION — exactly one pass, on the REAL records this
+    //     round produced. Null when the round added something new (silent when
+    //     clean) or read nothing at all (no read, no claim). A failure here can
+    //     never break the loop.
+    let reflection = null;
+    try {
+      reflection = await reflexion.reflectRound(rec.id, {
+        roundNo, cli: report.cli, understood: rec.understood, agentId: probe.agentId,
+        priorRounds: rec.rounds.map((r) => ({ ...r })), roster,
+      });
+    } catch (e) { reflection = null; }
+
     // c. Narrow: feed the REAL report to the planner; it updates the hypothesis
     //    set + confidence. The engine copies those verbatim — it never edits a
     //    hypothesis or moves a confidence number itself.
@@ -353,7 +429,7 @@ async function probeLoop(rec) {
     } catch (err) {
       // We already have a real report on the record; stop honestly rather than
       // invent a narrowing.
-      recordRound(rec, roundNo, probe, report, rec.hypotheses, rec.confidence, 'reasoning-unavailable');
+      recordRound(rec, roundNo, probe, report, rec.hypotheses, rec.confidence, 'reasoning-unavailable', reflection);
       return stopReasoningUnavailable(rec,
         `Reasoning failed while narrowing from ${probe.agentName}'s report — ${err && err.message ? err.message : 'error'}. ` +
         `The report is on the record; I did not invent a conclusion.`);
@@ -363,7 +439,7 @@ async function probeLoop(rec) {
     }
     rec.confidence = clampConfidence(assessed && assessed.confidence, rec.confidence);
 
-    recordRound(rec, roundNo, probe, report, rec.hypotheses, rec.confidence, 'ok');
+    recordRound(rec, roundNo, probe, report, rec.hypotheses, rec.confidence, 'ok', reflection);
     audit(rec, `investigation probe (round ${roundNo})`, report.stance,
       `${probe.agentName}: ${probe.question} → confidence ${rec.confidence.toFixed(2)}`, probe.device);
 
@@ -390,7 +466,7 @@ function clampConfidence(v, fallback) {
   return Math.max(0, Math.min(1, n));
 }
 
-function recordRound(rec, roundNo, probe, report, hypotheses, confidence, status) {
+function recordRound(rec, roundNo, probe, report, hypotheses, confidence, status, reflection) {
   const round = {
     round: roundNo,
     probe: { agentId: probe.agentId, agentName: probe.agentName, question: probe.question,
@@ -401,14 +477,34 @@ function recordRound(rec, roundNo, probe, report, hypotheses, confidence, status
     hypotheses: hypotheses.map((h) => ({ ...h })),
     confidence,
     status,
+    // CW-11 (ADDITIVE, null on every clean round): the honest "nothing new" line
+    // plus the change of approach the next round must take.
+    reflection: reflection || null,
     ts: now(),
   };
   rec.rounds.push(round);
-  // WS shape per contract: {round, probe, agent, report, hypotheses[], confidence, status}.
+  // WS shape per contract: {round, probe, agent, report, hypotheses[], confidence, status}
+  // (+ CW-11's additive `reflection`, null unless the round repeated itself).
   emit('investigation_round', rec, {
     round: round.round, probe: round.probe, agent: round.agent, report: round.report,
     hypotheses: round.hypotheses, confidence: round.confidence, status: round.status,
+    reflection: round.reflection,
   });
+}
+
+// CW-11: is this pick simply an earlier probe again? Compared on the agent plus
+// the normalised question — a re-worded question that names the same check on the
+// same target is still the same check. Used ONLY to enforce a required change of
+// approach; it never picks a probe and never blocks a first attempt.
+function probeKey(pick) {
+  const q = String((pick && pick.question) || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const d = String((pick && pick.device) || '').toLowerCase().trim();
+  return `${String((pick && pick.agentId) || '').toLowerCase()}|${d}|${q}`;
+}
+function isRepeatProbe(rec, pick) {
+  const key = probeKey(pick);
+  return rec.rounds.some((r) => probeKey({ agentId: r.probe && r.probe.agentId,
+    question: r.probe && r.probe.question, device: r.probe && r.probe.device }) === key);
 }
 
 // ── PLAN THE FIX (root cause isolated) ───────────────────────────────────────
@@ -435,6 +531,42 @@ async function planFix(rec) {
   }
   rec.status = 'resolved';
   rec.rootCause = (fix && fix.rootCause) || (confirmed ? confirmed.text : null);
+  // ── CW-11 Part 2 — THE VERDICT SELF-CHECK, before the verdict is committed ──
+  // Exactly ONE bounded pass, tracing every claim to a real evidence record from
+  // THIS incident. Unsupported claims come back as "suspected — unverified" and
+  // ride the record additively; a failure here can never break the close.
+  try {
+    rec.selfCheck = await reflexion.selfCheckVerdict(rec.id, {
+      cause: rec.rootCause, summary: (fix && fix.summary) || '',
+      hypotheses: rec.hypotheses, rounds: rec.rounds,
+    });
+  } catch (e) { rec.selfCheck = null; }
+  if (rec.selfCheck && rec.selfCheck.ran && rec.selfCheck.causeSupported === false) {
+    audit(rec, 'verdict self-check downgraded the cause', 'suspected',
+      'no evidence record from this incident backs the cause — labelled suspected, unverified');
+  }
+  // ── CW-11 Part 3 — park the check that would PROVE the "then" ──────────────
+  // Composed here, registered by the caller against the change record it drafts
+  // (or, where there is no write path, exposed for the operator to trigger).
+  // It is PARKED here, in the engine, so every path that closes an investigation
+  // gets a follow-through the operator can trigger — not only the chat bridge.
+  // Until a change record is bound to it (the bridge does that when it drafts the
+  // fix), it is operator-triggered: this console has applied nothing and says so.
+  try {
+    const composed = await reflexion.composePrediction({
+      cause: rec.rootCause, summary: (fix && fix.summary) || '',
+      ifThen: (fix && fix.ifThen) || null, roster: rec.roster || [],
+    });
+    const lead = rec.hypotheses.find((h) => h.status === 'confirmed')
+      || rec.hypotheses.find((h) => h.status !== 'eliminated');
+    rec.prediction = composed ? reflexion.registerPrediction({
+      key: rec.id, investigationId: rec.id,
+      hypothesis: (lead && lead.text) || rec.rootCause || '',
+      then: composed.then,
+      check: { agentId: composed.agentId, question: composed.question, device: composed.device },
+      operatorTriggered: true,
+    }) : null;
+  } catch (e) { rec.prediction = null; }
   rec.fixPlan = {
     summary: (fix && fix.summary) || 'Fix plan composed from the evidence gathered above.',
     // A config fix is offered as a PROPOSAL routed through the CW-2 change engine
@@ -446,7 +578,37 @@ async function planFix(rec) {
     `confidence ${rec.confidence.toFixed(2)} — ${String(rec.rootCause || '').slice(0, 160)}` +
     (rec.fixPlan.proposal ? ` — change proposal on ${rec.fixPlan.proposal.device}` : ''));
   emit('investigation_update', rec);
+  // CW-11 Part 4 — the investigation closed with a verdict, so write its lesson.
+  // It lives HERE, in the engine, so EVERY path that closes an investigation gets
+  // one (the chat bridge, the REST route, a reopened run) rather than only the one
+  // that happened to be wired first. Fire-and-forget; a missing note never breaks
+  // a close, and with no reasoning nothing is written at all.
+  writeLesson(rec);
   return snapshot(rec);
+}
+
+// CW-11 Part 4 — four short facts about a closed investigation, composed by the
+// model and scrubbed on the way to disk (sources/lessons.js). Never throws.
+function writeLesson(rec) {
+  try {
+    if (!lessons.available()) return;
+    const id = rec.incidentId || rec.id;
+    Promise.resolve()
+      .then(() => lessons.recordFromIncident({
+        incidentId: id,
+        problem: rec.problem || rec.understood || '',
+        cause: rec.rootCause || '',
+        verdict: (rec.fixPlan && rec.fixPlan.summary) || '',
+        rounds: rec.rounds.map((r) => ({
+          round: r.round, agent: r.agent,
+          question: (r.probe && r.probe.question) || '',
+          stance: (r.report && r.report.stance) || '',
+          text: String((r.report && r.report.text) || '').slice(0, 600),
+          nothingNew: Boolean(r.reflection && r.reflection.nothingNew),
+        })),
+      }))
+      .catch(() => { /* a missing lesson never breaks a close */ });
+  } catch (e) { /* same */ }
 }
 
 // A proposal is what the operator will confirm; keep it printable and bounded,

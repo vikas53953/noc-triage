@@ -158,7 +158,12 @@ function findingMsg({ agent, line, cli }) {
   };
 }
 
-function verdictMsg(text, { cause, confidence, rounds } = {}) {
+// CW-11 Part 2 (ADDITIVE): a verdict may now carry the result of the self-check —
+// which claims were traced to a real evidence record from THIS incident
+// (`verified`) and which were not and are therefore labelled suspected —
+// unverified (`suspected`). Both default to empty, so every pre-CW-11 caller and
+// every old client sees exactly the verdict it saw before.
+function verdictMsg(text, { cause, confidence, rounds, verified, suspected, causeSupported } = {}) {
   return {
     kind: 'verdict',
     text: capText(text),
@@ -166,6 +171,16 @@ function verdictMsg(text, { cause, confidence, rounds } = {}) {
       cause: capText(cause),
       confidence: typeof confidence === 'number' ? Math.max(0, Math.min(1, confidence)) : null,
       rounds: Number.isFinite(rounds) ? rounds : null,
+      verified: (Array.isArray(verified) ? verified : []).map((v) => ({
+        claim: capLine(v && v.claim),
+        evidenceIds: (Array.isArray(v && v.evidenceIds) ? v.evidenceIds : []).map(String).filter(Boolean),
+      })).filter((v) => v.claim),
+      suspected: (Array.isArray(suspected) ? suspected : []).map((s) => ({
+        claim: capLine(s && s.claim),
+        why: capLine((s && s.why) || 'no reading from this incident backs it'),
+      })).filter((s) => s.claim),
+      // null when the self-check did not run at all (nothing is dressed up either way).
+      causeSupported: typeof causeSupported === 'boolean' ? causeSupported : null,
     },
   };
 }
