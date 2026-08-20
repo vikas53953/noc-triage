@@ -635,3 +635,14 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   the streamed answer; Spend panel pushes incident queue out of the column at small shells; unreadable
   spend shapes render as honest-zero (false). +1 should-fix (post-done claim deletes answer).
 - Both builders on fixes; FE also adopting the aborted:true contract. Re-reviews after push; BE merges first.
+
+## 2026-08-20 ~18:30 — CW-10 BOTH APPROVED; one joint pre-merge commit each
+- BE #74 APPROVE (14-scenario abort attack clean, cap law holds — never over 280, never mid-word; parity
+  still byte-identical; all minors closed). Reviewer required an HONESTY correction: "never shrinks/strict
+  prefix" claim is false (clip() reflows at sentence boundaries; 279→267 observed) — test+PR body must say
+  the truth; reflow itself judged acceptable.
+- FE #75 APPROVE (empty-final, layout backstop, EMPTY-vs-UNREADABLE all verified; id-less path gone; abort
+  seam settles instantly).
+- JOINT pre-merge fix in flight (both reviewers converged): discard:true on SAFETY-DECLINED aborts — FE
+  wipes the partial (screen + localStorage; reviewer proved declined text persisted through reload); plain
+  errors keep the honest partial. Then merge #74 → #75 → restart :3000 → live verify → CW-11.
