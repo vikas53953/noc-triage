@@ -35,6 +35,79 @@ function init(hostCtx) { ctx = hostCtx; }
 const say = (agentId, text) => ctx.say(agentId, text);
 const RULE = '──────────────────────────────────';
 
+// ── CW-9: the terminal-evidence envelope ────────────────────────────────────
+// Every read a delegated agent performs must come back with the evidence behind
+// it — the host, the exact command (or API read), the RAW output (already
+// secret-scrubbed by the session log) and an HONEST transport label. A Command
+// Runner read is 'cmdrunner'; only a real SSH session is 'ssh'; everything else
+// is an 'api' read. Nothing here changes what runs, what is gated or what is
+// scrubbed — it only carries what ALREADY happened up to the bridge so the chat
+// can show a real terminal instead of a wall of prose.
+//
+// Collection is per-async-call (AsyncLocalStorage), so two delegations running
+// at once can never mix their evidence, and a read outside a collect() (a direct
+// chat command) simply records nothing extra.
+const { AsyncLocalStorage } = require('async_hooks');
+const evidenceAls = new AsyncLocalStorage();
+
+function evidenceBag() { return evidenceAls.getStore() || null; }
+
+// Highest session-record sequence right now — the watermark an API sweep uses to
+// pick up exactly the wire calls this delegation made.
+function sessionMark() {
+  const all = session.all();
+  return all.length ? all[all.length - 1].seq : 0;
+}
+
+// Record ONE real device-CLI run as terminal evidence. Called from the choke
+// point only, with the values it actually used.
+function pushCliEvidence({ host, command, output, transport, line }) {
+  const bag = evidenceBag();
+  if (!bag) return;
+  bag.entries.push({
+    host: String(host || 'unknown host'),
+    command: String(command || ''),
+    output: output == null ? '' : String(output),
+    transport: transport === 'ssh' ? 'ssh' : 'cmdrunner',
+    line: line ? String(line) : '',
+    ts: new Date().toISOString(),
+  });
+}
+
+// Everything else this delegation read is an API call, and the session log
+// already holds it (host, path, raw body, plain-words interpretation). Auth
+// exchanges are excluded (their bodies are never kept) and the Command Runner
+// hops are excluded because the CLI push above already carries that read as one
+// clean block instead of four transport hops.
+function apiEvidenceSince(mark) {
+  return session.all()
+    .filter((r) => r.seq > mark)
+    .filter((r) => r.kind !== 'reasoning' && r.kind !== 'login')
+    .filter((r) => !(r.kind === 'command-runner' || r.kind === 'poll' || r.kind === 'output'))
+    .map((r) => ({
+      host: r.host || r.sourceLabel || 'unknown host',
+      command: r.command || r.path || '',
+      output: r.raw == null ? '' : String(r.raw),
+      transport: 'api',
+      line: r.interpretation || '',
+      ts: r.ts,
+    }));
+}
+
+/**
+ * Run `fn` and collect the terminal evidence every read inside it produced.
+ * Returns { result, cli: [{host, command, output, transport, line, ts}] }.
+ */
+async function collectCliEvidence(fn) {
+  const bag = { entries: [], mark: sessionMark() };
+  return evidenceAls.run(bag, async () => {
+    const result = await fn();
+    const cli = bag.entries.concat(apiEvidenceSince(bag.mark))
+      .sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+    return { result, cli };
+  });
+}
+
 // Agents that have no sandbox behind them. Honest answer, every time.
 const NO_BACKEND = {
   'sentinel': 'CVE / threat-feed source (Cisco Umbrella or Talos)',
@@ -578,6 +651,20 @@ async function executeDeviceCli({ agentId, request, purpose, announce, device, a
     };
   }
   const runs = r.runs || [];
+  // CW-9: every real run becomes terminal evidence, with the transport it
+  // ACTUALLY used — Command Runner is never dressed up as SSH.
+  const transport = r.via === 'ssh' ? 'ssh' : 'cmdrunner';
+  for (const run of runs) {
+    pushCliEvidence({
+      host: (run.target && (run.target.ip || run.target.hostname)) || 'unknown host',
+      command: verdict.command,
+      output: run.body,
+      transport,
+      line: `${run.ok === false ? 'Device rejected' : 'Ran'} "${verdict.command}" on ` +
+        `${(run.target && run.target.hostname) || 'the device'} over ` +
+        `${transport === 'ssh' ? 'direct SSH' : `${catalyst.label} Command Runner`}.`,
+    });
+  }
   if (r.multi) return { ok: true, multi: true, command: verdict.command, runs, note: r.note, via: r.via || 'command-runner', refusedChange };
   const one = runs[0];
   // This conversation is now working on THIS box: a follow-up that names no
@@ -1889,6 +1976,17 @@ async function gatherForJarvis(agentId, question, planDevice, planIncidentId) {
   }
 }
 
+// CW-9 — the SAME delegated read, with its terminal evidence attached. Every
+// caller on the bridge path (Jarvis's plan loop, the investigation loop) uses
+// this so a finding always arrives with the real command + raw output + honest
+// transport behind it. The finding itself is byte-for-byte what gatherForJarvis
+// returns; `cli` is additive.
+async function gatherWithEvidence(agentId, question, planDevice, planIncidentId) {
+  const { result, cli } = await collectCliEvidence(
+    () => gatherForJarvis(agentId, question, planDevice, planIncidentId));
+  return { ...(result || {}), cli };
+}
+
 // Called once per participating agent when a debate runs.
 async function debateContribution(agentId, topic) {
   if (NO_BACKEND[agentId]) return noDataContribution(agentId, topic);
@@ -2107,6 +2205,9 @@ module.exports = {
   canAnswer, cannotAnswer, CAPABILITIES,
   isDeviceCliRequest, runDeviceCli,
   debateContribution, gatherForJarvis,
+  // CW-9 evidence envelope: the same delegated read, plus the terminal evidence
+  // (host / command / raw scrubbed output / honest transport) behind it.
+  gatherWithEvidence, collectCliEvidence,
   // Ambiguity → ask, never assume: the parked-question resume + the explicit
   // "forget the device" reset. server.js calls these BEFORE it routes anything,
   // so both surfaces (Jarvis and a direct @mention) inherit the same behaviour.

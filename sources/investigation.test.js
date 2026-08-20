@@ -206,6 +206,57 @@ function freshCtx(probeImpl) {
     ok('stuck → fired no probe (dead-end recognised before any wire)', probeCalls.length === 0, `${probeCalls.length}`);
   }
 
+  // ── 7. CW-9: a bridge-driven run — seeded understanding, engaged-only probing,
+  //          observer narration, and the terminal evidence on every report ────
+  {
+    const { probeCalls } = freshCtx(async ({ agentId }) => ({
+      agentId, name: 'Config-Keeper', stance: 'evidence', text: 'Gi1/0/3 is administratively down.',
+      cli: [{ host: '10.10.20.176', command: 'show ip int brief', output: 'Gi1/0/3  admin down', transport: 'cmdrunner' }],
+    }));
+    const rounds = [];
+    const updates = [];
+    let understandCalls = 0;
+    investigation.setPlanner(scriptedPlanner({
+      understand: async () => { understandCalls++; return { specific: true, understood: 'should not be asked', hypotheses: [] }; },
+      probe: async ({ roster }) => ({ agentId: roster[0].id, question: 'show ip int brief on sw2', device: 'sw2' }),
+      assess: async () => ({ hypotheses: [{ id: 'h1', text: 'the port is shut', status: 'confirmed' }], confidence: 0.95, note: 'confirmed' }),
+      fix: async () => ({ rootCause: 'Gi1/0/3 was shut', summary: 'no shut it', proposal: { device: 'sw2', commands: ['interface Gi1/0/3', 'no shutdown'], reason: 'restore the port' } }),
+    }));
+    const rec = investigation.create({
+      problem: 'users on sw2 lost the network',
+      understood: 'Users behind sw2 lost connectivity since 14:00.',
+      hypotheses: [{ id: 'h1', text: 'the access port is shut' }],
+      agents: ['config-keeper'],
+      observer: { onRound: (snap, round) => rounds.push(round), onUpdate: (snap) => updates.push(snap) },
+      who: 'tester',
+    });
+    const out = await investigation.run(rec.id);
+    ok('CW-9: a seeded understanding is NOT re-grilled (one gate in the system)', understandCalls === 0);
+    ok('CW-9: the loop only tasked the ENGAGED agent', probeCalls.every((p) => p.agentId === 'config-keeper'), JSON.stringify(probeCalls));
+    ok('CW-9: the observer saw the round', rounds.length === 1 && rounds[0].agent === 'Config-Keeper');
+    ok('CW-9: the report carries its terminal evidence',
+      rounds[0].report.cli.length === 1 && rounds[0].report.cli[0].transport === 'cmdrunner');
+    ok('CW-9: the observer saw the resolved snapshot', updates.some((u) => u.status === 'resolved'));
+    ok('CW-9: the engaged set is on the snapshot', JSON.stringify(out.agents) === JSON.stringify(['config-keeper']));
+    ok('CW-9: the fix is still a PROPOSAL — nothing applied', out.fixPlan.proposal.device === 'sw2' && out.status === 'resolved');
+  }
+
+  // ── 8. CW-9: a throwing observer can never break the loop ──────────────────
+  {
+    freshCtx(async ({ agentId }) => ({ agentId, name: 'Config-Keeper', stance: 'evidence', text: 'a real reading' }));
+    investigation.setPlanner(scriptedPlanner({
+      understand: async () => ({ specific: true, understood: 'x', hypotheses: [] }),
+      probe: async () => ({ stuck: 'nothing else would narrow this' }),
+    }));
+    const rec = investigation.create({
+      problem: 'anything', understood: 'anything, understood',
+      observer: { onRound: () => { throw new Error('boom'); }, onUpdate: () => { throw new Error('boom'); } },
+      who: 'tester',
+    });
+    const out = await investigation.run(rec.id);
+    ok('CW-9: a throwing observer does not break the investigation', out.status === 'stuck', out.status);
+  }
+
   console.log(`\nCW-7 investigation: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

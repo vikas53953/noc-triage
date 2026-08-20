@@ -31,6 +31,7 @@ const ticketStore = require('./sources/ticket-store');
 const teams = require('./sources/teams');            // CW-4: Teams bridge (one-way post)
 const servicenow = require('./sources/servicenow-client'); // CW-6: two-way ServiceNow sync
 const investigation = require('./sources/investigation'); // CW-7: iterative investigation loop
+const conduct = require('./sources/conduct');        // CW-9: ONE bridge-conduct gate + pinned envelope
 const mcp = require('./sources/mcp-connector');      // CW-8: generic MCP connector (gated, read-only, honest-if-absent)
 const pcap = require('./sources/pcap');              // A6: native pcap analyzer (honest no-capture, bounded parse)
 const nautobot = require('./sources/nautobot');      // A8: Nautobot source-of-truth reconciliation (honest not-connected)
@@ -1074,16 +1075,22 @@ live.init({
 // LLM steps are the plan and the synthesis; everything around them is real and
 // testable without a key. With no key, Jarvis declines to reason (honest state)
 // — it never falls back to a rule-router.
-function jarvisSay(agentId, text) {
+// CW-9: `envelope` is the pinned bridge message shape (kind + its structured
+// payload: questions / roster / finding / verdict / change). It is ADDITIVE —
+// the payload keeps every field it always had, so an old client that reads only
+// `text` is unaffected, and chat-store persists the new fields automatically
+// because every chat_message passes through the one broadcast seam.
+function jarvisSay(agentId, text, envelope) {
   const a = agents[agentId] || {};
-  broadcast('chat_message', {
+  const base = {
     type: 'incoming',
     agent: agentId,
     agentName: a.name || agentId,
     agentIcon: a.icon || '🤖',
     text,
     timestamp: new Date().toISOString(),
-  });
+  };
+  broadcast('chat_message', envelope && typeof envelope === 'object' ? { ...base, ...envelope, text } : base);
 }
 // The roster BOTH the planner (jarvis) and the investigation loop reason over:
 // the live squad agents PLUS (CW-8) every connected external MCP tool as its own
@@ -1115,10 +1122,13 @@ jarvis.init({
   // CW-8: an MCP tool (id "mcp:<server>:<tool>") is a delegation target too — it
   // routes to the connector, which gates + audits the call exactly like a read.
   // Everything else goes to the live agents unchanged.
+  // CW-9: the SAME delegated read, now returning the terminal evidence behind it
+  // (host / exact command / raw scrubbed output / honest transport) so every
+  // finding can be shown as a real CLI block instead of a wall of prose.
   gather: (agentId, question, device, incidentId) =>
     mcp.isMcpId(agentId)
       ? mcp.gather(agentId, question, { who: 'jarvis', approved: false })
-      : live.gatherForJarvis(agentId, question, device, incidentId),
+      : live.gatherWithEvidence(agentId, question, device, incidentId),
   // The roster the planner reasons over: who exists + what each can actually see,
   // plus (CW-8) every connected external MCP tool as its own delegation target.
   roster: () => buildJarvisRoster(),
@@ -1126,7 +1136,32 @@ jarvis.init({
   // so a greeting or a "what can you do / help" meta-ask is answered warmly from
   // the real, honest ability map — never a brusque refusal or an incomplete list.
   abilities: () => capabilities.list(),
+  // CW-9 — the bridge: a chat problem report that the shared conduct gate judged
+  // specific enough is run through the SAME CW-7 investigation loop, round by
+  // round, with an observer that narrates it in the pinned envelope.
+  investigate: {
+    create: (input) => investigation.create({ ...input, who: 'operator' }),
+    run: (id) => investigation.run(id),
+  },
+  // A fixable cause becomes a CW-2 change record in the proposed (held-for-
+  // approval) state. Nothing here can apply anything: changeStore.create only
+  // OPENS the record — the wrap (gate → capture → apply → verify → rollback
+  // plan) still runs only from POST /api/copilot/change after an approval.
+  proposeChange: ({ device, commands, reason }) => {
+    const cleaned = cleanChangeCommands(commands);
+    if (cleaned.error) throw new Error(cleaned.error);
+    return changeStore.create({
+      device: String(device || ''), commands: cleaned.commands,
+      reason: String(reason || 'Fix proposed on the bridge'), who: 'jarvis',
+    });
+  },
 });
+
+// CW-9 — the ONE conduct gate, shared by EVERY operator entry point. The chat
+// path (jarvis.ask) and the triage intake (triage.js → ctx.understand) now come
+// through this same module with the same reasoning planner behind it, so a
+// behaviour fix can never again land on one path and miss the other.
+conduct.setPlanner(jarvis.conductPlanner);
 
 // CW-7 — hand the investigation LOOP engine its plumbing. The engine orchestrates
 // deterministically (rounds, cap, gate, audit, streaming); the REASONING (which
@@ -1139,7 +1174,9 @@ investigation.init({
   probe: ({ agentId, question, device, incidentId }) =>
     mcp.isMcpId(agentId)
       ? mcp.gather(agentId, question, { who: 'jarvis', approved: false })
-      : live.gatherForJarvis(agentId, question, device || null, incidentId || null),
+      // CW-9: with the terminal evidence attached, so every probe report can be
+      // shown as the real command + raw output it actually was.
+      : live.gatherWithEvidence(agentId, question, device || null, incidentId || null),
   broadcast,
   roster: () => buildJarvisRoster(),
   audit: (entry) => session.audit(entry),
@@ -1158,8 +1195,12 @@ triage.init({
   // triage.js reasons about the problem before sweeping without importing jarvis's
   // planner shape directly. Returns { specific, understood, hypotheses, questions,
   // relevantFronts }. A thrown/absent call makes triage fall back to the full sweep.
+  // CW-9: the intake now shares the ONE conduct gate with the chat path
+  // (sources/conduct.js) instead of holding its own copy of the understanding
+  // step. Same module, same planner, same behaviour — that is the class law for
+  // this wave. The returned shape is unchanged, so triage.js is untouched.
   understand: ({ problem, priorAnswers, operatorTz } = {}) =>
-    jarvis.investigationPlanner.understand({ problem, operatorTz, answers: priorAnswers || [] }),
+    conduct.understand({ problem, priorAnswers, operatorTz }),
 });
 
 // WebSocket connection handler
@@ -1293,6 +1334,9 @@ function handleCommand(data, fallbackSessionId) {
     question,
     agent: (data && data.agent) || null,
     askedAt: new Date().toISOString(),
+    // The operator's own timezone, when the surface sends it — the conduct gate
+    // reasons about "since 2pm" in the operator's zone, never the server's.
+    operatorTz: (data && typeof data.operatorTz === 'string' && data.operatorTz.trim()) || null,
     // The conversation this message belongs to. Carries the device and the
     // incident the operator settled on, and their parked question, no further
     // than this one conversation — never to another operator. Resolution order:
@@ -1806,7 +1850,11 @@ function simulateJarvisAction(agentId, command) {
   }
 
   // Open-ended reasoning (triage/escalate/general/inferred) → REAL agentic Jarvis.
-  return jarvis.ask(command);
+  // CW-9: the conversation id and timezone travel with the ask, so the shared
+  // conduct gate can remember THIS thread's questions and the answer that
+  // resumes it — scoped to one conversation, never global.
+  const req = currentRequest() || {};
+  return jarvis.ask(command, { conversationId: req.conversationId || 'default', operatorTz: req.operatorTz || null });
 }
 
 // Jarvis: Daily standup — collect status from all agents

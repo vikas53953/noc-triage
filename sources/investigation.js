@@ -88,6 +88,8 @@ function snapshot(rec) {
     id: rec.id,
     problem: rec.problem,
     operatorTz: rec.operatorTz || null,
+    // CW-9: the engaged set the bridge announced (null = the whole roster).
+    agents: rec.agents ? rec.agents.slice() : null,
     who: rec.who || null,
     status: rec.status,
     understood: rec.understood || null,
@@ -113,6 +115,17 @@ function emit(type, rec, extra) {
       ctx.broadcast(type, extra ? { id: rec.id, ...extra } : snapshot(rec));
     }
   } catch (e) { /* streaming must never break the loop */ }
+  // CW-9: an optional per-run OBSERVER. The bridge (Jarvis in chat) uses it to
+  // narrate the same loop round-by-round in the pinned envelope — one short
+  // 'say' plus the finding evidence — without this engine knowing anything about
+  // chat. A throwing observer can never break the investigation.
+  try {
+    const obs = rec.observer;
+    if (obs) {
+      if (type === 'investigation_round' && typeof obs.onRound === 'function') obs.onRound(snapshot(rec), extra);
+      else if (typeof obs.onUpdate === 'function') obs.onUpdate(snapshot(rec));
+    }
+  } catch (e) { /* narration must never break the loop */ }
 }
 
 function audit(rec, what, result, detail, device) {
@@ -126,18 +139,29 @@ function audit(rec, what, result, detail, device) {
 // ── Create (synchronous) ─────────────────────────────────────────────────────
 // The route calls this to get an id back immediately, then run(id) drives the
 // (async, LLM-backed) understand + probe loop in the background, streaming rounds.
-function create({ problem, operatorTz, who } = {}) {
+function create({ problem, operatorTz, who, agents, observer, understood, hypotheses } = {}) {
   const id = nextId();
   const rec = {
     id,
     problem: String(problem || '').trim(),
     operatorTz: operatorTz || null,
     who: who || 'unknown',
+    // CW-9 (optional, additive): the agents the bridge ENGAGED. When set, the
+    // probe planner may only task those — so the roster message the operator was
+    // shown ("standing down X, Y") stays true, and a stood-down front can never
+    // be swept behind their back. Absent → the whole roster, exactly as before.
+    agents: Array.isArray(agents) && agents.length ? agents.map(String) : null,
+    // CW-9 (optional): narrate this run in the bridge envelope. Never persisted,
+    // never in a snapshot.
+    observer: observer && typeof observer === 'object' ? observer : null,
     status: 'starting',
-    understood: null,
+    // CW-9: when the SHARED conduct gate (sources/conduct.js) already understood
+    // the problem, its result is seeded here and this engine does NOT ask a
+    // second time — there is exactly ONE understanding gate in the system.
+    understood: (understood && String(understood)) || null,
     questions: [],
     answers: [],
-    hypotheses: [],
+    hypotheses: Array.isArray(hypotheses) ? hypotheses.map((h, i) => normalizeHypothesis(h, i)) : [],
     confidence: 0,
     rounds: [],
     rootCause: null,
@@ -177,6 +201,14 @@ async function run(id) {
   if (!rec) return null;
   if (!planner || typeof planner.available !== 'function' || !planner.available()) {
     return stopReasoningUnavailable(rec);
+  }
+  // The shared conduct gate already understood this problem (CW-9): go straight
+  // to probing rather than re-grilling the operator through a second gate.
+  if (rec.understood) {
+    rec.status = 'investigating';
+    rec.questions = [];
+    emit('investigation_update', rec);
+    return probeLoop(rec);
   }
   return understandThenLoop(rec);
 }
@@ -229,7 +261,14 @@ function normalizeHypothesis(h, i) {
 
 // ── The probe loop ───────────────────────────────────────────────────────────
 async function probeLoop(rec) {
-  const roster = (ctx && typeof ctx.roster === 'function') ? ctx.roster() : [];
+  const full = (ctx && typeof ctx.roster === 'function') ? ctx.roster() : [];
+  // CW-9: when the bridge engaged a named set of agents, the planner may only
+  // task those — a stood-down front is never quietly swept anyway.
+  const roster = rec.agents ? full.filter((a) => rec.agents.includes(a.id)) : full;
+  if (rec.agents && !roster.length) {
+    return stopStuck(rec,
+      'The agents engaged on this bridge are not on the live roster, so there is nobody I am allowed to probe. Nothing was read.');
+  }
 
   // The loop can never run past the cap: the `for` bound IS the hard stop.
   while (rec.rounds.length < rec.cap) {
@@ -285,6 +324,10 @@ async function probeLoop(rec) {
       agentName: finding.name || probe.agentName,
       stance: finding.stance || 'evidence',
       text: String(finding.text || '').trim(),
+      // CW-9 evidence envelope: the real reads behind this report — host, exact
+      // command, raw scrubbed output, honest transport. Empty when the probe
+      // read nothing (denied / not connected / unreachable).
+      cli: Array.isArray(finding.cli) ? finding.cli : [],
     };
 
     // A probe DENIED at the gate ran ZERO wire calls. That is a safety fact the
@@ -353,7 +396,8 @@ function recordRound(rec, roundNo, probe, report, hypotheses, confidence, status
     probe: { agentId: probe.agentId, agentName: probe.agentName, question: probe.question,
       device: probe.device || null, rationale: probe.rationale || null },
     agent: probe.agentName,
-    report: { agentName: report.agentName, stance: report.stance, text: report.text },
+    report: { agentName: report.agentName, stance: report.stance, text: report.text,
+      cli: Array.isArray(report.cli) ? report.cli : [] },
     hypotheses: hypotheses.map((h) => ({ ...h })),
     confidence,
     status,

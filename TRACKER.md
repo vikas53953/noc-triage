@@ -396,3 +396,16 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   live verify. Fable orchestrates; Opus executes. Jarvis test model = claude-sonnet-5 (spend-wise).
 - Class law for this wave: ONE conduct layer shared by EVERY operator entry point (chat + triage intake +
   future paths) — never a per-path fix again.
+
+## 2026-08-20 — CW-9 BACKEND (feat/cw9-bridge-be) built
+- ONE conduct layer: sources/conduct.js — the shared understanding gate + the pinned envelope with the
+  hard caps in CODE (jarvis text ≤280, finding.line ≤200, ≤3 questions). Chat (jarvis.ask) and the triage
+  intake (triage ctx.understand) both go through it now — no more per-path conduct.
+- Vikas's EPG failure replayed LIVE on claude-sonnet-5: "hey jarvis facing issue in epg" → one 275-char ask
+  with 3 real narrowing questions, ZERO engagements, ZERO reads. The answer resumes the same understanding.
+- Bridge: roster message (engaged + stood-down, one-line why each; the loop may task ONLY the engaged) →
+  CW-7 investigation loop round-by-round (one short say + finding evidence per round) → verdict → CW-2
+  change record held-for-approval (never applied).
+- Every read now carries finding.cli {host, command, raw scrubbed output, honest transport} — Command
+  Runner is 'cmdrunner', never dressed as ssh; anything else is 'api'. Raw output never enters message text.
+- 24 suites / 918 assertions green (new sources/conduct.cw9.test.js: 71; CW-7 suite grew by 8).
