@@ -199,6 +199,23 @@ const ABILITIES = [
       + 'until a server is declared and connects, Jarvis has no MCP tools and invents none. Server credentials live in config/env only, never logged.',
   },
   {
+    // CW-10 item 5. Jarvis's REASONING calls (never a probe) carry Anthropic's
+    // server-side web_search + web_fetch, so mid-investigation it can check a
+    // vendor advisory or release note. What comes back is a WEB source and is
+    // labelled as one in chat — it never enters finding.cli and is never shown
+    // as something a device reported. Availability is HONEST and dynamic: it is
+    // false until a real call has proved the account accepts the tool types, and
+    // it flips back to false for good the first time the account rejects them.
+    key: 'web-research',
+    label: 'Check vendor docs and known bugs on the web',
+    plain: 'Mid-investigation I can look up vendor documentation, release notes and known-bug advisories, and I always say which web page a claim came from — a web page is never presented as a reading from your network.',
+    example: 'is there a known bug in IOS-XE 17.12 affecting EPG learning?',
+    dynamic: 'web-research',
+    available: false,
+    engineBuilt: true,
+    reason: 'The server-side web search/fetch tools have not been confirmed on this Anthropic account yet — the wiring is done and the first reasoning call that uses them decides it. If the account rejects them the capability stays off and Jarvis says so rather than guessing at a vendor bug.',
+  },
+  {
     key: 'bridge',
     label: 'Run the incident bridge',
     plain: 'Keep the bridge: roles (commander, scribe, joiners), SLA clocks, the running timeline and the handover write-up.',
@@ -371,6 +388,11 @@ function resolveAvailable(a) {
   }
   if (a.dynamic === 'batfish') {
     try { return require('./batfish').connected(); } catch (e) { return false; }
+  }
+  if (a.dynamic === 'web-research') {
+    // True only once a real call has come back with the web tools accepted;
+    // false the moment the account rejects them. Never a guess.
+    try { return require('./claude').webResearch().available; } catch (e) { return false; }
   }
   if (a.dynamic === 'nautobot') {
     try { return require('./nautobot').connected(); } catch (e) { return false; }
