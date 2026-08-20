@@ -492,3 +492,14 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - CLI task list created (7 tasks): #1 PR73 re-review→merge, #2 PR72 re-review→merge, #3 live verify +
   evidence page, #4 CW-10, #5 CW-11, #6 launch video v3 (open), #7 waiting-on-Vikas creds.
 - CW naming for any resumer: CW = "Copilot Wave" — OUR feature-wave numbering (CW-1..CW-11), NOT PR numbers.
+
+## 2026-08-20 — CW-9 UI re-review: APPROVE (fixes held under fresh attack)
+- 51-shape fuzz + 11 live attack envelopes vs resolveResume → 0 off-origin posts; tampered-localStorage
+  restore rejected; 30 malformed shapes → 0 vanished/0 throws; 2.79MB output 1532ms→35ms, store fresh,
+  honest truncation note; layout reads like an SSH session at 1920 + stacks at 1440; 8 fresh XSS classes
+  → 0 hits; 24 suites green (CW-9 suite 100 checks). Honest-placeholder deviation explicitly APPROVED.
+- 3 tiny pre-merge polish items sent to builder (trim-notice wiped on reload; resolveResume normalize;
+  resume.field allowlist). Mobile ~20px scroll confirmed PRE-EXISTING on master (logged, not this PR).
+- Note: gh rejects self-approve (same token) — verdict comments with "VERDICT: APPROVE" are the approval
+  signal on this repo.
+- Waiting: BE re-review (PR #73) → then merge #73, #72, restart :3000, live verify, evidence page.
