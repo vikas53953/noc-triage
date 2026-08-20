@@ -103,14 +103,24 @@ const WEAK_SECRET_INTRO = new Set([
 // Words that sit BETWEEN the keyword and the value. They are syntax — stepping
 // over them is what stops the marker landing on the wrong token.
 const SECRET_SYNTAX = new Set([
-  'text', 'local', 'remote', 'md5', 'sha', 'sha1', 'sha256', 'sha512', 'hmac',
-  'hmac-sha1', 'hmac-sha256', 'aes', 'des', '3des', 'key-string', 'key-hash',
+  'text', 'local', 'remote', 'key-string', 'key-hash',
   'set-key', 'ascii', 'hex', 'clear', 'cleartext', 'encrypted', 'encrypt', '0x',
   // English copulas, so a secret STATED in a sentence ("the password is
   // Hunter2!") is still found — the value is the token after the verb, and the
   // verb itself must never be the thing that gets the marker.
   'is', 'was', 'are', 'be', 'equals', 'set', 'to', '=', ':',
 ]);
+// ALGORITHM NAMES AS A CLASS, not as a list of literals (CW-9 final gate). An
+// SNMPv3 line writes them hyphenated and with key lengths — `auth sha-256 …`,
+// `priv des56 …`, `hmac-sha-384` — so listing `sha256`/`3des` by hand left the
+// passphrase in clear next to a «redacted» marker. Hyphens are normalised out
+// and the whole SHA / HMAC / AES / DES family is matched by shape, so the next
+// digest anyone invents is covered without a code change.
+const ALGORITHM_TOKEN = /^(?:hmac)?(?:sha\d*|md5|aes\d*|des\d*|3des\d*)$/;
+function isAlgorithmToken(token) {
+  return ALGORITHM_TOKEN.test(String(token || '').replace(/-/g, ''));
+}
+
 // A value that is never a secret: a sub-command or a mode name. Seeing one of
 // these means the keyword was not introducing a secret at all.
 const NOT_A_SECRET = new Set([
@@ -121,6 +131,11 @@ const NOT_A_SECRET = new Set([
   'server', 'host', 'vrf', 'udp-port', 'timeout', 'retransmit', 'port', 'source-interface',
   'user', 'group', 'view', 'access', 'ro', 'rw', 'digest', 'accept-lifetime',
   'send-lifetime', 'null', 'default', 'auto', 'disable',
+  // `aaa authentication login default group tacacs+ local` — "login" is the
+  // method list being named, not a secret. `ip authentication key-chain KC1` —
+  // the chain NAME is not a secret either (the key-string inside it is, and that
+  // is caught on its own line).
+  'login', 'key-chain',
 ]);
 // Enough English to tell a sentence from a config line. Two hits = prose.
 const PROSE_WORDS = /\b(?:the|your|when|with|please|anyone|should|would|could|been|you|this|that|there|about|because|before|prompted|share|enter)\b/gi;
@@ -168,7 +183,7 @@ function scrubConfigForms(line) {
     skipSpace();
     while (j < parts.length) {
       const t = normToken(parts[j]);
-      if (SECRET_SYNTAX.has(t) || /^\d{1,3}$/.test(t)) { j++; skipSpace(); continue; }
+      if (SECRET_SYNTAX.has(t) || isAlgorithmToken(t) || /^\d{1,3}$/.test(t)) { j++; skipSpace(); continue; }
       break;
     }
     if (j >= parts.length) continue;              // `ntp server 10.0.0.1 key 1` — no value follows

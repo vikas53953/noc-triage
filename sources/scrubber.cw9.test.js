@@ -67,6 +67,15 @@ const SECRETS = [
   ['ip ospf message-digest-key 1 md5 MyOspfKey', 'MyOspfKey', 'md5'],
   ['snmp-server host 1.1.1.1 traps PrivComm99 udp-port 162', 'PrivComm99', 'udp-port'],
   ['snmp-server user U1 G1 v3 auth md5 AuthPass99', 'AuthPass99', 'auth'],
+  // Final gate — SNMPv3 writes its algorithms HYPHENATED and with key lengths,
+  // so a literal list ("sha256", "3des") left the passphrase in clear next to a
+  // «redacted» marker. Hyphens are normalised out and the family is matched by
+  // shape, so the auth AND priv passphrases both go and both algorithms stay.
+  ['snmp-server user u G v3 auth sha-256 A2 priv des56 P1', 'A2', 'sha-256'],
+  ['snmp-server user u G v3 auth sha-256 A2 priv des56 P1', 'P1', 'des56'],
+  ['snmp-server user u2 G2 v3 auth hmac-sha-384 AuthPass1 priv aes 256 PrivPass2', 'AuthPass1', 'hmac-sha-384'],
+  ['snmp-server user u2 G2 v3 auth hmac-sha-384 AuthPass1 priv aes 256 PrivPass2', 'PrivPass2', 'aes'],
+  ['snmp-server user u3 G3 v3 auth sha-512 ShaFiveTwelve priv 3des ThreeDesPass', 'ShaFiveTwelve', 'sha-512'],
   ['ANTHROPIC_API_KEY=sk-ant-abc123', 'sk-ant-abc123', 'ANTHROPIC_API_KEY'],
   ['DNAC_PASSWORD=Str0ng!', 'Str0ng!', 'DNAC_PASSWORD'],
   ['{"username":"admin","password":"S3cret!"}', 'S3cret!', 'username'],
@@ -91,6 +100,11 @@ const SURVIVORS = [
   'ntp server 10.0.0.1 key 1',
   ' authentication mode md5',
   ' ip ospf authentication message-digest',
+  // Final gate — a method list and a chain NAME are not secrets (the key-string
+  // inside the chain is, and it is caught on its own line).
+  'aaa authentication login default group tacacs+ local',
+  ' ip authentication key-chain KC1',
+  ' ip authentication mode md5',
   'uptime is 3 weeks, 2 days',
   // `community` on its own is an English word — only an snmp prefix or a
   // separator makes it the SNMP shared secret (regression: live-feeds suite).
