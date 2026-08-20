@@ -23,6 +23,7 @@ const approvals = require('./sources/approvals');
 const artifacts = require('./sources/artifacts');
 const notifier = require('./sources/notifier');
 const capabilities = require('./sources/capabilities');
+const spendStore = require('./sources/spend-store');
 const changeRunner = require('./sources/change-runner');
 const changeStore = require('./sources/change-store');
 const sshRunner = require('./sources/ssh-runner');   // CW-5: SSH transport status
@@ -1092,6 +1093,29 @@ function jarvisSay(agentId, text, envelope) {
   };
   broadcast('chat_message', envelope && typeof envelope === 'object' ? { ...base, ...envelope, text } : base);
 }
+
+// CW-10 item 3 (BE half) — one chunk of Jarvis's composed answer, as it is
+// written. This is a DISPLAY optimisation and is deliberately NOT a
+// `chat_message`: a client that does not know about `say_delta` ignores the
+// message entirely and sees exactly what it saw before CW-10 — the finished
+// bubble. The buffered chat_message that follows carries the same `messageId`
+// and remains the authoritative record (it is what chat-store persists; deltas
+// are never persisted). Only Jarvis's OWN composed text is ever streamed —
+// never an agent's evidence.
+function jarvisSayDelta(agentId, payload) {
+  if (!payload || typeof payload !== 'object') return;
+  const a = agents[agentId] || {};
+  broadcast('say_delta', {
+    agent: agentId,
+    agentName: a.name || agentId,
+    agentIcon: a.icon || '🤖',
+    kind: 'say-delta',
+    messageId: String(payload.messageId || ''),
+    delta: String(payload.delta == null ? '' : payload.delta),
+    done: Boolean(payload.done),
+    timestamp: new Date().toISOString(),
+  });
+}
 // The roster BOTH the planner (jarvis) and the investigation loop reason over:
 // the live squad agents PLUS (CW-8) every connected external MCP tool as its own
 // namespaced delegation target. Built in one place so the two callers can never
@@ -1113,6 +1137,13 @@ function buildJarvisRoster() {
 
 jarvis.init({
   say: jarvisSay,
+  // CW-10 item 3 (BE half): incremental text for Jarvis's COMPOSED answer only.
+  // Its own WS message type, so a client that has never heard of deltas ignores
+  // it and still gets the authoritative buffered chat_message afterwards.
+  sayDelta: jarvisSayDelta,
+  // Which conversation this reasoning call belongs to — for the spend record
+  // (an id the app already holds; never prompt text).
+  conversationId: () => (currentRequest() || {}).conversationId || 'default',
   status: updateAgentStatus,
   log: (line) => appendToActivityLog(`[${new Date().toISOString()}] ${line}\n`),
   nameOf: (id) => (agents[id]?.name || id),
@@ -3050,6 +3081,20 @@ app.get('/api/sources', async (req, res) => {
     notConnected: live.NO_BACKEND,
     readOnly: true,
   });
+});
+
+// ── CW-10 item 4: what the reasoning actually cost ──────────────────────────
+// Real numbers from the API's own usage on every model call — per day, per
+// purpose (understand / plan / probe / synthesize / …) and per model, plus
+// today and the last 7 days. NOTHING here can leak a prompt: the spend store is
+// only ever written with token counts, a purpose label, a model id and an id
+// the app already holds — never a prompt, a message or an answer.
+app.get('/api/spend/summary', (req, res) => {
+  try {
+    res.json({ ...spendStore.summary(), readOnly: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Could not read the spend record.' });
+  }
 });
 
 // ── CLI / session view (Phase B) ────────────────────────────────────────────

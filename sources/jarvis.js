@@ -291,6 +291,25 @@ function speak(agentId, env) {
   ctx.say(agentId, env.text, env);
 }
 
+// ── CW-10 item 3 (BE half): streaming Jarvis's composed answer ──────────────
+// ONLY Jarvis's own composed text streams. Agent evidence never does — a finding
+// is a completed read with its terminal output attached, and half a reading on
+// screen would be a claim the app cannot stand behind yet.
+//
+// The deltas are ADDITIVE and advisory: they go out on their own WS envelope
+// (kind:'say-delta' {messageId, delta, done}) and the normal, buffered
+// chat_message that follows — carrying the SAME messageId — stays the
+// authoritative record. A client that ignores deltas sees exactly what it saw
+// before CW-10. A host that wires no sayDelta (every offline test) is a no-op.
+let deltaSeq = 0;
+function newMessageId() { return `jv-${Date.now().toString(36)}-${(deltaSeq += 1).toString(36)}`; }
+function sayDelta(messageId, delta, done) {
+  if (!ctx || typeof ctx.sayDelta !== 'function') return;
+  try {
+    ctx.sayDelta('jarvis', { kind: 'say-delta', messageId, delta: String(delta == null ? '' : delta), done: Boolean(done) });
+  } catch (e) { /* a display optimisation must never break the answer */ }
+}
+
 // ── CW-9: the bridge front door ─────────────────────────────────────────────
 // EVERY operator message reaches Jarvis here, and the FIRST thing that happens
 // is the shared conduct gate (sources/conduct.js) — the same gate the triage
@@ -471,6 +490,8 @@ async function planAndAnswer(q) {
       maxTokens: 6000,
       effort: 'high',
       format,
+      // CW-10: spend label + web research on this REASONING call.
+      purpose: 'plan', conversationId: conversationId(), web: true,
     });
     if (res.refused) return refusedToReason(q);
     plan = JSON.parse(res.text);
@@ -574,14 +595,18 @@ async function planAndAnswer(q) {
   // ── Call 2: SYNTHESIS — strictly from the real findings ────────────────────
   ctx.status('jarvis', 'active', 'Composing the answer from findings…');
   let result;
+  // The composed answer is the one thing that streams (CW-10 item 3). The
+  // messageId ties the deltas to the buffered message that follows.
+  const messageId = newMessageId();
   try {
-    result = await synthesizeAnswer(q, findings);
+    result = await synthesizeAnswer(q, findings, (delta) => sayDelta(messageId, delta, false));
   } catch (err) {
+    sayDelta(messageId, '', true);
     return relayFindings(q, findings, `the write-up step could not run (${err && err.message ? err.message : 'error'})`);
   }
   // The optional summary was declined even after the one neutral retry — the reads
   // are already on screen, so relay honestly with the SHORT, calm message.
-  if (result.relayed) return relayFindings(q, findings, result.why);
+  if (result.relayed) { sayDelta(messageId, '', true); return relayFindings(q, findings, result.why); }
   const answer = result.answer;
 
   session.recordReasoning({
@@ -589,7 +614,9 @@ async function planAndAnswer(q) {
     raw: String(answer || ''),
     interpretation: `Composed strictly from the ${findings.length} real finding(s) gathered above — no number, device, or status invented.`,
   });
-  speak('jarvis', conduct.envelope.say(answer));
+  // done:true first, then the authoritative buffered message under the same id.
+  sayDelta(messageId, '', true);
+  speak('jarvis', { ...conduct.envelope.say(answer), messageId });
   ctx.status('jarvis', 'idle', 'Answered from live findings');
   ctx.log(`[Jarvis] Answered from ${findings.length} finding(s) — "${q.slice(0, 50)}"`);
 }
@@ -859,6 +886,7 @@ async function planBridgeRoster({ problem, understood, roster }) {
       `The squad (the only things that can see the network):\n${rosterTextFrom(roster)}\n\n` +
       `Name the bridge: who is engaged, and who stands down.` }],
     maxTokens: 2000, effort: 'high',
+    purpose: 'roster', conversationId: conversationId(),
     format: { type: 'json_schema', schema: {
       type: 'object', additionalProperties: false,
       required: ['engaged', 'stoodDown'],
@@ -889,10 +917,10 @@ async function planBridgeRoster({ problem, understood, roster }) {
 //
 // Returns { answer } | { answer, retried:true } | { relayed:true, why }. Throws
 // only if the API call itself errors (network/timeout) — ask() relays on that too.
-async function synthesizeAnswer(q, findings) {
+async function synthesizeAnswer(q, findings, onDelta = null) {
   const list = Array.isArray(findings) ? findings : [];
   const block = list.map((f) => `[${f.name}] (${f.stance})\n${f.text}`).join('\n\n');
-  const primary = await runSynthesis(q, block);
+  const primary = await runSynthesis(q, block, null, onDelta);
   if (!primary.refused) return { answer: primary.text };
 
   // One neutral retry on the SAME model: the sensitive/hostile literals are
@@ -902,14 +930,14 @@ async function synthesizeAnswer(q, findings) {
   // refusal — we fall through to the honest short relay. The reads are on screen.
   const safeBlock = list.map((f) =>
     `[${f.name}] (${f.stance})\n${neutralizeFindingText(f.text)}`).join('\n\n');
-  const retry = await runSynthesis(q, safeBlock);
+  const retry = await runSynthesis(q, safeBlock, null, onDelta);
   if (!retry.refused) return { answer: retry.text, retried: true };
   return { relayed: true, why: 'the write-up step was declined by the model' };
 }
 
 // One synthesis call. `model` null → the app default tier; a value → that tier
 // (used for the fallback retry). Kept tiny so ask() and the test share one path.
-function runSynthesis(q, findingsBlock, model = null) {
+function runSynthesis(q, findingsBlock, model = null, onDelta = null) {
   return claude.reason({
     system: SYNTH_SYSTEM,
     messages: [{
@@ -923,7 +951,21 @@ function runSynthesis(q, findingsBlock, model = null) {
     maxTokens: 4000,
     effort: 'high',
     model,
+    // CW-10: labels for the spend record (never prompt text), the composed
+    // answer streams, and this REASONING call may check vendor docs on the web.
+    purpose: 'synthesize',
+    conversationId: conversationId(),
+    web: true,
+    onDelta: typeof onDelta === 'function' ? onDelta : null,
   });
+}
+
+// The conversation this call belongs to, for the spend record. Injected by the
+// host (server.js) exactly like the roster; absent → null, and the spend record
+// simply carries no id.
+function conversationId() {
+  try { return (ctx && typeof ctx.conversationId === 'function') ? ctx.conversationId() : null; }
+  catch (e) { return null; }
 }
 
 // Neutralise the hostile-LOOKING literals in ONE finding's text before it goes
@@ -1156,6 +1198,7 @@ async function extractSymptom(description, operatorTz) {
         `Current time in the operator's timezone: ${nowInTzLabel(tz, nowMs)}\n` +
         `Current time (UTC): ${new Date(nowMs).toISOString()}\n\nComplaint:\n"${desc}"` }],
       maxTokens: 1500, effort: 'medium', format,
+      purpose: 'symptom', conversationId: conversationId(),
     });
     if (res.refused) { const h = heuristicSymptom(desc, tz, nowMs); if (clk) { h.timeAnchor = clk.iso; h.timeAnchorMs = clk.ms; } return { ...base, ...h, note: 'Reasoning declined; used a keyword pass. ' + tzNote, source: h.timeAnchor || h.scope ? 'heuristic' : 'none' }; }
     const parsed = JSON.parse(res.text);
@@ -1302,6 +1345,7 @@ async function synthesizeTriageVerdict(input) {
         `Findings (your ONLY source of truth):\n${RULE}\n${findingsBlock || '(no findings collected)'}\n${RULE}\n\n` +
         `Commit to a ranked hypothesis + if/then next check + confidence + why.` }],
       maxTokens: 2500, effort: 'high', format,
+      purpose: 'hypothesis', incidentId: (input && input.incidentId) || null, web: true,
     });
     if (res.refused) return null;
     return JSON.parse(res.text);
@@ -1345,6 +1389,7 @@ async function narrateCorrelation(input) {
       // Headroom: on the current tiers thinking shares max_tokens, so a one-sentence
       // answer still needs room above its own size or it truncates to nothing.
       maxTokens: 1500, effort: 'medium',
+      purpose: 'correlation', incidentId: (input && input.incidentId) || null,
     });
     if (res.refused) return null;
     const txt = (res.text || '').trim();
@@ -1520,6 +1565,7 @@ async function invUnderstand({ problem, operatorTz, answers, reply }) {
         `Judge it in replyIntent: does it answer those questions, change the subject, or abandon the problem?` : '') +
       `\n\nDecide if this is specific enough to start probing. If not, ask; if yes, state it + initial hypotheses.` }],
     maxTokens: 3000, effort: 'high', format,
+    purpose: 'understand', conversationId: conversationId(),
   });
   if (res.refused) throw new Error('reasoning declined');
   const p = JSON.parse(res.text);
@@ -1563,7 +1609,10 @@ async function invProbe({ problem, understood, hypotheses, rounds, roster }) {
       `Standing hypotheses:\n${hypothesesText(hypotheses)}\n\n` +
       `Probes run so far and their REAL reports:\n${roundsText(rounds)}\n\n` +
       `Pick the single highest-value next read-only probe, or set "stuck".` }],
+    // NO web tools here: item 5 is REASONING calls only. A probe picks a real
+    // read on this network; the web can never stand in for one.
     maxTokens: 2500, effort: 'high', format,
+    purpose: 'probe', conversationId: conversationId(),
   });
   if (res.refused) throw new Error('reasoning declined');
   const p = JSON.parse(res.text);
@@ -1594,6 +1643,7 @@ async function invAssess({ understood, hypotheses, probe, report }) {
       `REAL report (your ONLY new evidence):\n${RULE}\n[${report.stance}] ${report.text}\n${RULE}\n\n` +
       `Update the hypotheses (standing/eliminated/confirmed) and set confidence 0..1.` }],
     maxTokens: 2500, effort: 'high', format,
+    purpose: 'assess', conversationId: conversationId(), web: true, compact: true,
   });
   if (res.refused) throw new Error('reasoning declined');
   const p = JSON.parse(res.text);
@@ -1625,7 +1675,10 @@ async function invFix({ understood, hypotheses, rounds, rootCause }) {
       (rootCause ? `Isolated root cause: ${rootCause}\n` : '') + `\n` +
       `The evidence (every real probe report):\n${roundsText(rounds)}\n\n` +
       `Compose the root cause + fix plan. A config fix → a proposal; a manual fix → proposal null.` }],
+    // Long-conversation path: the rounds block grows every round, so this call
+    // opts into compaction (silently ignored if the beta is unavailable).
     maxTokens: 3000, effort: 'high', format,
+    purpose: 'fix', conversationId: conversationId(), web: true, compact: true,
   });
   if (res.refused) throw new Error('reasoning declined');
   const p = JSON.parse(res.text);
