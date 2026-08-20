@@ -454,3 +454,12 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   netclaw-style open-source pull pattern, NO to OpenAI Agents SDK/Swarm (second provider, zero gain),
   Managed Agents LATER. Proposed standing rule for HANDOFF: new integrations arrive as vetted MCP servers,
   not hand-written adapters — awaiting his 👍.
+
+## 2026-08-20 — CW-9 UI fixes pushed (8700cce), re-review in flight
+- All 6 findings fixed at class level: resolveResume() URL-origin resolution (new shared public/cw9-bridge.js,
+  checked at arrival/restore/send, 6 attacks → 0 off-origin); arr() guards + try/catch render + per-message
+  hydrate; classic-console honest placeholder (no empty bubbles); display/persist caps w/ honest truncation
+  (1532ms → 37ms, store fresh); minmax(340px,.6fr) + 1599px stack threshold (1440x950 now readable);
+  awaiting restored on reload + helpers deduped into shared module. 100 checks green, live-verified :3111.
+- Independent reviewer re-attacking (fresh bypasses, tampered localStorage, degenerate shapes). BE builder
+  still fixing PR #73.
