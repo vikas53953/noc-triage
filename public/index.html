@@ -740,6 +740,17 @@ pre.cli{
 .cs-collapse>summary .cs-tag{margin-right:.15rem}
 .cs-collapse .collapse-body>.cs-cmd:first-child{border-top:none}
 
+/* ============================================================
+   CW-9 (classic console): the bridge-conduct envelope.
+   The cards themselves are styled once in public/cw9-bridge.css,
+   shared with the desk. All this block does is fit them into this
+   column's bubble layout.
+   ============================================================ */
+.cw9-ask{border-left:3px solid var(--info);padding-left:.6rem}
+.msg-main>.bridgecard,.msg-main>.findcard,.msg-main>.verdictcard,
+.msg-main>.changecard,.msg-main>.cw9-broken{width:100%;max-width:min(100%,62ch)}
+.msg-main>.findcard{overflow:hidden}
+
 /* ---------- markdown inside chat bubbles (B6) — mdToHtml escapes then formats ---------- */
 .msg-text>:first-child{margin-top:0}
 .msg-text>:last-child{margin-bottom:0}
@@ -1244,6 +1255,10 @@ pre.cli{
   .top-right .notif-pill,.top-right .hdr-alert{max-width:150px}
 }
 </style>
+<!-- CW-9: one shared implementation of the bridge envelope — same cards, same
+     escaper, same caps on both this page and the classic console. -->
+<link rel="stylesheet" href="/cw9-bridge.css">
+<script src="/cw9-bridge.js"></script>
 </head>
 <body>
 
@@ -3191,6 +3206,40 @@ $('roster').addEventListener('click', function(e){
 selectAgent('jarvis');
 
 /* Render one direct-conversation message (outside a triage). */
+/* ============================================================
+   CW-9 (classic console) — the pinned bridge envelope.
+   ADDITIVE: only messages carrying one of the five kinds take this
+   path; everything else renders exactly as it always has.
+
+   The desk (public/desk.html) owns the V2 split terminal; this column
+   is too narrow for a persistent pane, so the same evidence renders
+   INLINE — a one-line finding card whose CLI block opens under it.
+
+   There is no second implementation here: escaping, the honest
+   transport label, the output cap and the card markup all come from
+   public/cw9-bridge.js (CW9B), the module the desk uses and the test
+   suite requires. Two copies with two different escapers is exactly the
+   defect this replaced.
+   ============================================================ */
+function cw9RenderClassic(d){
+  if(!window.CW9B || !CW9B.isEnvelope(d)) return '';
+  var k = d.kind;
+  try{
+    if(k === 'ask'){
+      return '<div class="msg-text cw9-ask">' + mdToHtml(d.text || 'Before I pull anyone in:') +
+        CW9B.askHtml(d) + '</div>';
+    }
+    if(k === 'roster')  return CW9B.rosterHtml(d);
+    if(k === 'verdict') return CW9B.verdictHtml(d);
+    if(k === 'change')  return CW9B.changeHtml(d);
+    if(k === 'finding') return CW9B.findingHtml(d, tsClock(d.timestamp)).html;
+    return '';
+  }catch(err){
+    /* a malformed envelope is still a message Jarvis sent — never a silent drop */
+    return CW9B.placeholderHtml(k, (err && err.message) ? String(err.message).slice(0,120) : 'unexpected shape');
+  }
+}
+
 function renderChat(d){
   var host = $('chatStream'); if(!host) return;
   var empty = host.querySelector('.chat-empty'); if(empty) empty.remove();
@@ -3213,11 +3262,32 @@ function renderChat(d){
     var tier = d.tier || '';
     var tierBadge = tier ? '<span class="badge '+tierClass(tier)+'">'+escapeHtml(tier)+'</span>' : '';
     el.className = 'msg';
+    /* CW-9: a bridge envelope (ask / roster / finding / verdict / change) paints
+       its own card in place of the plain bubble. Anything else — every message
+       that existed before this wave — takes the untouched path below. */
+    var env = cw9RenderClassic(d);
+    var hasText = !!(d.text && String(d.text).trim());
+    var bodyHtml;
+    if(env){
+      bodyHtml = (d.kind !== 'ask' && hasText) ? '<div class="msg-text">'+mdToHtml(d.text)+'</div>'+env : env;
+    } else if(window.CW9B && CW9B.isEnvelope(d) && !hasText){
+      /* a bridge envelope with nothing in it (verdict:{}, empty roster, change:{}).
+         It used to fall through and paint an EMPTY bubble — a blank box under an
+         agent's name on a P1. Say what arrived instead; never a blank, never a
+         message that quietly disappears. */
+      bodyHtml = CW9B.placeholderHtml(d.kind, 'it arrived empty');
+    } else if(!hasText){
+      /* no envelope and no text at all — nothing to paint, so paint nothing
+         rather than an empty bubble. */
+      return;
+    } else {
+      bodyHtml = '<div class="msg-text">'+mdToHtml(d.text)+'</div>';
+    }
     el.innerHTML =
       '<div class="msg-ico">'+escapeHtml(ico)+'</div><div class="msg-main">'+
       '<div class="msg-top"><span class="msg-who">'+escapeHtml(who)+'</span>'+tierBadge+
       '<span class="msg-time">'+escapeHtml(tsClock(d.timestamp))+'</span></div>'+
-      '<div class="msg-text">'+mdToHtml(d.text)+'</div></div>';
+      bodyHtml+'</div>';
   }
   // Near-bottom-aware auto-scroll: always snap down on the user's own message;
   // for incoming replies, only follow if they were already near the bottom (so

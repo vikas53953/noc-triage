@@ -1,0 +1,90 @@
+/* ============================================================
+   cw9-bridge.css — ONE set of styles for the CW-9 bridge cards and
+   the SSH-style session blocks, shared by the desk and the classic
+   console. Both pages define the same design tokens (--ink, --line,
+   --ok, --warn, --info, --mono …), so the cards look native on each.
+
+   The split layout itself lives in desk.html — only the desk has room
+   for a persistent session pane.
+   ============================================================ */
+
+/* ---------- one command block on a black screen ---------- */
+.tblock{border:1px solid rgba(148,163,184,.20);border-radius:8px;overflow:hidden;margin-bottom:.5rem}
+.tblock.latest{border-color:#58a6ff}
+.tb-cap{
+  display:flex;align-items:baseline;gap:.45rem;padding:.28rem .55rem;background:rgba(148,163,184,.10);
+  font-family:var(--mono);font-size:.63rem;font-weight:700;letter-spacing:.05em;color:#9fb6ce
+}
+.tb-cap .host{color:#d6e2f0;text-transform:none;letter-spacing:0;overflow-wrap:anywhere}
+.tb-cap .tport{text-transform:uppercase}
+.tb-cap .tport.ssh{color:#7ee787}
+.tb-cap .tport.cmdrunner{color:#ffd479}
+.tb-cap .tport.api{color:#58a6ff}
+.tb-cap .tport.unknown{color:#ff6b6b}
+.tb-cap .ts{margin-left:auto;color:#7e93ac}
+.tb-body{
+  font-family:var(--mono);font-size:.78rem;line-height:1.5;color:#9fb6ce;background:#04070b;
+  padding:.5rem .6rem;margin:0;white-space:pre;overflow-x:auto
+}
+.tb-body .p{color:#58a6ff}
+.tb-body .g{color:#7ee787}
+.tb-body .a{color:#ffd479}
+.tb-body .r{color:#ff6b6b}
+.tb-body .muted{color:#5d7290}
+.tb-empty{color:#7e93ac;font-style:italic}
+
+/* ---------- the five envelope cards ---------- */
+.asklist{list-style:decimal;margin:.45rem 0 .1rem 1.15rem;padding:0}
+.asklist li{font-size:.83rem;line-height:1.5;font-weight:650;margin-bottom:.28rem;overflow-wrap:anywhere}
+.askhint{font-size:.68rem;color:var(--ink3);margin-top:.45rem;line-height:1.45}
+
+.bridgecard{border:1px solid var(--line);border-radius:10px;background:var(--panel);
+  padding:.55rem .7rem;font-size:.83rem;line-height:1.55}
+.bridgecard .r-lbl{color:var(--bad)}
+.rosterwrap{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center}
+.rpill{font-family:var(--mono);font-size:.66rem;font-weight:800;padding:.2rem .5rem;
+  border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.rpill.on{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
+.rpill.off{color:var(--ink3);text-decoration:line-through;opacity:.75}
+.rwhy{font-size:.68rem;color:var(--ink3);line-height:1.45;margin-top:.3rem;overflow-wrap:anywhere}
+.rwhy b{color:var(--ink2);font-family:var(--mono);font-size:.65rem}
+.rstood{font-size:.66rem;color:var(--ink3);margin-top:.3rem}
+
+.findcard{border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden}
+.findcard>summary{cursor:pointer;padding:.45rem .65rem;font-size:.82rem;line-height:1.5;
+  display:flex;gap:.45rem;align-items:baseline;list-style:none}
+.findcard>summary::-webkit-details-marker{display:none}
+.findcard>summary::before{content:"▸";color:var(--ink3);font-family:var(--mono);flex-shrink:0}
+.findcard[open]>summary::before{content:"▾"}
+.findcard>summary .fagent{font-family:var(--mono);font-size:.63rem;font-weight:800;color:var(--info);
+  text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;flex-shrink:0}
+.findcard>summary .fline{min-width:0;overflow-wrap:anywhere}
+.findcard>summary .fmore{color:var(--ink3);font-size:.66rem;white-space:nowrap;margin-left:auto}
+.findcard .fbody{border-top:1px solid var(--line);background:var(--term-bg)}
+.findcard .fbody .tblock{margin:.45rem;border-radius:8px}
+.findcard .termidle{font-family:var(--mono);font-size:.72rem;color:#7e93ac;padding:.5rem .6rem}
+
+.verdictcard{border:1px solid var(--ok);border-radius:10px;background:var(--ok-bg);
+  padding:.55rem .7rem;font-size:.83rem;line-height:1.55}
+.verdictcard .r-lbl{color:var(--ok)}
+.verdictcard .vcause{font-weight:700;overflow-wrap:anywhere}
+.verdictcard .vmeta{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.4rem}
+
+.changecard{border:1px solid var(--warn);border-radius:10px;background:var(--warn-bg);
+  padding:.55rem .7rem;font-size:.83rem;line-height:1.55}
+.changecard .r-lbl{color:var(--warn)}
+.changecard ol{margin:.35rem 0 .1rem 1.1rem;padding:0}
+.changecard li{margin-bottom:.22rem;overflow-wrap:anywhere}
+.changecard .cgate{font-size:.69rem;color:var(--ink2);margin-top:.45rem;line-height:1.45}
+
+/* a message that could not be painted — never an empty bubble, never silence */
+.cw9-broken{border:1px dashed var(--warn);border-radius:10px;background:var(--warn-bg);
+  padding:.5rem .65rem;font-size:.79rem;line-height:1.5}
+.cw9-broken .r-lbl{color:var(--warn)}
+
+/* shared label used by the cards (both pages already define .r-lbl, this is
+   the fallback so the module never depends on a host page's private class) */
+.bridgecard .r-lbl,.verdictcard .r-lbl,.changecard .r-lbl,.cw9-broken .r-lbl{
+  display:block;font-size:.61rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+  margin-bottom:.2rem
+}
