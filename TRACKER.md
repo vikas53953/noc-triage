@@ -396,3 +396,13 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   live verify. Fable orchestrates; Opus executes. Jarvis test model = claude-sonnet-5 (spend-wise).
 - Class law for this wave: ONE conduct layer shared by EVERY operator entry point (chat + triage intake +
   future paths) — never a per-path fix again.
+
+## 2026-08-20 — CW-9 build state
+- Backend PR #73 (feat/cw9-bridge-be) BUILT: sources/conduct.js one shared gate (chat + triage), envelope
+  + caps in code, finding.cli w/ honest transport, roster, CW-7 loop reuse, verdict→held change. 24 suites
+  918 assertions green. LIVE Sonnet check: EPG ask → 3 questions, 0 engagements, 0 reads.
+- UI PR #72 (feat/cw9-bridge-fe) BUILT: V2 split terminal on desk, envelope cards on both consoles,
+  XSS-tested live on :3111, reload-safe, 24 suites green. Built against pinned envelope (fixture-driven).
+- Independent adversarial reviews IN FLIGHT: rev of #73 (clone noc-rev73, :3113, incl. #72 seam check) and
+  rev of #72 (clone noc-rev72, :3112). Report-only; Fable merges on approve. MERGE ORDER: #73 then #72,
+  then restart :3000, integrated live verify (EPG replay), visual evidence page to Vikas.
