@@ -458,3 +458,134 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   and a past-tense reporting verb within 3 tokens ("showed no aaa") is quoted output, not an order. Real
   writes still refuse, including an order after quoted speech in the same sentence.
 - 25 suites / 1145 assertions green.
+## 2026-08-20 — CW-9 build state
+- Backend PR #73 (feat/cw9-bridge-be) BUILT: sources/conduct.js one shared gate (chat + triage), envelope
+  + caps in code, finding.cli w/ honest transport, roster, CW-7 loop reuse, verdict→held change. 24 suites
+  918 assertions green. LIVE Sonnet check: EPG ask → 3 questions, 0 engagements, 0 reads.
+- UI PR #72 (feat/cw9-bridge-fe) BUILT: V2 split terminal on desk, envelope cards on both consoles,
+  XSS-tested live on :3111, reload-safe, 24 suites green. Built against pinned envelope (fixture-driven).
+- Independent adversarial reviews IN FLIGHT: rev of #73 (clone noc-rev73, :3113, incl. #72 seam check) and
+  rev of #72 (clone noc-rev72, :3112). Report-only; Fable merges on approve. MERGE ORDER: #73 then #72,
+  then restart :3000, integrated live verify (EPG replay), visual evidence page to Vikas.
+
+## 2026-08-20 — CW-9 UI review verdict: FIX-FIRST (builder fixing)
+- PR #72 review (live, Playwright, own clone): 1 HIGH — same-origin resume guard bypassable via backslash
+  (`/\evil/` treated as protocol-relative; live cross-origin exfil of operator's typed answer proven).
+  4 MEDIUM: malformed-envelope renders vanish/kill hydrate replay; classic console still paints empty
+  bubbles; 2.79MB cli output blocks main thread 1.5s + silently breaks the 250k persist cap; terminal pane
+  stuck 340px (prototype says minmax(340,480)) + 1240px stack threshold too low. 2 LOW (awaiting not
+  restored on reload; duplicated helpers w/ divergent escapers).
+- XSS held everywhere; transport honesty, reload, one-shot resume, mobile, regressions all clean.
+- UI builder resumed with class-level fix orders (URL-origin resolution not char blocklists; shared
+  fallback-bubble render/hydrate guard; render+persist caps with honest truncation; prototype minmax).
+- CW-10 "production plumbing" wave PROPOSED to Vikas (official Anthropic SDK + prompt caching + streaming
+  + token accounting; NO LangChain/LangGraph/Agent-SDK): verdict page
+  https://claude.ai/code/artifact/7988f6d1-6f24-4b23-a9cc-5ddd86158bbd — awaiting his yes/no.
+- Backend review (PR #73) still running.
+
+## 2026-08-20 — CW-9 backend review verdict: FIX-FIRST (builder fixing)
+- PR #73 review (live on :3113, Sonnet, WS harness + wire-call diffing): conduct WORKS (EPG replay = ask,
+  0 reads; deny = 0 calls; write-injection refused+audited; caps enforced; no keyword routing) BUT the
+  bridge "says more than it does":
+  BLOCKERS: (1) roster lies — "stood down" agent's systems still read by the engaged agent; (2) round
+  narration asserts drill-downs that never ran (3 rounds, byte-identical evidence); (3) evidence cross-talk
+  — apiEvidenceSince() sweeps the GLOBAL log, one delegation carried another's record = fabrication.
+  HIGH: gate not in front of capabilities.checkAsk (answer to parked questions swallowed, thread orphaned);
+  resume can't reach problemReport (abandon → bridges the OLD problem); thin-flag returned but never read.
+  MED: garbage planner fails open; finding.cli.output uncapped (267KB chat store); scrubber misses IOS
+  space-separated secrets; intake silently 4→3 questions.
+- Builder resumed with class-level fix orders (roster derived from actual read-set; narration composed FROM
+  per-round evidence diffs; per-delegation evidence tagging at write time; ONE gate first on every entry;
+  LLM-judged resume/abandon; fail-safe planner; shared truncation convention with the FE fix; IOS scrubber
+  class fix). Both PRs now in fix cycles; re-reviews before any merge.
+
+## 2026-08-20 — Vikas verdict on architecture page (HIS WORDS)
+- LIKED all sections. Ask: "i really think reflexion is the most important thing when it comes to the
+  networking kind of stuff wherein it is going to reflect on its own work. if there is any problem with
+  what it is doing, it automatically gets reflected... i really want reflexion to be part of jarvis"
+- CW-10 "production plumbing" (SDK+caching+streaming+token accounting) = APPROVED (liked recommendation).
+- NEW wave CW-11 "Reflexion" — design page sent for his sign-off before build. Sequence: CW-9 fixes →
+  CW-10 plumbing → CW-11 reflexion.
+
+## 2026-08-20 — Vikas ask: "anything else we can take from Anthropic/OpenAI/open source so we don't
+## write this whole code ourselves?" (HIS WORDS)
+- Answered on the architecture page (new "Adopt instead of build" section, same URL). Verdicts: ADOPT
+  community MCP servers for all NEW integrations (we have the CW-8 doorway — stop hand-writing adapters),
+  ADOPT Anthropic server-side web search/fetch + compaction (fold into CW-10, near-zero code), keep the
+  netclaw-style open-source pull pattern, NO to OpenAI Agents SDK/Swarm (second provider, zero gain),
+  Managed Agents LATER. Proposed standing rule for HANDOFF: new integrations arrive as vetted MCP servers,
+  not hand-written adapters — awaiting his 👍.
+
+## 2026-08-20 — CW-9 UI fixes pushed (8700cce), re-review in flight
+- All 6 findings fixed at class level: resolveResume() URL-origin resolution (new shared public/cw9-bridge.js,
+  checked at arrival/restore/send, 6 attacks → 0 off-origin); arr() guards + try/catch render + per-message
+  hydrate; classic-console honest placeholder (no empty bubbles); display/persist caps w/ honest truncation
+  (1532ms → 37ms, store fresh); minmax(340px,.6fr) + 1599px stack threshold (1440x950 now readable);
+  awaiting restored on reload + helpers deduped into shared module. 100 checks green, live-verified :3111.
+- Independent reviewer re-attacking (fresh bypasses, tampered localStorage, degenerate shapes). BE builder
+  still fixing PR #73.
+
+## 2026-08-20 — Vikas LIKED "Adopt instead of build" → standing rule installed
+- HANDOFF.md law added: new integrations = security-vetted MCP servers via CW-8 connector, hand-write only
+  when no trustworthy server exists; prefer Anthropic server-side features (web search/fetch, compaction).
+- CW-10 scope now: official SDK + Tool Runner, prompt caching, streaming, token accounting, web search/fetch,
+  server-side compaction.
+
+## 2026-08-20 — CW-9 backend fixes pushed (5c02cdb), re-review in flight
+- All findings fixed: AGENT_SOURCES roster truth (stand-down only when systems untouched, overlap named,
+  honest correction on violation); narration diffed per-round by source|command (repeats say "nothing new");
+  per-delegation evidenceId tagging, watermark sweep DELETED (concurrent + race test green); gate now first
+  on every entry (capability screen behind it); LLM-judged replyIntent (answer/new-topic/abandon); thin
+  proceed states its assumption; planner fails safe; cli.output 4000 cap; IOS scrubber forms; intake 4th
+  question restored. 24 suites 966 assertions green; live Sonnet EPG replay clean.
+- Both re-reviews now running (UI reviewer re-attacking 8700cce; BE reviewer re-attacking 5c02cdb).
+  Merge order on double-approve: #73 then #72 → restart :3000 → my own live verify → evidence page to Vikas.
+
+## 2026-08-20 — Vikas standing order re-affirmed (HIS WORDS, he's at the office)
+- "make sure you are fully in autonomous mode. if my quota is going to get full... agents and you will
+  automatically pick up that work... rather than waiting for me to come and jump in and tell you 'quota
+  has been reset, now start working.' i really don't want that."
+- MECHANISM (verified live 2026-08-20 12:0x): Windows task "noc-triage-autoresume" is ARMED and running
+  (every 30 min, survived the reboot; last run 11:48, absolute-path claude launch, work-product liveness
+  check). If this session dies at the quota wall, a fresh session auto-launches, reads this TRACKER +
+  the CLI task list, and resumes the top in-flight item WITHOUT waiting for Vikas. Never ask him to
+  announce a reset.
+- CLI task list created (7 tasks): #1 PR73 re-review→merge, #2 PR72 re-review→merge, #3 live verify +
+  evidence page, #4 CW-10, #5 CW-11, #6 launch video v3 (open), #7 waiting-on-Vikas creds.
+- CW naming for any resumer: CW = "Copilot Wave" — OUR feature-wave numbering (CW-1..CW-11), NOT PR numbers.
+
+## 2026-08-20 — CW-9 UI re-review: APPROVE (fixes held under fresh attack)
+- 51-shape fuzz + 11 live attack envelopes vs resolveResume → 0 off-origin posts; tampered-localStorage
+  restore rejected; 30 malformed shapes → 0 vanished/0 throws; 2.79MB output 1532ms→35ms, store fresh,
+  honest truncation note; layout reads like an SSH session at 1920 + stacks at 1440; 8 fresh XSS classes
+  → 0 hits; 24 suites green (CW-9 suite 100 checks). Honest-placeholder deviation explicitly APPROVED.
+- 3 tiny pre-merge polish items sent to builder (trim-notice wiped on reload; resolveResume normalize;
+  resume.field allowlist). Mobile ~20px scroll confirmed PRE-EXISTING on master (logged, not this PR).
+- Note: gh rejects self-approve (same token) — verdict comments with "VERDICT: APPROVE" are the approval
+  signal on this repo.
+- Waiting: BE re-review (PR #73) → then merge #73, #72, restart :3000, live verify, evidence page.
+
+## 2026-08-20 — CW-9 BE re-review: FIX-FIRST round 3 (2 must-fix + 4 med)
+- Verified fixed live: roster truth (+ drift backstop fires), narration-from-evidence (partial overlap names
+  only NEW), per-delegation attribution (race + nested clean, watermark gone), abandon path, thin flag,
+  fail-safe planner, caps. 966 assertions green. Reviewer also caught + killed a stale server (EADDRINUSE)
+  from the prior review before judging — evidence is from the real build.
+- MUST FIX: (1) honest-write-refusal branch UNREACHABLE on chat surface (isDeviceCliRequest gate) — write
+  asks now silently ignored (safe but silent; violates honest-refusal law); (2) scrubber misses plaintext
+  `key <secret>` forms (tacacs/radius/snmp community/isakmp). MED: cache-buster defeats round dedupe;
+  overlap line prints wrong agent's systems; AGENT_SOURCES needs a drift-failing test; wasted rounds
+  downstream of (1). Builder on round 3.
+- Seam with #72 re-confirmed (field=text matches, truncation precedence correct). BE still merges first.
+
+## 2026-08-20 (post-reset) — CW-9 BE final review: FIX-FIRST on ONE item (scrubber)
+- Reviewer (fresh clone :3114, verified own PID) closed everything else: 7 fresh write attacks all honest-
+  refusal-first w/ 0 wire; dedupe holds incl. unknown param names (output hash); roster per-agent lists
+  exact; drift test proven to fail on an undeclared read; 1026 assertions green; EPG replay clean; #72 seam
+  exact match. Noted honestly: euphemism screening rides the LLM changeAsk (deterministic backstop narrower
+  than PR body claims).
+- SCRUBBER blocker, root cause = two keyword rules race, first lacks NOT_A_SECRET + free-text guard:
+  5 forms leak (vrrp/standby auth, wpa-passphrase, passphrase 0), 4 falsely redact the syntax word while
+  the secret survives (ipsec pre-shared-key, md5 key-string, wpa psk ascii), and description/remark/banner
+  prose gets over-scrubbed. Builder on surgical final fix (single-pass ordered rules, value-not-syntax
+  redaction, table-driven tests). Then scrubber-only verify → merge train.
+- Session-limit note: the wall killed the reviewer mid-run pre-2pm; resumed immediately post-reset.
