@@ -445,3 +445,12 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - CW-10 "production plumbing" (SDK+caching+streaming+token accounting) = APPROVED (liked recommendation).
 - NEW wave CW-11 "Reflexion" — design page sent for his sign-off before build. Sequence: CW-9 fixes →
   CW-10 plumbing → CW-11 reflexion.
+
+## 2026-08-20 — Vikas ask: "anything else we can take from Anthropic/OpenAI/open source so we don't
+## write this whole code ourselves?" (HIS WORDS)
+- Answered on the architecture page (new "Adopt instead of build" section, same URL). Verdicts: ADOPT
+  community MCP servers for all NEW integrations (we have the CW-8 doorway — stop hand-writing adapters),
+  ADOPT Anthropic server-side web search/fetch + compaction (fold into CW-10, near-zero code), keep the
+  netclaw-style open-source pull pattern, NO to OpenAI Agents SDK/Swarm (second provider, zero gain),
+  Managed Agents LATER. Proposed standing rule for HANDOFF: new integrations arrive as vetted MCP servers,
+  not hand-written adapters — awaiting his 👍.
