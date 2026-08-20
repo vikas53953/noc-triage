@@ -603,3 +603,46 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - Evidence page to Vikas: https://claude.ai/code/artifact/033ae37f-aaf6-41f1-a607-aa885b010a2c
 - Tasks #1-3 complete. NEXT: await Vikas's hands-on confirm → CW-10 (contract first). Two LOW review
   leftovers ride along in CW-10 (short-device-error prose over-scrub; FE cosmetic F4).
+
+## 2026-08-20 ~16:00 — CW-10 BUILD LAUNCHED (Vikas: "don't wait for me... do all the remaining work",
+## reviews everything ~23:30 IST)
+- Contract pinned: docs/copilot-cw10-plumbing-contract.md. BE builder (feat/cw10-plumbing-be: SDK swap
+  keeping wrapper surface, prompt caching, spend store + /api/spend/summary, web search/fetch on reasoning
+  calls w/ honest web-source labeling, compaction w/ silent fallback, say-delta streaming, scrubber LOW)
+  + FE builder (feat/cw10-plumbing-fe: delta rendering, Spend panel, [object Object] LOW) running in
+  parallel clones. Review axis = BEHAVIOR PARITY with pre-CW-10 master. BE merges first.
+- After CW-10: CW-11 Reflexion (contract already pinned). Evidence for both folds into ONE 23:30 review
+  page for Vikas.
+
+## 2026-08-20 ~16:30 — CW-10 both halves BUILT, reviews in flight
+- BE PR #74: sources/claude.js rewritten on @anthropic-ai/sdk (same wrapper surface), spend-store +
+  /api/spend/summary, web search/fetch on reasoning only (live: web answer cited bst.cisco.com and said
+  "WEB-only answer — nothing here is a reading from our live devices"), compaction plumbed w/ fallback,
+  say_delta streaming (own WS type — NOT chat_message; FE informed). 30 suites green, 26 pre-existing
+  UNTOUCHED. Live: 7 deltas ✅, cache_read 2802 tokens ✅.
+- FE PR #75: createStream in shared cw9-bridge.js (accumulate/dup/gap/settle), Spend panel w/ honest
+  empty state, 7b fix, both delta transports accepted. 27 suites green, browser-verified on :3121.
+- Adversarial reviews launched (rev74 :3115 behavior-parity focus; rev75 :3116 stream-abuse focus).
+  Merge order BE→FE on approve, then restart :3000, live verify, then CW-11 build.
+
+## 2026-08-20 ~17:15 — CW-10 reviews: both FIX-FIRST, builders fixing in parallel
+- BE #74: parity PROVEN (conduct/guardrails zero-diff, EPG + reload byte-identical vs master baseline
+  server; live cache hit; spend store attack-clean; web answer honest). 2 blockers: interrupted stream
+  orphans a partial preview (fix: aborted:true closing delta) + delta preview exceeds the 280 cap (stream
+  must be strict prefix of capped final). 6 minors (tool-rejection detection, 529 kills compaction, spend
+  edge cases).
+- FE #75: mid-review fixes held under attack; XSS clean everywhere. 3 blockers: empty-text final DELETES
+  the streamed answer; Spend panel pushes incident queue out of the column at small shells; unreadable
+  spend shapes render as honest-zero (false). +1 should-fix (post-done claim deletes answer).
+- Both builders on fixes; FE also adopting the aborted:true contract. Re-reviews after push; BE merges first.
+
+## 2026-08-20 ~18:30 — CW-10 BOTH APPROVED; one joint pre-merge commit each
+- BE #74 APPROVE (14-scenario abort attack clean, cap law holds — never over 280, never mid-word; parity
+  still byte-identical; all minors closed). Reviewer required an HONESTY correction: "never shrinks/strict
+  prefix" claim is false (clip() reflows at sentence boundaries; 279→267 observed) — test+PR body must say
+  the truth; reflow itself judged acceptable.
+- FE #75 APPROVE (empty-final, layout backstop, EMPTY-vs-UNREADABLE all verified; id-less path gone; abort
+  seam settles instantly).
+- JOINT pre-merge fix in flight (both reviewers converged): discard:true on SAFETY-DECLINED aborts — FE
+  wipes the partial (screen + localStorage; reviewer proved declined text persisted through reload); plain
+  errors keep the honest partial. Then merge #74 → #75 → restart :3000 → live verify → CW-11.

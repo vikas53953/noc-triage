@@ -291,6 +291,124 @@ function speak(agentId, env) {
   ctx.say(agentId, env.text, env);
 }
 
+// ── CW-10 item 3 (BE half): streaming Jarvis's composed answer ──────────────
+// ONLY Jarvis's own composed text streams. Agent evidence never does — a finding
+// is a completed read with its terminal output attached, and half a reading on
+// screen would be a claim the app cannot stand behind yet.
+//
+// The deltas are ADDITIVE and advisory: they go out on their own WS envelope
+// (kind:'say-delta' {messageId, delta, done, aborted}) and the normal, buffered
+// chat_message that follows — carrying the SAME messageId — stays the
+// authoritative record. A client that ignores deltas sees exactly what it saw
+// before CW-10. A host that wires no sayDelta (every offline test) is a no-op.
+//
+// TWO LAWS ON THIS PATH, both from the PR #74 review, both enforced HERE in code:
+//
+//  1. done:true is not enough. A stream can end because the answer FINISHED or
+//     because it was ABANDONED (the model call failed mid-answer, or the summary
+//     was declined). In the second case NO buffered message with this messageId
+//     will ever arrive, so a client told only "done" would leave a partial,
+//     un-conducted fragment of model text on screen looking like Jarvis's answer.
+//     Every abandoning exit therefore sends `aborted:true`, which means "throw
+//     the preview away — there is no recorded answer coming".
+//
+//  2. The preview obeys the SAME 280-char cap as the message it previews
+//     (conduct.TEXT_MAX). A cap enforced in code and then bypassed by a display
+//     path is not a cap. Deltas stop at the cap, on a word boundary, so the
+//     preview never shows text the conduct layer exists to prevent and never
+//     shrinks when the real message lands.
+let deltaSeq = 0;
+function newMessageId() { return `jv-${Date.now().toString(36)}-${(deltaSeq += 1).toString(36)}`; }
+function sayDelta(messageId, delta, done, flags) {
+  if (!ctx || typeof ctx.sayDelta !== 'function') return;
+  try {
+    const payload = {
+      kind: 'say-delta', messageId,
+      delta: String(delta == null ? '' : delta),
+      done: Boolean(done),
+    };
+    // Both flags are only ever present when TRUE — additive signals, so a client
+    // that has not been taught about them is exactly as well off as before.
+    //
+    //   aborted — the answer was abandoned; no recorded message is coming for
+    //             this id beyond the honest failure line. The partial may stay
+    //             on screen, honestly labelled: it is real model text, and an
+    //             operator watching a blip is better served by seeing what did
+    //             arrive than by a bubble that silently empties.
+    //
+    //   discard — the SAFETY layer declined this content, so the partial must be
+    //             WIPED: from the screen and from anything that persisted it.
+    //             Text the model refused to publish must not linger anywhere
+    //             just because some of it arrived before the refusal landed.
+    //             Only refusal-driven exits set it; a plain error never does.
+    if (flags && flags.aborted) payload.aborted = true;
+    if (flags && flags.discard) payload.discard = true;
+    ctx.sayDelta('jarvis', payload);
+  } catch (e) { /* a display optimisation must never break the answer */ }
+}
+
+// The delta forwarder for ONE composed answer: it holds the running preview and
+// stops at conduct.TEXT_MAX, cutting on a word boundary so the preview never
+// ends mid-word. Everything past the cap is simply not forwarded — the operator
+// sees the authoritative capped message when it lands.
+// The model writes mid-word (a chunk can be "ean right"), so the forwarder also
+// holds back the trailing PARTIAL word and releases it once the next space
+// arrives. That is what keeps the preview from ever ending mid-word — including
+// at the cap, where whatever is left is simply never sent. `flush()` releases
+// the final word when the answer really finished; an ABANDONED stream is never
+// flushed, because that preview is being thrown away anyway.
+function cappedDeltas(messageId) {
+  let shownLen = 0;
+  let pending = '';
+  let stopped = false;
+
+  function emit(text) {
+    if (!text) return;
+    shownLen += text.length;
+    sayDelta(messageId, text, false);
+  }
+
+  // The longest prefix of `text` that fits the remaining room AND ends on a word
+  // boundary. Returns '' when not even one whole word fits.
+  function fits(text) {
+    const room = conduct.TEXT_MAX - shownLen;
+    if (room <= 0) return '';
+    if (text.length <= room) return text;
+    const slice = text.slice(0, room);
+    const space = slice.lastIndexOf(' ');
+    return space > 0 ? slice.slice(0, space + 1) : '';
+  }
+
+  function forward(chunk) {
+    if (stopped) return;
+    pending += String(chunk == null ? '' : chunk);
+    // Everything up to (and including) the last whitespace is complete words.
+    const lastSpace = pending.search(/\s(?=\S*$)/);
+    if (lastSpace < 0) return;                       // still one unfinished word
+    const whole = pending.slice(0, lastSpace + 1);
+    pending = pending.slice(lastSpace + 1);
+    const out = fits(whole);
+    if (out.length < whole.length) stopped = true;   // the cap ends the preview
+    emit(out);
+  }
+
+  // Has anything been shown to the operator yet? The synthesis path may make a
+  // SECOND model call (the neutral retry after a refusal); if the first attempt
+  // already wrote a preview, the second must not append to it — the two are
+  // different answers, and concatenating them would show the operator a
+  // sentence neither model wrote. Same rule as the wrapper's own re-run guard.
+  forward.emitted = function emitted() { return shownLen > 0; };
+
+  // The stream ended cleanly: release the last word if it still fits.
+  forward.flush = function flush() {
+    if (stopped || !pending) return;
+    const out = fits(pending);
+    pending = '';
+    emit(out);
+  };
+  return forward;
+}
+
 // ── CW-9: the bridge front door ─────────────────────────────────────────────
 // EVERY operator message reaches Jarvis here, and the FIRST thing that happens
 // is the shared conduct gate (sources/conduct.js) — the same gate the triage
@@ -471,6 +589,8 @@ async function planAndAnswer(q) {
       maxTokens: 6000,
       effort: 'high',
       format,
+      // CW-10: spend label + web research on this REASONING call.
+      purpose: 'plan', conversationId: conversationId(), web: true,
     });
     if (res.refused) return refusedToReason(q);
     plan = JSON.parse(res.text);
@@ -574,14 +694,34 @@ async function planAndAnswer(q) {
   // ── Call 2: SYNTHESIS — strictly from the real findings ────────────────────
   ctx.status('jarvis', 'active', 'Composing the answer from findings…');
   let result;
+  // The composed answer is the one thing that streams (CW-10 item 3). The
+  // messageId ties the deltas to the buffered message that follows.
+  const messageId = newMessageId();
+  const deltas = cappedDeltas(messageId);
   try {
-    result = await synthesizeAnswer(q, findings);
+    result = await synthesizeAnswer(q, findings, deltas);
   } catch (err) {
-    return relayFindings(q, findings, `the write-up step could not run (${err && err.message ? err.message : 'error'})`);
+    // ABANDONED, not finished: no buffered message will carry this messageId,
+    // so the preview must be thrown away rather than left on screen. The honest
+    // failure message still gets posted by relayFindings, as its own chat
+    // message, exactly as it was before streaming existed.
+    // A plain failure (network, timeout, an API error): aborted, NOT discarded.
+    // Nothing was refused, so the partial that already arrived is honest model
+    // text and may stay on screen while the failure line explains it.
+    sayDelta(messageId, '', true, { aborted: true });
+    return relayFindings(q, findings, `the write-up step could not run (${err && err.message ? err.message : 'error'})`, messageId);
   }
   // The optional summary was declined even after the one neutral retry — the reads
-  // are already on screen, so relay honestly with the SHORT, calm message.
-  if (result.relayed) return relayFindings(q, findings, result.why);
+  // are already on screen, so relay honestly with the SHORT, calm message. Same
+  // abandonment rule: nothing will carry this messageId, so drop the preview.
+  // DECLINED BY THE SAFETY LAYER, twice (the neutral retry refused as well). The
+  // model deliberately did not publish this text, so whatever fragment of it
+  // reached the screen has to be wiped rather than left sitting there — the one
+  // case where the preview is discarded, not merely closed.
+  if (result.relayed) {
+    sayDelta(messageId, '', true, { aborted: true, discard: true });
+    return relayFindings(q, findings, result.why, messageId);
+  }
   const answer = result.answer;
 
   session.recordReasoning({
@@ -589,7 +729,11 @@ async function planAndAnswer(q) {
     raw: String(answer || ''),
     interpretation: `Composed strictly from the ${findings.length} real finding(s) gathered above — no number, device, or status invented.`,
   });
-  speak('jarvis', conduct.envelope.say(answer));
+  // The answer finished: release the last held-back word, close the stream
+  // (done, NOT aborted), then post the authoritative buffered message.
+  deltas.flush();
+  sayDelta(messageId, '', true);
+  speak('jarvis', { ...conduct.envelope.say(answer), messageId });
   ctx.status('jarvis', 'idle', 'Answered from live findings');
   ctx.log(`[Jarvis] Answered from ${findings.length} finding(s) — "${q.slice(0, 50)}"`);
 }
@@ -859,6 +1003,7 @@ async function planBridgeRoster({ problem, understood, roster }) {
       `The squad (the only things that can see the network):\n${rosterTextFrom(roster)}\n\n` +
       `Name the bridge: who is engaged, and who stands down.` }],
     maxTokens: 2000, effort: 'high',
+    purpose: 'roster', conversationId: conversationId(),
     format: { type: 'json_schema', schema: {
       type: 'object', additionalProperties: false,
       required: ['engaged', 'stoodDown'],
@@ -889,10 +1034,10 @@ async function planBridgeRoster({ problem, understood, roster }) {
 //
 // Returns { answer } | { answer, retried:true } | { relayed:true, why }. Throws
 // only if the API call itself errors (network/timeout) — ask() relays on that too.
-async function synthesizeAnswer(q, findings) {
+async function synthesizeAnswer(q, findings, onDelta = null) {
   const list = Array.isArray(findings) ? findings : [];
   const block = list.map((f) => `[${f.name}] (${f.stance})\n${f.text}`).join('\n\n');
-  const primary = await runSynthesis(q, block);
+  const primary = await runSynthesis(q, block, null, onDelta);
   if (!primary.refused) return { answer: primary.text };
 
   // One neutral retry on the SAME model: the sensitive/hostile literals are
@@ -902,14 +1047,17 @@ async function synthesizeAnswer(q, findings) {
   // refusal — we fall through to the honest short relay. The reads are on screen.
   const safeBlock = list.map((f) =>
     `[${f.name}] (${f.stance})\n${neutralizeFindingText(f.text)}`).join('\n\n');
-  const retry = await runSynthesis(q, safeBlock);
+  // Stream the retry ONLY if nothing has been shown yet (see cappedDeltas
+  // .emitted): a preview is written once, by whichever attempt got there first.
+  const retryDelta = (onDelta && typeof onDelta.emitted === 'function' && onDelta.emitted()) ? null : onDelta;
+  const retry = await runSynthesis(q, safeBlock, null, retryDelta);
   if (!retry.refused) return { answer: retry.text, retried: true };
   return { relayed: true, why: 'the write-up step was declined by the model' };
 }
 
 // One synthesis call. `model` null → the app default tier; a value → that tier
 // (used for the fallback retry). Kept tiny so ask() and the test share one path.
-function runSynthesis(q, findingsBlock, model = null) {
+function runSynthesis(q, findingsBlock, model = null, onDelta = null) {
   return claude.reason({
     system: SYNTH_SYSTEM,
     messages: [{
@@ -923,7 +1071,21 @@ function runSynthesis(q, findingsBlock, model = null) {
     maxTokens: 4000,
     effort: 'high',
     model,
+    // CW-10: labels for the spend record (never prompt text), the composed
+    // answer streams, and this REASONING call may check vendor docs on the web.
+    purpose: 'synthesize',
+    conversationId: conversationId(),
+    web: true,
+    onDelta: typeof onDelta === 'function' ? onDelta : null,
   });
+}
+
+// The conversation this call belongs to, for the spend record. Injected by the
+// host (server.js) exactly like the roster; absent → null, and the spend record
+// simply carries no id.
+function conversationId() {
+  try { return (ctx && typeof ctx.conversationId === 'function') ? ctx.conversationId() : null; }
+  catch (e) { return null; }
 }
 
 // Neutralise the hostile-LOOKING literals in ONE finding's text before it goes
@@ -956,10 +1118,17 @@ function neutralizeFindingText(text) {
 // SHORT, calm one-liner, not a second big paragraph re-dumping every reading. It
 // stays honest (nothing invented, nothing failed at the device) while being small
 // and non-alarming — the fix for "it keeps on showing" a large scary block.
-function relayFindings(q, findings, why) {
+function relayFindings(q, findings, why, messageId = null) {
   const list = Array.isArray(findings) ? findings : [];
   const evidence = list.filter((f) => f.stance === 'evidence').length;
-  ctx.say('jarvis', `🎖️ Summary skipped on this one — the raw readings from each engineer are above, all real.`);
+  // THE SEAM (PR #75): a streamed preview is settled ONLY by a chat message
+  // carrying the same messageId — the FE has no id-less fallback, so a message
+  // without it leaves the preview to age out on a timer. This relay IS the
+  // recorded answer for an abandoned stream, so it carries the id. Purely
+  // additive: with no stream in flight the argument is null and nothing changes.
+  ctx.say('jarvis',
+    `🎖️ Summary skipped on this one — the raw readings from each engineer are above, all real.`,
+    messageId ? { messageId } : undefined);
   session.recordReasoning({
     command: 'SYNTHESIS',
     raw: `Relayed to the on-screen readings (${list.length} finding(s), ${evidence} live reading(s)); the write-up step did not run — ${why}.`,
@@ -1156,6 +1325,7 @@ async function extractSymptom(description, operatorTz) {
         `Current time in the operator's timezone: ${nowInTzLabel(tz, nowMs)}\n` +
         `Current time (UTC): ${new Date(nowMs).toISOString()}\n\nComplaint:\n"${desc}"` }],
       maxTokens: 1500, effort: 'medium', format,
+      purpose: 'symptom', conversationId: conversationId(),
     });
     if (res.refused) { const h = heuristicSymptom(desc, tz, nowMs); if (clk) { h.timeAnchor = clk.iso; h.timeAnchorMs = clk.ms; } return { ...base, ...h, note: 'Reasoning declined; used a keyword pass. ' + tzNote, source: h.timeAnchor || h.scope ? 'heuristic' : 'none' }; }
     const parsed = JSON.parse(res.text);
@@ -1302,6 +1472,7 @@ async function synthesizeTriageVerdict(input) {
         `Findings (your ONLY source of truth):\n${RULE}\n${findingsBlock || '(no findings collected)'}\n${RULE}\n\n` +
         `Commit to a ranked hypothesis + if/then next check + confidence + why.` }],
       maxTokens: 2500, effort: 'high', format,
+      purpose: 'hypothesis', incidentId: (input && input.incidentId) || null, web: true,
     });
     if (res.refused) return null;
     return JSON.parse(res.text);
@@ -1345,6 +1516,7 @@ async function narrateCorrelation(input) {
       // Headroom: on the current tiers thinking shares max_tokens, so a one-sentence
       // answer still needs room above its own size or it truncates to nothing.
       maxTokens: 1500, effort: 'medium',
+      purpose: 'correlation', incidentId: (input && input.incidentId) || null,
     });
     if (res.refused) return null;
     const txt = (res.text || '').trim();
@@ -1520,6 +1692,7 @@ async function invUnderstand({ problem, operatorTz, answers, reply }) {
         `Judge it in replyIntent: does it answer those questions, change the subject, or abandon the problem?` : '') +
       `\n\nDecide if this is specific enough to start probing. If not, ask; if yes, state it + initial hypotheses.` }],
     maxTokens: 3000, effort: 'high', format,
+    purpose: 'understand', conversationId: conversationId(),
   });
   if (res.refused) throw new Error('reasoning declined');
   const p = JSON.parse(res.text);
@@ -1563,7 +1736,10 @@ async function invProbe({ problem, understood, hypotheses, rounds, roster }) {
       `Standing hypotheses:\n${hypothesesText(hypotheses)}\n\n` +
       `Probes run so far and their REAL reports:\n${roundsText(rounds)}\n\n` +
       `Pick the single highest-value next read-only probe, or set "stuck".` }],
+    // NO web tools here: item 5 is REASONING calls only. A probe picks a real
+    // read on this network; the web can never stand in for one.
     maxTokens: 2500, effort: 'high', format,
+    purpose: 'probe', conversationId: conversationId(),
   });
   if (res.refused) throw new Error('reasoning declined');
   const p = JSON.parse(res.text);
@@ -1594,6 +1770,7 @@ async function invAssess({ understood, hypotheses, probe, report }) {
       `REAL report (your ONLY new evidence):\n${RULE}\n[${report.stance}] ${report.text}\n${RULE}\n\n` +
       `Update the hypotheses (standing/eliminated/confirmed) and set confidence 0..1.` }],
     maxTokens: 2500, effort: 'high', format,
+    purpose: 'assess', conversationId: conversationId(), web: true, compact: true,
   });
   if (res.refused) throw new Error('reasoning declined');
   const p = JSON.parse(res.text);
@@ -1625,7 +1802,10 @@ async function invFix({ understood, hypotheses, rounds, rootCause }) {
       (rootCause ? `Isolated root cause: ${rootCause}\n` : '') + `\n` +
       `The evidence (every real probe report):\n${roundsText(rounds)}\n\n` +
       `Compose the root cause + fix plan. A config fix → a proposal; a manual fix → proposal null.` }],
+    // Long-conversation path: the rounds block grows every round, so this call
+    // opts into compaction (silently ignored if the beta is unavailable).
     maxTokens: 3000, effort: 'high', format,
+    purpose: 'fix', conversationId: conversationId(), web: true, compact: true,
   });
   if (res.refused) throw new Error('reasoning declined');
   const p = JSON.parse(res.text);

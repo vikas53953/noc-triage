@@ -139,6 +139,25 @@ const NOT_A_SECRET = new Set([
 ]);
 // Enough English to tell a sentence from a config line. Two hits = prose.
 const PROSE_WORDS = /\b(?:the|your|when|with|please|anyone|should|would|could|been|you|this|that|there|about|because|before|prompted|share|enter)\b/gi;
+// CW-10 item 7a (the LOW left over from the CW-9 final review). A terse DEVICE
+// ERROR is prose too, but it is short: `Error: authentication failed, check the
+// password and retry` carries ONE prose word, so the two-hit prose test called
+// it config and stamped «redacted» over the ordinary words after
+// `authentication` and `password`. An operator then reads a mangled error and
+// cannot tell whether a secret was involved at all.
+//
+// The fix is on the VALUE, not on the prose heuristic — loosening the heuristic
+// would let a genuinely short lowercase secret through on a line that merely
+// mentions a failure. These are ordinary English words that no device ever
+// takes as a shared secret, so seeing one means the keyword was not introducing
+// a secret. Nothing that looks remotely like a credential is affected.
+const ORDINARY_WORD = new Set([
+  'and', 'or', 'but', 'the', 'a', 'an', 'not', 'for', 'from', 'with', 'without',
+  'check', 'checked', 'verify', 'failed', 'failure', 'fails', 'invalid', 'incorrect',
+  'denied', 'rejected', 'refused', 'expired', 'required', 'missing', 'unknown',
+  'again', 'retry', 'please', 'error', 'errors', 'empty', 'must', 'cannot', 'can',
+  'will', 'has', 'have', 'it', 'if', 'in', 'on', 'at', 'of', 'unauthorized', 'unauthorised',
+]);
 
 const REDACTED = '«redacted»';
 
@@ -191,6 +210,7 @@ function scrubConfigForms(line) {
     const v = normToken(value);
     if (!v || value.includes(REDACTED)) continue; // never redact twice
     if (NOT_A_SECRET.has(v)) continue;            // `key chain KC1`, `authentication mode md5`
+    if (ORDINARY_WORD.has(v)) continue;           // `authentication failed, check the password and retry`
     if (STRONG_SECRET_INTRO.has(v) || WEAK_SECRET_INTRO.has(v)) continue; // `key config-key …`
     // A weak keyword inside an English sentence only redacts a secret-SHAPED value.
     if (!strong && prose && !looksLikeSecretValue(value)) continue;
