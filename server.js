@@ -1113,6 +1113,10 @@ function jarvisSayDelta(agentId, payload) {
     messageId: String(payload.messageId || ''),
     delta: String(payload.delta == null ? '' : payload.delta),
     done: Boolean(payload.done),
+    // Present only when TRUE: the answer was abandoned mid-stream, so no
+    // buffered chat_message will ever carry this messageId and the preview must
+    // be discarded rather than left on screen as if it were Jarvis's answer.
+    ...(payload.aborted ? { aborted: true } : {}),
     timestamp: new Date().toISOString(),
   });
 }

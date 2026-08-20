@@ -83,11 +83,28 @@ ok('an old record counts in the total and byDay, but not in today',
   s2.total.input_tokens === s.total.input_tokens + 9999 && s2.today.calls === s.today.calls && Boolean(s2.byDay['2026-01-01']));
 
 console.log('\nOPERATIONAL GUARDS:');
-// A corrupt file must never take down a live reasoning call.
+// A corrupt file must never take down a live reasoning call — and must never be
+// silently destroyed either (PR #74 review, minor 7).
 fs.writeFileSync(FILE, '{ this is not json');
 spend._reset();
 ok('a corrupt file reads as empty instead of throwing', spend.all().length === 0);
 ok('and a new record still writes', Boolean(spend.record({ purpose: 'plan', model: 'm', usage: { input_tokens: 5, output_tokens: 5 } })));
+const aside = fs.readdirSync(dir).filter((f) => /^spend\.corrupt-\d+\.json$/.test(f));
+ok('the unreadable file is KEPT ASIDE, not overwritten and lost', aside.length === 1, fs.readdirSync(dir).join(','));
+ok('and the kept-aside copy is the original bytes',
+  fs.readFileSync(path.join(dir, aside[0]), 'utf8') === '{ this is not json');
+
+// A junk member in a hand-edited store must not inflate the call count
+// (PR #74 review, minor 6): a headline number that disagrees with its own
+// breakdown is worse than no number.
+fs.writeFileSync(FILE, JSON.stringify([
+  null, 5, 'x', [1, 2],
+  { ts: new Date().toISOString(), purpose: 'plan', model: 'm', input_tokens: 10, output_tokens: 2 },
+]));
+spend._reset();
+const junk = spend.summary();
+ok('calls counts only the real records, not the junk', junk.calls === 1, `calls=${junk.calls}`);
+ok('and the totals agree with that count', junk.total.calls === junk.calls && junk.total.input_tokens === 10);
 
 // Rotation at the cap: fill past it and check the file is trimmed and the older
 // half preserved in spend.1.json.

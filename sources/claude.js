@@ -92,6 +92,20 @@ function _resetClient() { client = null; clientKey = null; }
 //   • `Anthropic API timed out after <n>ms`       → timeout
 // A secret can never reach these strings: only the status code and the API's own
 // error text are used, never the request or its headers.
+// A mid-stream failure arrives as an SSE `error` frame, so the SDK throws with
+// the RAW JSON envelope as its message. Pull the human sentence out of it — the
+// operator should read "Overloaded", not a serialised error object.
+function readableMessage(err) {
+  const raw = String((err && err.message) || '');
+  if (!raw.startsWith('{')) return raw;
+  try {
+    const parsed = JSON.parse(raw);
+    const inner = parsed && parsed.error;
+    if (inner && inner.message) return String(inner.message);
+  } catch (e) { /* not JSON after all — use it as-is */ }
+  return raw;
+}
+
 function mapError(err) {
   if (!err) return new Error('Anthropic call failed');
   if (err.message === 'no_api_key') return err;
@@ -101,7 +115,7 @@ function mapError(err) {
     return new Error(`Anthropic API timed out after ${TIMEOUT_MS}ms`);
   }
   if (A.APIConnectionError && err instanceof A.APIConnectionError) {
-    const cause = (err.cause && err.cause.message) || err.message || 'connection failed';
+    const cause = (err.cause && err.cause.message) || readableMessage(err) || 'connection failed';
     return new Error(`Could not reach Anthropic: ${cause}`);
   }
   if (A.APIError && err instanceof A.APIError && err.status) {
@@ -113,7 +127,7 @@ function mapError(err) {
   if (err.name === 'AbortError' || /aborted|timed out/i.test(err.message || '')) {
     return new Error(`Anthropic API timed out after ${TIMEOUT_MS}ms`);
   }
-  return new Error(`Could not reach Anthropic: ${err.message || String(err)}`);
+  return new Error(`Could not reach Anthropic: ${readableMessage(err) || String(err)}`);
 }
 
 // ── Prompt caching ──────────────────────────────────────────────────────────
@@ -165,13 +179,44 @@ function webResearch() {
 function _setWebResearch(v, why) { webResearchAvailable = v; webResearchWhy = why || webResearchWhy; }
 
 // Does this error say "this account/model cannot use those tool types"? Only a
-// 400/404-class rejection counts — a rate limit or an outage says nothing about
-// the capability and must not switch it off.
+// permanent 400/403/404-class rejection counts — a rate limit or an outage says
+// nothing about the capability and must never switch it off.
+//
+// A rejection can arrive TWO ways and both must be recognised (PR #74 review,
+// minor 4): as an HTTP error with a status, or — when the tools are rejected
+// after the stream has opened — as an SSE `error` frame, which the SDK throws
+// with NO status and the raw JSON envelope as the message. Missing the second
+// shape left the capability reporting available:true on an account that had in
+// fact refused it, which is exactly the kind of quiet lie this app must not tell.
+const TOOL_NAMES = /web_search_20260209|web_fetch_20260209|web_search|web_fetch/i;
+const REJECTED = /not\s+supported|unsupported|unknown|invalid|not\s+(?:enabled|available)|no\s+access|permission/i;
+const PERMANENT_TYPE = /invalid_request_error|permission_error|not_found_error/;
+
+// The API's own error object, whether the SDK parsed it out of an HTTP response
+// or handed us the raw JSON envelope from a mid-stream error frame.
+function errorEnvelopeOf(err) {
+  const direct = err && err.error && err.error.error;
+  if (direct && typeof direct === 'object') return direct;
+  const raw = String((err && err.message) || '');
+  if (raw.startsWith('{')) {
+    try { const parsed = JSON.parse(raw); if (parsed && parsed.error) return parsed.error; }
+    catch (e) { /* not JSON */ }
+  }
+  return null;
+}
+
 function isToolRejection(err) {
-  if (!err || !err.status) return false;
-  if (err.status !== 400 && err.status !== 404 && err.status !== 403) return false;
-  const m = String(err.message || '');
-  return /tool|web_search|web_fetch|beta|not\s+supported|unsupported|unknown/i.test(m);
+  if (!err) return false;
+  const envelope = errorEnvelopeOf(err);
+  const text = `${(err && err.message) || ''} ${(envelope && envelope.message) || ''}`;
+  if (err.status) {
+    if (err.status !== 400 && err.status !== 404 && err.status !== 403) return false;
+    return /tool|web_search|web_fetch|beta|not\s+supported|unsupported|unknown/i.test(text);
+  }
+  // No status: a mid-stream error frame. Only a PERMANENT request-level
+  // rejection that actually names the tools counts — never an overload.
+  if (!PERMANENT_TYPE.test((envelope && envelope.type) || '')) return false;
+  return TOOL_NAMES.test(text) && REJECTED.test(text);
 }
 
 // ── Compaction (contract item 6) ────────────────────────────────────────────
@@ -184,6 +229,21 @@ const COMPACT_EDIT = { type: 'compact_20260112' };
 let compactionAvailable = true;
 function _setCompaction(v) { compactionAvailable = v !== false; }
 function compaction() { return { available: compactionAvailable }; }
+
+// Only a PERMANENT rejection of the beta turns compaction off (PR #74 review,
+// minor 5). A 429 or a 529 on a compact call says the API was busy for a
+// minute, not that this account cannot use compaction — treating those the same
+// way silently cost the process its compaction after one bad minute. A
+// transient error is re-thrown instead, so the caller handles it honestly and
+// we never quietly re-run the same billable call twice.
+function isBetaRejection(err) {
+  if (!err) return false;
+  if (err.status) return err.status === 400 || err.status === 403 || err.status === 404;
+  const envelope = errorEnvelopeOf(err);
+  const text = `${(err && err.message) || ''} ${(envelope && envelope.message) || ''}`;
+  if (!PERMANENT_TYPE.test((envelope && envelope.type) || '')) return false;
+  return /beta|compact|context_management/i.test(text);
+}
 
 // Concatenate the text blocks of a Messages response.
 function textOf(resp) {
@@ -250,27 +310,41 @@ function recordSpend(resp, { purpose, conversationId, incidentId, model: modelOv
 }
 
 // One API call, with the compaction beta when asked for and available.
-async function send(body, { compact, onDelta }) {
+//
+// `emitted` is the guard against a DOUBLE PREVIEW (PR #74 review, minor 3): if
+// the first attempt already streamed text to the operator, a second attempt must
+// NOT stream it again — otherwise the preview reads "AAABBBAAABBB" under one
+// messageId. The re-run is a plain buffered call instead, and the buffered
+// message that follows replaces the partial preview exactly as it always does.
+async function send(body, { compact, onDelta, emitted }) {
   const c = getClient();
   const wantCompact = Boolean(compact) && compactionAvailable;
+  const already = () => Boolean(emitted && emitted.any);
+  const streamer = (onDelta && !already()) ? (chunk) => {
+    if (emitted) emitted.any = true;
+    onDelta(chunk);
+  } : null;
+  const stream = (target, b) => target.stream(b).on('text', streamer).finalMessage();
 
   if (wantCompact) {
     try {
       const betaBody = { ...body, betas: [COMPACT_BETA], context_management: { edits: [COMPACT_EDIT] } };
-      return await (onDelta
-        ? c.beta.messages.stream(betaBody).on('text', onDelta).finalMessage()
-        : c.beta.messages.create(betaBody));
+      return await (streamer ? stream(c.beta.messages, betaBody) : c.beta.messages.create(betaBody));
     } catch (err) {
-      // Any beta error → silent fall back to current behaviour, for this call
-      // and every later one. The operator never sees a compaction failure,
-      // because compaction is an optimisation, not a promise.
+      // A PERMANENT beta rejection → silent fall back to current behaviour, for
+      // this call and every later one. A transient error is not that: re-throw
+      // and keep compaction on.
+      if (!isBetaRejection(err)) throw err;
       compactionAvailable = false;
+      // The beta attempt may already have streamed text before it failed; the
+      // fallback must not repeat it.
+      if (streamer && already()) return c.messages.create(body);
     }
   }
 
-  if (onDelta) {
-    return c.messages.stream(body).on('text', onDelta).finalMessage();
-  }
+  // Stream only when a caller asked for it AND nothing has been shown yet;
+  // otherwise a plain buffered call, so the preview is never written twice.
+  if (streamer && !already()) return stream(c.messages, body);
   return c.messages.create(body);
 }
 
@@ -295,13 +369,16 @@ async function reason({
   web = false, compact = false, onDelta = null,
 }) {
   const meta = { purpose, conversationId, incidentId, model: modelOverride };
+  // Shared across BOTH attempts of this call, so a re-run never re-streams text
+  // the operator has already seen.
+  const emitted = { any: false };
   // Web research is attempted unless the account has already refused it.
   const useWeb = Boolean(web) && webResearchAvailable !== false;
   let resp;
   try {
     resp = await send(
       buildBody({ system, messages, maxTokens, effort, format, model: modelOverride, web: useWeb, tools: useWeb ? WEB_TOOLS : null }),
-      { compact, onDelta },
+      { compact, onDelta, emitted },
     );
     if (useWeb) { webResearchAvailable = true; webResearchWhy = 'server-side web search + fetch accepted by this account'; }
   } catch (err) {
@@ -314,7 +391,7 @@ async function reason({
       try {
         resp = await send(
           buildBody({ system, messages, maxTokens, effort, format, model: modelOverride, web: false, tools: null }),
-          { compact, onDelta },
+          { compact, onDelta, emitted },
         );
       } catch (err2) {
         throw mapError(err2);
@@ -348,5 +425,6 @@ module.exports = {
   // CW-10 additive surface (capability honesty + tests). Nothing here changes
   // how an existing caller behaves.
   webResearch, compaction,
-  _test: { _setFetch, _resetClient, _setWebResearch, _setCompaction, buildBody, mapError, webSourcesOf, WEB_TOOLS, WEB_NOTE },
+  _test: { _setFetch, _resetClient, _setWebResearch, _setCompaction, buildBody, mapError,
+    webSourcesOf, isToolRejection, isBetaRejection, readableMessage, WEB_TOOLS, WEB_NOTE },
 };

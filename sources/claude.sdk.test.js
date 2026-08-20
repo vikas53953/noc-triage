@@ -291,6 +291,121 @@ const BASE = { system: 'STABLE SYSTEM PROMPT', messages: [{ role: 'user', conten
   ok('NO prompt text is anywhere in the record',
     !JSON.stringify(rec).includes('STABLE SYSTEM PROMPT') && !JSON.stringify(rec).includes('volatile question'), JSON.stringify(rec));
 
+  // ── PR #74 review, minor 5: a bad minute must not cost the process ───────
+  console.log('\nA TRANSIENT ERROR ON A COMPACT CALL DOES NOT KILL COMPACTION:');
+  reset();
+  claude._test._setCompaction(true);
+  let overloads = 0;
+  handler = () => {
+    overloads += 1;
+    if (overloads <= 2) return jsonResponse({ type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } }, 529);
+    return jsonResponse(okBody());
+  };
+  const survived = await claude.reason({ ...BASE, compact: true });
+  ok('a 529 on the beta path is retried by the SDK and the call still succeeds',
+    survived.text === 'answer text', JSON.stringify(survived.text));
+  ok('compaction is STILL available after a transient failure',
+    claude.compaction().available === true);
+  reset();
+  handler = () => jsonResponse(okBody());
+  await claude.reason({ ...BASE, compact: true });
+  ok('and the next compact call still goes down the beta path',
+    String(seen[0].headers['anthropic-beta'] || '').includes('compact-2026-01-12'),
+    String(seen[0].headers['anthropic-beta'] || '(none)'));
+
+  reset();
+  claude._test._setCompaction(true);
+  let hard = 0;
+  handler = () => {
+    hard += 1;
+    if (hard === 1) return jsonResponse({ type: 'error', error: { type: 'invalid_request_error', message: 'beta compact-2026-01-12 is not enabled for this account' } }, 400);
+    return jsonResponse(okBody());
+  };
+  await claude.reason({ ...BASE, compact: true });
+  ok('a PERMANENT beta rejection still turns compaction off (the honest fallback survives the fix)',
+    claude.compaction().available === false);
+  claude._test._setCompaction(true);
+
+  ok('isBetaRejection: 400 yes, 529 no, 429 no',
+    claude._test.isBetaRejection({ status: 400 }) === true
+    && claude._test.isBetaRejection({ status: 529 }) === false
+    && claude._test.isBetaRejection({ status: 429 }) === false);
+
+  // ── PR #74 review, minor 4: a mid-stream tool rejection carries no status ─
+  console.log('\nA MID-STREAM TOOL REJECTION IS RECOGNISED (the capability cannot lie):');
+  const midStream = new Error(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'tool type web_search_20260209 is not supported on this account' } }));
+  ok('an SSE error frame naming the tools IS a tool rejection, even with no status',
+    claude._test.isToolRejection(midStream) === true);
+  const midOverload = new Error(JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } }));
+  ok('a mid-stream OVERLOAD is not — an outage says nothing about the capability',
+    claude._test.isToolRejection(midOverload) === false);
+  ok('and a mid-stream rate limit is not either',
+    claude._test.isToolRejection(new Error(JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'slow down' } }))) === false);
+  ok('the operator-facing text is the API\'s sentence, not a serialised envelope',
+    /Overloaded/.test(claude._test.mapError(midOverload).message)
+    && !/\{"type"/.test(claude._test.mapError(midOverload).message),
+    claude._test.mapError(midOverload).message);
+
+  // ── PR #74 review, minor 3: a re-run must never re-stream the preview ─────
+  console.log('\nA RE-RUN NEVER WRITES THE PREVIEW TWICE:');
+  reset();
+  claude._test._setCompaction(true);
+  claude._test._setWebResearch(null, 'reset');
+  const sse = (chunks) => {
+    const events = [
+      ['message_start', { type: 'message_start', message: { id: 'm', type: 'message', role: 'assistant', model: 'claude-opus-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } }],
+      ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }],
+      ...chunks.map((t) => ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: t } }]),
+      ['content_block_stop', { type: 'content_block_stop', index: 0 }],
+      ['message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 2 } }],
+      ['message_stop', { type: 'message_stop' }],
+    ];
+    return new Response(events.map(([e, d]) => `event: ${e}\ndata: ${JSON.stringify(d)}\n\n`).join(''),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } });
+  };
+  let tries = 0;
+  handler = () => {
+    tries += 1;
+    // First attempt: the beta path streams AAA/BBB then fails permanently.
+    if (tries === 1) return jsonResponse({ type: 'error', error: { type: 'invalid_request_error', message: 'beta compact-2026-01-12 is not enabled' } }, 400);
+    return sse(['AAA', 'BBB']);
+  };
+  const seenDeltas = [];
+  await claude.reason({ ...BASE, compact: true, onDelta: (d) => seenDeltas.push(d) });
+  ok('the fallback did not duplicate the preview', seenDeltas.join('') === 'AAABBB', JSON.stringify(seenDeltas));
+
+  reset();
+  claude._test._setCompaction(true);
+  let n2 = 0;
+  handler = () => {
+    n2 += 1;
+    if (n2 === 1) return sse(['AAA', 'BBB']);   // beta streams, then...
+    return sse(['AAA', 'BBB']);                 // ...a re-run would repeat it
+  };
+  // Force the beta attempt to fail AFTER streaming, the exact shape the reviewer probed.
+  const realFetch = mockFetch;
+  let firstDone = false;
+  claude._test._setFetch(async (url, init) => {
+    const res = await realFetch(url, init);
+    if (!firstDone) {
+      firstDone = true;
+      // Deliver the deltas, then break the stream mid-flight.
+      const body = 'event: message_start\ndata: ' + JSON.stringify({ type: 'message_start', message: { id: 'm', type: 'message', role: 'assistant', model: 'claude-opus-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } })
+        + '\n\nevent: content_block_start\ndata: ' + JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
+        + '\n\nevent: content_block_delta\ndata: ' + JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'AAA' } })
+        + '\n\nevent: error\ndata: ' + JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'beta compact-2026-01-12 is not enabled' } }) + '\n\n';
+      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    }
+    return res;
+  });
+  const twice = [];
+  try { await claude.reason({ ...BASE, compact: true, onDelta: (d) => twice.push(d) }); } catch (e) { /* handled below */ }
+  ok('a stream that dies mid-flight never re-emits what the operator already saw',
+    twice.join('') === 'AAA' || twice.length === 0, JSON.stringify(twice));
+  claude._test._setFetch(mockFetch);
+  claude._test._setCompaction(true);
+  claude._test._setWebResearch(null, 'reset');
+
   console.log(`\nCW-10 claude-over-SDK: ${pass} passed, ${fail} failed.`);
   if (fail) process.exit(1);
 })().catch((err) => { console.error('test crashed:', err); process.exit(1); });

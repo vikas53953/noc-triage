@@ -19,6 +19,13 @@
 //
 // PATH SAFETY: written through the same workspace safeJoin guard as every other
 // file the app writes.
+//
+// ONE PROCESS. This store is a read-modify-write over an in-memory cache plus a
+// whole-file write — correct for the single server this app runs, and honest
+// about what it is not: two servers pointed at the same workspace would
+// last-writer-wins and lose records. If this ever needs to be multi-process,
+// the change is an append-only log (one JSON line per call) or an atomic
+// temp-file + rename, not a lock.
 
 const fs = require('fs');
 const path = require('path');
@@ -48,13 +55,30 @@ function fileFor(name) {
   return dirOverride ? path.join(dirOverride, name) : safeJoin(storeRoot(), name);
 }
 
+// A corrupt or wrong-shaped file must never crash a model call — but it must
+// not be silently destroyed either (PR #74 review, minor 7). The old file is
+// copied aside as spend.corrupt-<ts>.json and the loss is said out loud on the
+// console, so an operator can see that a day's accounting was set aside rather
+// than discovering later that it simply vanished.
 function readArray(file) {
   if (!file || !fs.existsSync(file)) return [];
+  let text = null;
+  try { text = fs.readFileSync(file, 'utf8'); } catch (e) { return []; }
   try {
-    const arr = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return Array.isArray(arr) ? arr : [];
+    const arr = JSON.parse(text);
+    if (Array.isArray(arr)) return arr;
+  } catch (e) { /* handled below */ }
+  preserveCorrupt(file, text);
+  return [];
+}
+
+function preserveCorrupt(file, text) {
+  try {
+    const aside = `${file.replace(/\.json$/, '')}.corrupt-${Date.now()}.json`;
+    fs.writeFileSync(aside, text == null ? '' : text);
+    console.error(`[Spend] ${path.basename(file)} was unreadable — kept as ${path.basename(aside)} and starting a fresh record. Earlier totals are in that file, not in the summary.`);
   } catch (e) {
-    return [];                     // a corrupt file must never crash a model call
+    console.error(`[Spend] ${path.basename(file)} was unreadable and could not be kept aside — starting a fresh record.`);
   }
 }
 
@@ -172,9 +196,12 @@ function summary(now = Date.now()) {
   const todayKey = new Date(now).toISOString().slice(0, 10);
   const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
 
+  // `calls` counts REAL records only. Counting `all.length` let a junk member
+  // in a hand-edited file inflate the call count while the totals (correctly)
+  // ignored it — a number that disagrees with its own breakdown (review, minor 6).
   const out = {
     generatedAt: new Date(now).toISOString(),
-    calls: all.length,
+    calls: 0,
     total: blankTotals(),
     today: blankTotals(),
     week: blankTotals(),
@@ -184,7 +211,8 @@ function summary(now = Date.now()) {
   };
 
   for (const rec of all) {
-    if (!rec || typeof rec !== 'object') continue;
+    if (!rec || typeof rec !== 'object' || Array.isArray(rec)) continue;
+    out.calls += 1;
     const day = dayOf(rec.ts);
     addInto(out.total, rec);
     if (day === todayKey) addInto(out.today, rec);

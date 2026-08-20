@@ -297,17 +297,96 @@ function speak(agentId, env) {
 // screen would be a claim the app cannot stand behind yet.
 //
 // The deltas are ADDITIVE and advisory: they go out on their own WS envelope
-// (kind:'say-delta' {messageId, delta, done}) and the normal, buffered
+// (kind:'say-delta' {messageId, delta, done, aborted}) and the normal, buffered
 // chat_message that follows — carrying the SAME messageId — stays the
 // authoritative record. A client that ignores deltas sees exactly what it saw
 // before CW-10. A host that wires no sayDelta (every offline test) is a no-op.
+//
+// TWO LAWS ON THIS PATH, both from the PR #74 review, both enforced HERE in code:
+//
+//  1. done:true is not enough. A stream can end because the answer FINISHED or
+//     because it was ABANDONED (the model call failed mid-answer, or the summary
+//     was declined). In the second case NO buffered message with this messageId
+//     will ever arrive, so a client told only "done" would leave a partial,
+//     un-conducted fragment of model text on screen looking like Jarvis's answer.
+//     Every abandoning exit therefore sends `aborted:true`, which means "throw
+//     the preview away — there is no recorded answer coming".
+//
+//  2. The preview obeys the SAME 280-char cap as the message it previews
+//     (conduct.TEXT_MAX). A cap enforced in code and then bypassed by a display
+//     path is not a cap. Deltas stop at the cap, on a word boundary, so the
+//     preview never shows text the conduct layer exists to prevent and never
+//     shrinks when the real message lands.
 let deltaSeq = 0;
 function newMessageId() { return `jv-${Date.now().toString(36)}-${(deltaSeq += 1).toString(36)}`; }
-function sayDelta(messageId, delta, done) {
+function sayDelta(messageId, delta, done, aborted) {
   if (!ctx || typeof ctx.sayDelta !== 'function') return;
   try {
-    ctx.sayDelta('jarvis', { kind: 'say-delta', messageId, delta: String(delta == null ? '' : delta), done: Boolean(done) });
+    const payload = {
+      kind: 'say-delta', messageId,
+      delta: String(delta == null ? '' : delta),
+      done: Boolean(done),
+    };
+    // Only ever present when it is TRUE — an additive signal, so a client that
+    // has not been taught about it is exactly as well off as before.
+    if (aborted) payload.aborted = true;
+    ctx.sayDelta('jarvis', payload);
   } catch (e) { /* a display optimisation must never break the answer */ }
+}
+
+// The delta forwarder for ONE composed answer: it holds the running preview and
+// stops at conduct.TEXT_MAX, cutting on a word boundary so the preview never
+// ends mid-word. Everything past the cap is simply not forwarded — the operator
+// sees the authoritative capped message when it lands.
+// The model writes mid-word (a chunk can be "ean right"), so the forwarder also
+// holds back the trailing PARTIAL word and releases it once the next space
+// arrives. That is what keeps the preview from ever ending mid-word — including
+// at the cap, where whatever is left is simply never sent. `flush()` releases
+// the final word when the answer really finished; an ABANDONED stream is never
+// flushed, because that preview is being thrown away anyway.
+function cappedDeltas(messageId) {
+  let shownLen = 0;
+  let pending = '';
+  let stopped = false;
+
+  function emit(text) {
+    if (!text) return;
+    shownLen += text.length;
+    sayDelta(messageId, text, false);
+  }
+
+  // The longest prefix of `text` that fits the remaining room AND ends on a word
+  // boundary. Returns '' when not even one whole word fits.
+  function fits(text) {
+    const room = conduct.TEXT_MAX - shownLen;
+    if (room <= 0) return '';
+    if (text.length <= room) return text;
+    const slice = text.slice(0, room);
+    const space = slice.lastIndexOf(' ');
+    return space > 0 ? slice.slice(0, space + 1) : '';
+  }
+
+  function forward(chunk) {
+    if (stopped) return;
+    pending += String(chunk == null ? '' : chunk);
+    // Everything up to (and including) the last whitespace is complete words.
+    const lastSpace = pending.search(/\s(?=\S*$)/);
+    if (lastSpace < 0) return;                       // still one unfinished word
+    const whole = pending.slice(0, lastSpace + 1);
+    pending = pending.slice(lastSpace + 1);
+    const out = fits(whole);
+    if (out.length < whole.length) stopped = true;   // the cap ends the preview
+    emit(out);
+  }
+
+  // The stream ended cleanly: release the last word if it still fits.
+  forward.flush = function flush() {
+    if (stopped || !pending) return;
+    const out = fits(pending);
+    pending = '';
+    emit(out);
+  };
+  return forward;
 }
 
 // ── CW-9: the bridge front door ─────────────────────────────────────────────
@@ -598,15 +677,21 @@ async function planAndAnswer(q) {
   // The composed answer is the one thing that streams (CW-10 item 3). The
   // messageId ties the deltas to the buffered message that follows.
   const messageId = newMessageId();
+  const deltas = cappedDeltas(messageId);
   try {
-    result = await synthesizeAnswer(q, findings, (delta) => sayDelta(messageId, delta, false));
+    result = await synthesizeAnswer(q, findings, deltas);
   } catch (err) {
-    sayDelta(messageId, '', true);
-    return relayFindings(q, findings, `the write-up step could not run (${err && err.message ? err.message : 'error'})`);
+    // ABANDONED, not finished: no buffered message will carry this messageId,
+    // so the preview must be thrown away rather than left on screen. The honest
+    // failure message still gets posted by relayFindings, as its own chat
+    // message, exactly as it was before streaming existed.
+    sayDelta(messageId, '', true, true);
+    return relayFindings(q, findings, `the write-up step could not run (${err && err.message ? err.message : 'error'})`, messageId);
   }
   // The optional summary was declined even after the one neutral retry — the reads
-  // are already on screen, so relay honestly with the SHORT, calm message.
-  if (result.relayed) { sayDelta(messageId, '', true); return relayFindings(q, findings, result.why); }
+  // are already on screen, so relay honestly with the SHORT, calm message. Same
+  // abandonment rule: nothing will carry this messageId, so drop the preview.
+  if (result.relayed) { sayDelta(messageId, '', true, true); return relayFindings(q, findings, result.why, messageId); }
   const answer = result.answer;
 
   session.recordReasoning({
@@ -614,7 +699,9 @@ async function planAndAnswer(q) {
     raw: String(answer || ''),
     interpretation: `Composed strictly from the ${findings.length} real finding(s) gathered above — no number, device, or status invented.`,
   });
-  // done:true first, then the authoritative buffered message under the same id.
+  // The answer finished: release the last held-back word, close the stream
+  // (done, NOT aborted), then post the authoritative buffered message.
+  deltas.flush();
   sayDelta(messageId, '', true);
   speak('jarvis', { ...conduct.envelope.say(answer), messageId });
   ctx.status('jarvis', 'idle', 'Answered from live findings');
@@ -998,10 +1085,17 @@ function neutralizeFindingText(text) {
 // SHORT, calm one-liner, not a second big paragraph re-dumping every reading. It
 // stays honest (nothing invented, nothing failed at the device) while being small
 // and non-alarming — the fix for "it keeps on showing" a large scary block.
-function relayFindings(q, findings, why) {
+function relayFindings(q, findings, why, messageId = null) {
   const list = Array.isArray(findings) ? findings : [];
   const evidence = list.filter((f) => f.stance === 'evidence').length;
-  ctx.say('jarvis', `🎖️ Summary skipped on this one — the raw readings from each engineer are above, all real.`);
+  // THE SEAM (PR #75): a streamed preview is settled ONLY by a chat message
+  // carrying the same messageId — the FE has no id-less fallback, so a message
+  // without it leaves the preview to age out on a timer. This relay IS the
+  // recorded answer for an abandoned stream, so it carries the id. Purely
+  // additive: with no stream in flight the argument is null and nothing changes.
+  ctx.say('jarvis',
+    `🎖️ Summary skipped on this one — the raw readings from each engineer are above, all real.`,
+    messageId ? { messageId } : undefined);
   session.recordReasoning({
     command: 'SYNTHESIS',
     raw: `Relayed to the on-screen readings (${list.length} finding(s), ${evidence} live reading(s)); the write-up step did not run — ${why}.`,
