@@ -421,3 +421,19 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   + token accounting; NO LangChain/LangGraph/Agent-SDK): verdict page
   https://claude.ai/code/artifact/7988f6d1-6f24-4b23-a9cc-5ddd86158bbd — awaiting his yes/no.
 - Backend review (PR #73) still running.
+
+## 2026-08-20 — CW-9 backend review verdict: FIX-FIRST (builder fixing)
+- PR #73 review (live on :3113, Sonnet, WS harness + wire-call diffing): conduct WORKS (EPG replay = ask,
+  0 reads; deny = 0 calls; write-injection refused+audited; caps enforced; no keyword routing) BUT the
+  bridge "says more than it does":
+  BLOCKERS: (1) roster lies — "stood down" agent's systems still read by the engaged agent; (2) round
+  narration asserts drill-downs that never ran (3 rounds, byte-identical evidence); (3) evidence cross-talk
+  — apiEvidenceSince() sweeps the GLOBAL log, one delegation carried another's record = fabrication.
+  HIGH: gate not in front of capabilities.checkAsk (answer to parked questions swallowed, thread orphaned);
+  resume can't reach problemReport (abandon → bridges the OLD problem); thin-flag returned but never read.
+  MED: garbage planner fails open; finding.cli.output uncapped (267KB chat store); scrubber misses IOS
+  space-separated secrets; intake silently 4→3 questions.
+- Builder resumed with class-level fix orders (roster derived from actual read-set; narration composed FROM
+  per-round evidence diffs; per-delegation evidence tagging at write time; ONE gate first on every entry;
+  LLM-judged resume/abandon; fail-safe planner; shared truncation convention with the FE fix; IOS scrubber
+  class fix). Both PRs now in fix cycles; re-reviews before any merge.
