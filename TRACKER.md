@@ -503,3 +503,15 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - Note: gh rejects self-approve (same token) — verdict comments with "VERDICT: APPROVE" are the approval
   signal on this repo.
 - Waiting: BE re-review (PR #73) → then merge #73, #72, restart :3000, live verify, evidence page.
+
+## 2026-08-20 — CW-9 BE re-review: FIX-FIRST round 3 (2 must-fix + 4 med)
+- Verified fixed live: roster truth (+ drift backstop fires), narration-from-evidence (partial overlap names
+  only NEW), per-delegation attribution (race + nested clean, watermark gone), abandon path, thin flag,
+  fail-safe planner, caps. 966 assertions green. Reviewer also caught + killed a stale server (EADDRINUSE)
+  from the prior review before judging — evidence is from the real build.
+- MUST FIX: (1) honest-write-refusal branch UNREACHABLE on chat surface (isDeviceCliRequest gate) — write
+  asks now silently ignored (safe but silent; violates honest-refusal law); (2) scrubber misses plaintext
+  `key <secret>` forms (tacacs/radius/snmp community/isakmp). MED: cache-buster defeats round dedupe;
+  overlap line prints wrong agent's systems; AGENT_SOURCES needs a drift-failing test; wasted rounds
+  downstream of (1). Builder on round 3.
+- Seam with #72 re-confirmed (field=text matches, truncation precedence correct). BE still merges first.
