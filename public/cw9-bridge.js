@@ -868,6 +868,13 @@
      Every field below is STORED TEXT written from model output, so every
      one of them is escaped at the sink like device output is. */
 
+  /* The field names below are the ones a reasonable backend would use; the
+     CW-11 backend branch has not opened a PR yet, so they are NOT pinned to a
+     real seam. That is exactly why the per-row verdict above matters: when the
+     real names differ, the panel says "N lessons can't be read" — it never
+     reports data it cannot read as data that does not exist. Pin these to the
+     backend's actual names when that PR lands, and keep the per-row check for
+     the drift after that. */
   var LESSON_LIST_KEYS = ['lessons', 'items', 'list', 'data', 'results'];
   var LESSON_MAX = 200;
   /* An id becomes a URL path segment on DELETE. Anything that is not a plain
@@ -880,23 +887,34 @@
     return s;
   }
 
+  /* ONE ROW, ONE VERDICT.
+     The first cut of this classified only the CONTAINER — was the body a list
+     at all — and then silently dropped any row it did not recognise. A real
+     payload of rows under different field names (lesson_id / root_cause / …)
+     would therefore have produced an empty list, and the panel would have said
+     "no lessons recorded yet" about data that plainly exists. That is the
+     lie this panel was written to avoid, one level down.
+     So every ROW gets the same three-way verdict the container gets: read, or
+     not read. A row we cannot read is COUNTED and reported, never dropped.
+     Returns a lesson object, or null meaning "this row could not be read". */
   function lessonRow(row) {
-    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+    if (row == null) return null;
+    if (typeof row !== 'object' || Array.isArray(row)) {
       /* a bare string in the list is still a lesson someone wrote */
       var s = lessonField(row, 300);
       return s ? { id: '', incident: '', cause: s, fastestCheck: '', wasted: '', keywords: [], date: '', deletable: false } : null;
     }
-    var id = lessonField(row.id !== undefined ? row.id : (row.file !== undefined ? row.file : row.incident), 100);
-    var incident = lessonField(row.incident !== undefined ? row.incident : (row.incidentId !== undefined ? row.incidentId : row.id), 80);
+    var id = lessonField(pick(row, ['id', 'lessonId', 'lesson_id', 'file', 'incident', 'incidentId']), 100);
+    var incident = lessonField(pick(row, ['incident', 'incidentId', 'incident_id', 'inc', 'id', 'lessonId', 'lesson_id']), 80);
     var out = {
       id: id,
       incident: incident,
-      cause: lessonField(row.cause, 300),
-      fastestCheck: lessonField(row.fastestCheck !== undefined ? row.fastestCheck : row.fastest_check, 220),
-      wasted: lessonField(row.wasted !== undefined ? row.wasted : (row.wastedTime !== undefined ? row.wastedTime : row.wasted_time), 220),
-      keywords: textList(row.keywords !== undefined ? row.keywords : row.symptomKeywords)
+      cause: lessonField(pick(row, ['cause', 'rootCause', 'root_cause']), 300),
+      fastestCheck: lessonField(pick(row, ['fastestCheck', 'fastest_check', 'check', 'fastest']), 220),
+      wasted: lessonField(pick(row, ['wasted', 'wastedTime', 'wasted_time', 'timeWasted']), 220),
+      keywords: textList(pick(row, ['keywords', 'symptomKeywords', 'symptom_keywords', 'symptoms']))
         .map(function (k) { return lessonField(k, 40); }).filter(Boolean).slice(0, 8),
-      date: lessonField(row.date !== undefined ? row.date : (row.closedAt !== undefined ? row.closedAt : row.at), 40),
+      date: lessonField(pick(row, ['date', 'closedAt', 'closed_at', 'at', 'when']), 40),
       deletable: LESSON_ID_OK.test(id),
     };
     if (!out.incident && !out.cause && !out.fastestCheck && !out.keywords.length) return null;
@@ -911,9 +929,20 @@
         if (Array.isArray(raw[LESSON_LIST_KEYS[i]])) { rows = raw[LESSON_LIST_KEYS[i]]; break; }
       }
     }
-    if (!rows) return { list: [], empty: false, unreadable: true, total: 0 };
-    var list = rows.map(lessonRow).filter(Boolean);
-    return { list: list.slice(0, LESSON_MAX), empty: !list.length, unreadable: false, total: list.length };
+    if (!rows) return { list: [], empty: false, unreadable: true, total: 0, badRows: 0, rows: 0 };
+    var list = [], bad = 0;
+    rows.forEach(function (r) {
+      var l = lessonRow(r);
+      if (l) list.push(l); else bad++;
+    });
+    return {
+      list: list.slice(0, LESSON_MAX), total: list.length,
+      rows: rows.length, badRows: bad,
+      unreadable: false,
+      /* EMPTY means the server's record really is empty. A list that came back
+         with rows in it is NOT empty just because we could not read them. */
+      empty: !list.length && !bad,
+    };
   }
 
   function lessonHtml(l) {
@@ -941,7 +970,23 @@
     catch (e) { return lessonsUnreadableHtml('reading the list threw: ' + (e && e.message ? e.message : 'unexpected shape')); }
     if (s.unreadable) return lessonsUnreadableHtml('');
     if (s.empty) return lessonsEmptyHtml();
-    return s.list.map(lessonHtml).join('') +
+    /* Every row unreadable is the SAME claim as an unreadable body: lessons
+       exist and this panel cannot show them. It must never fall through to
+       "none recorded yet". */
+    if (!s.list.length) {
+      return lessonsUnreadableHtml(s.badRows + ' lesson' + (s.badRows === 1 ? '' : 's') +
+        ' came back in a shape this panel does not recognise');
+    }
+    /* Mixed: show what we can read, and SAY how much we could not. */
+    var mixed = s.badRows
+      ? '<div class="ls-mixed"><b>' + esc(String(s.badRows)) + ' more lesson' + (s.badRows === 1 ? '' : 's') +
+        ' can\'t be read</b> — ' + (s.badRows === 1 ? 'it is' : 'they are') +
+        ' on the server but came back in a shape this panel does not recognise, so ' +
+        (s.badRows === 1 ? 'it is' : 'they are') + ' not shown above. ' +
+        'The ' + esc(String(s.list.length)) + ' above ' + (s.list.length === 1 ? 'is' : 'are') +
+        ' not all of them, and this is worth reporting.</div>'
+      : '';
+    return s.list.map(lessonHtml).join('') + mixed +
       '<div class="ls-fine">A lesson only biases where Jarvis looks first. It never runs a check, never approves a change, and never overrides a question it should be asking you.</div>';
   }
 

@@ -276,11 +276,72 @@ ok('a reflection message is NOT treated as an envelope',
   const rows = Array.from({ length: 400 }, (_, i) => ({ id: 'INC-' + i, incident: 'INC-' + i, cause: 'c' + i }));
   ok('the rendered list is capped so one panel cannot hold a thousand rows',
     CW9B.normalizeLessons({ lessons: rows }).list.length === CW9B.LESSON_MAX);
-  ok('a lesson with nothing in it at all is dropped rather than drawn empty',
-    CW9B.normalizeLessons({ lessons: [{}, null, ''] }).list.length === 0);
   ok('a long stored field is trimmed, not left to run off the panel',
     /…/.test(CW9B.lessonsHtml({ lessons: [{ id: 'i', incident: 'x', cause: 'y'.repeat(900) }] })));
 }
+
+// ── 4b. PER-ROW HONESTY (the blocker a review found) ────────────────────────
+// Classifying only the CONTAINER meant an unrecognised ROW was dropped in
+// silence — so a real payload under different field names rendered "no lessons
+// recorded yet" about data that plainly exists. Every row now gets its own
+// verdict, and rows we cannot read are counted and reported.
+{
+  const foreign = { lessons: [{ zzz: 1 }, { qqq: 2 }] };
+  const s = CW9B.normalizeLessons(foreign);
+  ok('rows we cannot read are COUNTED, not dropped in silence',
+    s.badRows === 2 && s.list.length === 0 && s.rows === 2);
+  ok('a list with unreadable rows in it is NOT "empty"', s.empty === false);
+  const h = CW9B.lessonsHtml(foreign);
+  ok('all-unreadable rows give the CAN\'T-BE-READ state, never the empty one',
+    /Lessons can.?t be read/.test(h) && !/No lessons recorded yet/.test(h));
+  ok('and it says how many rows it could not read',
+    /2 lessons came back in a shape this panel does not recognise/.test(h));
+}
+{
+  // the mixed case: some readable, some not
+  const mixed = { lessons: [{ id: 'INC-1', incident: 'INC-1', cause: 'a real cause' }, { zzz: 1 }, { qqq: 2 }] };
+  const s = CW9B.normalizeLessons(mixed);
+  ok('a mixed list keeps the readable rows AND counts the rest',
+    s.list.length === 1 && s.badRows === 2);
+  const h = CW9B.lessonsHtml(mixed);
+  ok('the readable lesson is still shown', /a real cause/.test(h));
+  ok('and the panel says out loud that 2 more could not be read',
+    /2 more lessons can.?t be read/.test(h));
+  ok('and that what is shown is NOT all of them', /not all of them/.test(h));
+  ok('the mixed note is a caveat beside real data, not the empty state',
+    !/No lessons recorded yet/.test(h));
+}
+// The other direction: a genuinely empty record must still say "empty", and a
+// fully readable list must NOT grow a caveat it has no reason to show.
+{
+  ok('a genuinely empty list is still EMPTY, not "unreadable"',
+    CW9B.normalizeLessons({ lessons: [] }).badRows === 0 &&
+    /No lessons recorded yet/.test(CW9B.lessonsHtml({ lessons: [] })));
+  const good = { lessons: [{ id: 'INC-1', incident: 'INC-1', cause: 'c' }, { id: 'INC-2', incident: 'INC-2', cause: 'c' }] };
+  ok('a fully readable list shows no "can\'t be read" caveat at all',
+    !/can.?t be read/.test(CW9B.lessonsHtml(good)) &&
+    CW9B.normalizeLessons(good).badRows === 0);
+  ok('an empty slot in the list counts as a row that could not be read',
+    CW9B.normalizeLessons({ lessons: [{}, null, ''] }).badRows === 3 &&
+    CW9B.normalizeLessons({ lessons: [{}, null, ''] }).empty === false);
+}
+// The aliases are a GUESS until the backend PR pins them — which is precisely
+// why the per-row verdict has to hold. These are the shapes we do read today.
+{
+  const alt = { lessons: [{ lesson_id: 'INC-7', root_cause: 'a root cause', check: 'show optics', symptoms: ['loss'] }] };
+  const s = CW9B.normalizeLessons(alt);
+  ok('a snake_case payload is read rather than reported unreadable',
+    s.list.length === 1 && s.badRows === 0);
+  const h = CW9B.lessonsHtml(alt);
+  ok('and every field of it lands on screen',
+    /INC-7/.test(h) && /a root cause/.test(h) && /show optics/.test(h) && /ls-kw">loss/.test(h));
+  ok('the guessed-alias risk is written down where the next person will see it',
+    /NOT pinned to a[\s\S]{0,12}real seam/.test(sharedJs));
+}
+// The collapsed hint must not read "none yet" over data it could not read.
+ok('the panel hint counts the unreadable rows too, so a collapsed panel cannot lie',
+  /if\(!s\.total\) return s\.badRows \? \(s\.badRows \+ ' unreadable'\) : 'none yet';/.test(desk) &&
+  /s\.badRows \? ' · ' \+ s\.badRows \+ ' unreadable' : ''/.test(desk));
 
 // ── 5. the page wiring ──────────────────────────────────────────────────────
 ok('the Lessons panel is on the desk, in the queue footer',
@@ -322,6 +383,30 @@ ok('the bridge (triage) message path decorates the same way',
   /cw11Decorate\(jvMsg\(d\.agentName \|\| d\.agent \|\| 'Engineer'/.test(desk));
 ok('the bridge path also forwards the new verdict arrays',
   /verified:d\.verified, suspected:d\.suspected/.test(desk));
+// The bridge path REBUILDS the envelope field by field, so a field left out is
+// a field it silently loses. A review proved the plain path kept the reflection
+// marker while the bridge path — the one a real P1 call runs on — dropped it.
+// Both CW-11 message fields must be on that rebuild.
+ok('the bridge path forwards the reflection marker, not just the verdict arrays',
+  /reflection:d\.reflection/.test(desk));
+ok('the bridge path forwards lessonRef too', /lessonRef:d\.lessonRef \|\| d\.lesson_ref/.test(desk));
+{
+  // both directions: every field cw11Decorate READS must be on the rebuilt
+  // object, and the rebuild must not have quietly lost one of the older ones.
+  const rebuild = /cw9Render\(\{ kind:d\.kind,[\s\S]*?\}\)\)\{/.exec(desk);
+  const block = rebuild ? rebuild[0] : '';
+  ok('the rebuilt bridge envelope carries every field the decorator reads',
+    ['reflection', 'lessonRef'].every((f) => block.indexOf(f + ':') !== -1));
+  ok('and it still carries the CW-9 fields it always did',
+    ['kind', 'text', 'questions', 'roster', 'finding', 'verdict', 'change', 'resume']
+      .every((f) => block.indexOf(f + ':') !== -1));
+}
+// The dev hook must not race the panel's own read (a reviewer watched the
+// fixture appear and then be wiped by the fetch the open() had started).
+ok('the lessons dev hook waits for the panel\'s own read before painting',
+  /__cw11DevLessons = function\(d\)\{[\s\S]{0,900}LESSONS\.inflight[\s\S]{0,200}setTimeout\(settle/.test(desk));
+ok('and it has a floor, because the toggle event is queued rather than synchronous',
+  /Date\.now\(\) - start < 300/.test(desk));
 ok('a decoration failure can never take the message with it',
   /function cw11Decorate[\s\S]{0,900}catch\(e\)\{\}/.test(desk));
 ok('the CW-11 styles live with the shared module, not on one page',

@@ -242,6 +242,11 @@
 .ls-kws{display:flex;flex-wrap:wrap;gap:.25rem;margin-top:.3rem}
 .ls-kw{font-family:var(--mono);font-size:.58rem;color:var(--ink3);border:1px solid var(--line);
   border-radius:999px;padding:.05rem .34rem;overflow-wrap:anywhere}
+/* rows the panel could not read, reported beside the ones it could. Marked
+   like a caveat, not like a failure — the readable lessons above are real. */
+.ls-mixed{border:1px dashed var(--warn);border-radius:8px;background:var(--warn-bg);
+  padding:.35rem .5rem;font-size:.66rem;line-height:1.5;color:var(--ink2);margin-top:.2rem}
+.ls-mixed b{color:var(--warn)}
 .ls-note{font-size:.75rem;line-height:1.5;color:var(--ink2)}
 .ls-fine{font-size:.63rem;color:var(--ink3);line-height:1.45;margin-top:.3rem}
 .ls-err{font-size:.66rem;color:var(--bad);line-height:1.45;margin-top:.3rem}
