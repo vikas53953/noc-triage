@@ -1068,7 +1068,7 @@ function resumeClarification(agentId, message) {
     pendingChoice.delete(conversationId());
     say(p.agentId, `👍 Dropped it — "${p.command}" was never sent to any device.`);
     ctx.updateAgentStatus(p.agentId, 'idle', 'Operator cancelled — ran nothing');
-    return true;
+    return Promise.resolve(true);   // the line above IS the reply (sync) — CW-12
   }
 
   // A FRESH COMMAND SUPERSEDES THE PARKED ONE. This test has to run BEFORE the

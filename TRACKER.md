@@ -760,3 +760,14 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - LOW: NOT SENT / REPLIED survive a reload (facts); SENT / PICKED-UP still swept.
 - Info: dev hooks guard null. Pre-existing canned "On it — querying…" line noted for a Law-1 cleanup.
 - Verified: 35 suites exit 0; browser 37/37 (:3123) + 18/18 (:3124). Round-3 re-review requested.
+
+## 2026-09-05 — CW-12 review round 3: VERDICT: APPROVE ✅ (1 LOW honest gap fixed pre-merge)
+- Reviewer re-ran wire ordering on 8 paths (ping, help, Config-Keeper read, write refusal, unknown
+  @mention, no-key decline, mock-401 failure) — answered always after the last reply and the flight's
+  done; early-resolve audit of every handler path found nothing. Browser: Sent 82ms → Picked up 1569ms →
+  still Picked up while "On it" shows → Answered only in the same sample as the Pong.
+- LOW fixed: the "never mind" cancel branch of resumeClarification returned a bare `true` (fail-closed →
+  bubble stuck at Picked up); now Promise.resolve(true) like its siblings, pinned in the test.
+- Info (not this wave): simulateStandup/SquadStatus/WeeklyReport/showJarvisHelp are dead code (Law-1
+  leftovers); canned "On it — querying…" relay line can land after the answer. Both → polish backlog.
+- Merging PR #78 (merge commit, repo convention).

@@ -252,7 +252,9 @@ console.log('\nCW-12 backend — presence is a mirror of real work, never a gues
     const la = fs.readFileSync(path.join(__dirname, 'live-agents.js'), 'utf8');
     ok('resumeClarification returns the read\'s promise for a pick / "all", and a resolved promise after a sync line',
       /return configKeeper\(p\.agentId, p\.request, \{ allDevices: true \}\)/.test(la) && /return configKeeper\(p\.agentId, p\.request, \{ device: c\.hostname \}\)/.test(la)
-      && (la.match(/return Promise\.resolve\(true\);   \/\/ the line above IS the reply/g) || []).length === 2);
+      && (la.match(/return Promise\.resolve\(true\);   \/\/ the line above IS the reply/g) || []).length === 3);
+    ok('…including the "never mind" cancel branch (review round 3)', /Operator cancelled — ran nothing'\);\s*\n\s*return Promise\.resolve\(true\);/.test(la));
+    ok('no say-only branch of resumeClarification returns a bare true any more', !/say\(p\.agentId,[\s\S]{0,400}?\n\s*return true;/.test(la.slice(la.indexOf('function resumeClarification'), la.indexOf('function pickCandidate'))));
     ok('live.handle wraps its synchronous honest replies (not connected / cannot answer)', (la.match(/Promise\.resolve\((notConnected|cannotAnswer)\(/g) || []).length === 3);
     // functional: every runAgentAction-style return is a thenable or false
     const live = require('./live-agents');
