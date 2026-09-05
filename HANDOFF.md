@@ -5,7 +5,7 @@ Live, honest NOC/SOC triage console for Vikas. Repo **vikas53953/noc-triage** �
 suite guards the tree). PROJECT.md is the one-page brief; this file is the deep-dive build state.
 Run: `cd C:\Users\vikasmit\noc-triage && npm install && PORT=3000 node server.js` → open
 **http://localhost:3000/desk.html** (the real console; the root page is the older classic view).
-Tests: `npm test` (35 suites, ~2000 assertions, must stay green — chain exits non-zero on any failure).
+Tests: `npm test` (37 suites incl. the public-repo secret guard, ~2200 assertions, must stay green — chain exits non-zero on any failure).
 `.env.local` (gitignored) holds Cisco DevNet sandbox creds + `ANTHROPIC_API_KEY`.
 Jarvis default model `claude-opus-5`; ALL testing uses `JARVIS_MODEL=claude-sonnet-5` (Vikas's spend rule).
 
@@ -82,6 +82,14 @@ account) — the approval signal is a PR comment starting "VERDICT: APPROVE".
   init snapshot, nothing persisted. Shared module createPresence/receiptHtml in public/cw9-bridge.js.
   Proven live in the cloud with a mock-401 endpoint (thinking → done(error)); streamed `typing` and agent
   `checking` against real devices still to be eyeballed on the PC (seams unit-proven).
+- **Polish P1** (2026-09-05, PR #79, 2 review rounds → APPROVE): Law-1 leftovers gone (dead
+  simulateStandup/SquadStatus/WeeklyReport/showJarvisHelp; the canned "@Name On it — querying…" ack on a
+  random timer; the "📨 @Name …" relay bubble attributed to Jarvis). An @mention's only reply is the
+  agent's real read; a bare "@NetOps" gets a question (law 2). STATUS.json watcher: transparency-contract
+  shape, skips our own writes, validates status ∈ active/idle/offline. Desk badge "Cockpit". Phone-width
+  header: controls never clip, brand gives way, proven at 320/360/390/480/600/601/760 both themes.
+- **Public-repo guard** (2026-09-05): sources/secrets.public.test.js fails npm test if a credential-shaped
+  string is tracked (repo is PUBLIC by Vikas's decision).
 
 ## Key files
 server.js (routes, WS broadcast, gate wiring — NAMED_WRITE_SURFACES lists gated non-/api/copilot surfaces;
@@ -103,10 +111,10 @@ public/desk.html + public/cw9-bridge.js/.css (shared UI module; dev fixtures in 
    (Vikas saw the recommendation; not yet approved — ask him).
 3. Polish backlog: probe planner sometimes asks bare "ping"/"traceroute" (Config-Keeper honestly refuses —
    wasted rounds); lesson consult chip dark until a first real lesson exists; 2 LOW review leftovers in
-   PR #74/#76 comments; short-device-error prose over-scrub LOW; header badge still says "COCKPIT · CW-3";
-   390px horizontal overflow (header name tag + capabilities drawer); Law-1 leftovers found by the CW-12
-   reviewer — dead simulateStandup/SquadStatus/WeeklyReport/showJarvisHelp, and the canned "@Jarvis On it —
-   querying…" relay line that can land after the real answer.
+   PR #74/#76 comments (the CW-10 preview "shrink" reflow is a known cosmetic, not a bug); short-device-error
+   prose over-scrub LOW; the STATUS.json watcher's self-write skip is a 3s window, not content-based (LOW).
+   DONE in Polish P1 (PR #79, 2026-09-05): dead Law-1 simulators + canned @mention ack + Jarvis-attributed
+   relay bubble removed; watcher shape/validation; "Cockpit" badge; phone-width header proven at 320–760px.
 4. Parked features (need Vikas's pick): FortiGate/F5/threat feeds, RBAC/SSO, PDF/email export, HA front.
 
 ## Needs Vikas (each flips a BUILT feature live; all honest-if-absent today)

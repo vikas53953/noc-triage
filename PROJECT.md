@@ -78,6 +78,7 @@ control plane above Claude Managed Agents (TypeScript, pnpm monorepo). A separat
 | CW-9 | Bridge conduct: ask-first on every path, pinned chat envelope, V2 split terminal, honest roster, evidence-diffed narration, write refusals | PRs #72/#73, `docs/shots/cw9-*` |
 | CW-10 | Official Anthropic SDK, prompt caching, streaming (`say_delta`), spend meter, web search on reasoning only, compaction | PRs #74/#75, `docs/shots/cw10-*` |
 | CW-11 | Reflexion: round reflection, verdict self-check (verified vs suspected), prediction follow-through, lessons memory | PRs #76/#77, `docs/shots/cw11-*` |
+| Polish P1 | Law-1 leftovers removed (canned @mention ack, Jarvis-attributed relay, dead simulators), watcher honesty, phone-width header | PR #79 |
 | CW-12 | Live presence: "Jarvis is typing…", "Router-Expert is checking…", "waiting for your approval", receipt ticks sent → picked up → answered — driven by real events only, never persisted | PR #78 (3 review rounds), `docs/shots/cw12-*` |
 
 The **laws** (never regressed, every reviewer checks them): intent-first routing, ask-before-assume,
@@ -89,7 +90,7 @@ never fabricate, permission gate + read-only guardrail, secrets never persist, s
 - The project was idle from 2026-08-20 (Vikas paused at ~90% weekly quota; no Cursor commits landed).
 - 2026-09-05: resumed in Claude Code on the web. Named, centralised (this file), and **CW-12 Live
   Presence shipped** — built, adversarially reviewed over three rounds, merged as PR #78.
-- Master is green: 35 suites. Nothing in flight.
+- Master is green: 37 suites (incl. the public-repo secret guard). In flight: CW-13 (PR #80, review round 2).
 - The cloud container has no `ANTHROPIC_API_KEY` and no DevNet reach, so the live-LLM parts of CW-12
   were proven with a mock endpoint; the streamed "typing" and a real device "checking" are still to be
   eyeballed on the PC.
@@ -106,9 +107,8 @@ never fabricate, permission gate + read-only guardrail, secrets never persist, s
    and cheap providers next, through a framework (law 9/10 in HANDOFF), not hand-written adapters.
    Needs Vikas's pick of framework — recommendation in PIPELINE.md.
 4. Polish backlog — probe planner sometimes asks bare `ping`/`traceroute`; lesson chip dark until a
-   first real lesson; two LOW review leftovers on PRs #74/#76; short-device-error over-scrub; header
-   badge still reads "COCKPIT · CW-3"; 390 px horizontal overflow; dead Law-1 leftovers and the canned
-   "On it — querying…" relay line (found by the CW-12 reviewer).
+   first real lesson; two LOW review leftovers on PRs #74/#76; short-device-error over-scrub. (Done
+   2026-09-05 in Polish P1: dead Law-1 code, canned @mention lines, badge, phone-width header.)
 5. **Join the two interfaces** — onboarding → Mission Control (home) → NOC Triage (on demand): one
    operator identity, one way in, cross-links both ways. Needs Vikas's design call on what "onboarding"
    means in v1 (name tag only, as today, or a real sign-in).
