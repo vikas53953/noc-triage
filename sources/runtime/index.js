@@ -136,16 +136,29 @@ function refuseNoKey(question) {
 // cause chain is walked to its root — MESSAGES ONLY, never the error object,
 // which carries the request body and the URL (same posture as claude.js
 // mapError: status code + the provider's own words, nothing from the request).
+// A provider or proxy can echo request headers back in an error body; a key
+// must never ride that into the chat, the log or the history. Key-shaped
+// tokens are cut here, on top of the session-log scrubber's own forms.
+const KEY_SHAPES = [
+  /sk-ant-[A-Za-z0-9_-]{8,}/g, /\bsk-[A-Za-z0-9_-]{16,}/g, /\b(?:x-api-key|authorization|api[-_]?key)\s*[:=]\s*\S+/gi,
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/g,
+];
+function scrubKeys(text) {
+  let out = session.scrub(String(text));
+  for (const re of KEY_SHAPES) out = out.replace(re, '«redacted»');
+  return out;
+}
+
 function readableError(err) {
   if (!err) return 'an unexpected error';
   if (err.message === 'no_api_key') return 'no Anthropic API key is set';
   const messages = [];
   let e = err;
   for (let i = 0; e && i < 5; i++) {
-    if (e.message && String(e.message).trim()) messages.push(String(e.message).trim());
+    if (e.message && String(e.message).trim()) messages.push(scrubKeys(String(e.message).trim()).replace(/\.+$/, ''));
     e = e.cause;
   }
-  const root = messages[messages.length - 1] || String(err);
+  const root = messages[messages.length - 1] || scrubKeys(String(err));
   // Only a real HTTP failure carries the status; a stall or a socket death
   // after a 200 is named for what it is.
   const status = Number(err.statusCode || err.status);
@@ -372,7 +385,17 @@ async function runOnRuntime(q, gate, { conversationId, operatorTz }) {
 
     let input = inputFor(q, gate, operatorTz);
     for (let attempt = 0; attempt <= MAX_RESUMES; attempt++) {
-      stream = await run(squadInfo.jarvis, input, { stream: true, maxTurns: MAX_TURNS, signal: runAbort.signal });
+      stream = await run(squadInfo.jarvis, input, {
+        stream: true, maxTurns: MAX_TURNS, signal: runAbort.signal,
+        // A tool the current agent does not hold (an engineer asking for
+        // delegate_read, a made-up name) is answered to the MODEL in our
+        // words and the run goes on — never aborted with SDK wording, never
+        // run (round-2 review of PR #81).
+        toolNotFoundBehavior: 'return_error_to_model',
+        toolErrorFormatter: ({ kind, toolName, defaultMessage }) => (kind === 'tool_not_found'
+          ? `evidence[none] ${toolName}: no such tool here — nothing ran, nothing was invented. Use only the tools listed for you; say so to the operator if none fits.`
+          : defaultMessage),
+      });
       for await (const ev of stream) onEvent(ev, squadInfo);
       await stream.completed;
       lastResult = stream;
@@ -447,5 +470,5 @@ async function runOnRuntime(q, gate, { conversationId, operatorTz }) {
 
 module.exports = {
   init, ask,
-  _test: { cappedDeltas, askNarrowing, inputFor, readableError, MAX_TURNS, MAX_RESUMES, RUN_TIMEOUT_MS, PURPOSE },
+  _test: { cappedDeltas, askNarrowing, inputFor, readableError, scrubKeys, MAX_TURNS, MAX_RESUMES, RUN_TIMEOUT_MS, PURPOSE },
 };

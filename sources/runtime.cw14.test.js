@@ -539,6 +539,25 @@ spend._setDir(spendDir);
     ok('the answer is posted AS Router-Expert (chat_message agent + every delta), settling one preview', !!finalRE && finalRE.agent === 'router-expert' && finalRE.text === 'Fabric is clean: 0 critical faults on apic1.' && deltas.length > 0 && deltas.every((d) => d.agent === 'router-expert' && d.messageId === finalRE.env.messageId), trim({ finalRE, deltas }));
     ok('Router-Expert flipped active ("Took the handoff") → idle, Jarvis ends idle', statuses.some((s) => s.agent === 'router-expert' && s.state === 'active' && /handoff/.test(s.label)) && statuses.some((s) => s.agent === 'router-expert' && s.state === 'idle') && statuses[statuses.length - 1].agent === 'jarvis' && statuses[statuses.length - 1].state === 'idle', trim(statuses));
 
+    // (h) Round 2: a tool the current agent does not hold is answered to the model in our words; the run goes on.
+    resetHarness();
+    understand = NOT_A_PROBLEM;
+    script = [
+      { tool: { name: 'reboot_device', input: { device: 'sw1' } } },
+      { text: 'There is no such tool here, so nothing ran. Ask for a read.' },
+    ];
+    await runtime.ask('reboot sw1 via the tool', { conversationId: 'c10h' });
+    ok('an unknown tool name does NOT abort the run: the model gets our "no such tool — nothing ran" result and answers', calls.length === 2 && /evidence\[none\] reboot_device: no such tool here — nothing ran/.test(calls[1].toolResult) && withKind('say').some((m) => /nothing ran/.test(m.text)), trim({ n: calls.length, r: calls[1] && calls[1].toolResult, said: said.map((m) => m.text) }));
+    ok('…and no SDK "not found in agent" line reached the wire, zero reads', !said.some((m) => /not found in agent/.test(m.text)) && gathers.length === 0, trim(said));
+
+    // (i) Round 2: a provider error body that echoes a key never reaches the wire.
+    resetHarness();
+    understand = NOT_A_PROBLEM;
+    script = [{ status: 401, message: 'invalid x-api-key: sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 (authorization: Bearer sk-ant-api03-ABCDEFGHIJ)' }];
+    await runtime.ask('is sw1 up', { conversationId: 'c10i' });
+    ok('a 401 whose body echoes the key → the honest line carries «redacted», never the key', said.length === 1 && /provider error \(401\)/.test(said[0].text) && /«redacted»/.test(said[0].text) && !/sk-ant-api03/.test(said[0].text) && !/sk-ant-api03/.test(logs.join('\n')), trim(said));
+    ok('readableError trims the SDK\'s trailing full stop (no "..")', runtime._test.readableError(new Error('Tool x not found in agent Jarvis.')) === 'Tool x not found in agent Jarvis');
+
     // (g) The key never sits in the model cache signature.
     const modelSrc = fs.readFileSync(path.join(__dirname, 'runtime', 'model.js'), 'utf8');
     ok('model.js keys its cache on a digest of the key, never the key itself', /keyTag/.test(modelSrc) && !/\|\$\{key\}`/.test(modelSrc));
