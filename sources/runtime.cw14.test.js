@@ -27,6 +27,8 @@ const path = require('path');
 
 process.env.ANTHROPIC_API_KEY = 'test-key-not-real';
 process.env.JARVIS_MODEL = 'claude-sonnet-5';     // the spend rule: tests on sonnet
+process.env.JARVIS_RUNTIME_TIMEOUT_MS = '1000';   // the stall bound (its floor), short for the hang tests (§10)
+process.env.OPENAI_API_KEY = 'test-openai-key-not-real';   // §10: the SDK's tracing exporter must stay silent
 delete process.env.MODEL_PROVIDER;
 
 const claude = require('./claude');
@@ -87,10 +89,14 @@ function toolResultText(content) {
   return [].concat(content).filter((c) => c && c.type === 'tool_result')
     .map((c) => [].concat(c.content || []).map((x) => (typeof x === 'string' ? x : x.text || '')).join('')).join('\n');
 }
+let hangFetch = false;   // §10: a transport that never answers (honours the abort signal)
+let stallAfter = 0;      // §10: a stream that sends N frames, then never closes
 const mockFetch = async (url, init) => {
   const body = JSON.parse(init.body);
   const last = body.messages[body.messages.length - 1];
+  if (hangFetch) return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true }));
   calls.push({ model: body.model, stream: !!body.stream, tools: (body.tools || []).map((t) => t.name),
+    maxTokens: body.max_tokens, cacheControl: body.cache_control || null,
     lastRole: last.role, lastTypes: contentTypes(last.content), toolResult: toolResultText(last.content),
     system: JSON.stringify(body.system || ''), messages: body.messages });
   const step = script.shift() || { text: '(script exhausted)' };
@@ -100,6 +106,14 @@ const mockFetch = async (url, init) => {
     : msg([{ type: 'text', text: step.chunks ? step.chunks.join('') : step.text }], 'end_turn');
   if (!body.stream) return new Response(JSON.stringify(m), { status: 200, headers: { 'content-type': 'application/json' } });
   if (step.failAfter) return sseBroken(m, step.chunks, step.failAfter);
+  if (stallAfter) {
+    const frames = sseFrames(m, step.chunks);
+    const enc = new TextEncoder();
+    return new Response(new ReadableStream({
+      start(c) { frames.slice(0, stallAfter).forEach((f) => c.enqueue(enc.encode(f))); },
+      pull() { return new Promise(() => {}); },   // never another byte, never closes
+    }), SSE_HEADERS);
+  }
   return sse(m, step.chunks);
 };
 model._test.setFetch(mockFetch);
@@ -135,7 +149,7 @@ let gatherImpl = null;
 let screenImpl = null;
 function resetHarness() {
   said.length = 0; deltas.length = 0; statuses.length = 0; gathers.length = 0; logs.length = 0; calls.length = 0;
-  script = []; gatherImpl = null; screenImpl = null; understand = null;
+  script = []; gatherImpl = null; screenImpl = null; understand = null; hangFetch = false; stallAfter = 0;
   conduct._threads.clear();
   runtime.init({
     say: (agent, text, env) => said.push({ agent, text: String(text), env: env || null }),
@@ -149,7 +163,11 @@ function resetHarness() {
     conversationId: () => 'conv-cw14',
     gather: (agentId, question, device, incidentId) => {
       gathers.push({ agentId, question, device, incidentId });
-      if (gatherImpl) return gatherImpl(agentId, question, device, incidentId);
+      // live-agents.gatherWithEvidence flips the engineer active → idle itself.
+      statuses.push({ agent: agentId, state: 'active', label: `Jarvis delegation: ${String(question || '').slice(0, 60)}` });
+      const idle = () => statuses.push({ agent: agentId, state: 'idle', label: 'Delegation turn ended' });
+      if (gatherImpl) return Promise.resolve().then(() => gatherImpl(agentId, question, device, incidentId)).finally(idle);
+      idle();
       return Promise.resolve({ agentId, name: 'NetOps', connected: true, stance: 'evidence',
         text: 'sw1 is healthy: IOS-XE 17.12.01, uptime 41 days, no open issues.',
         cli: [{ host: 'sw1', command: 'show version', output: 'Cisco IOS XE Software, Version 17.12.01\nsw1 uptime is 41 days', transport: 'cmdrunner', source: 'catalyst-center' }] });
@@ -213,8 +231,11 @@ spend._setDir(spendDir);
     ok('…and the deltas stream under THAT messageId, ending done:true (not aborted)',
       deltas.length > 0 && deltas.every((d) => d.messageId === finalMsg.env.messageId) && deltas[deltas.length - 1].done === true && !deltas[deltas.length - 1].aborted, trim(deltas));
     ok('…the streamed preview reassembles to the answer', deltas.map((d) => d.delta).join('') === ANSWER, deltas.map((d) => d.delta).join(''));
-    ok('presence: NetOps flipped active → idle around the read (the CW-12 "Router-Expert is checking…" seam)',
-      statuses.some((s) => s.agent === 'netops' && s.state === 'active') && statuses.some((s) => s.agent === 'netops' && s.state === 'idle'), trim(statuses));
+    ok('presence: NetOps flipped active → idle around the read ONCE (live-agents owns the flip; the runtime does not add a second — review #81)',
+      statuses.filter((s) => s.agent === 'netops' && s.state === 'active').length === 1 && statuses.filter((s) => s.agent === 'netops' && s.state === 'idle').length === 1, trim(statuses));
+    ok('the "@NetOps — question" line is on the wire once, spoken by Jarvis (same line jarvis.js speaks)', withKind('say').filter((m) => m.agent === 'jarvis' && /^@NetOps — Is sw1 healthy/.test(m.text)).length === 1, trim(withKind('say')));
+    ok('request shape: the legacy output bound (max_tokens 3000, never the adapter\'s 128k) and prompt caching (top-level cache_control) on every call',
+      calls.every((c) => c.maxTokens === 3000 && c.cacheControl && c.cacheControl.type === 'ephemeral'), trim(calls.map((c) => [c.maxTokens, c.cacheControl])));
     ok('Jarvis ends idle, answered', statuses[statuses.length - 1].agent === 'jarvis' && statuses[statuses.length - 1].state === 'idle');
     ok('no envelope kind outside the pinned set', kinds().every((k) => ['say', 'ask', 'roster', 'finding', 'verdict', 'change'].includes(k)), trim(kinds()));
     console.log('     wire finding:', trim({ ...findings[0], env: { ...findings[0].env, finding: { ...findings[0].env.finding, cli: { ...findings[0].env.finding.cli, output: '…' } } } }));
@@ -330,6 +351,8 @@ spend._setDir(spendDir);
       ok('the pause was rejected and said honestly on the wire', said.some((m) => m.env && m.env.kind === 'say' && /classified as a write, so I did not run it/.test(m.text)), trim(said));
       ok('the run resumed once so the model could finish honestly (2 provider calls)', calls.length === 2 && withKind('say').some((m) => /was not run/.test(m.text)), String(calls.length));
       ok('the rejection reached the model as the tool outcome, not a fabricated success', !/applied/i.test(calls[1].toolResult) || /reject|not approved|denied/i.test(calls[1].toolResult), trim(calls[1].toolResult));
+      ok('spend: the resume records each model response ONCE — 2 calls, 2 records (rawResponses is cumulative across a resume; review #81)',
+        spend.all().filter((r) => r.purpose === 'runtime' && r.conversationId === 'c6').length === 2, String(spend.all().filter((r) => r.conversationId === 'c6').length));
 
       // A read-only MCP tool runs — through mcp.gather with approved:false.
       resetHarness();
@@ -424,6 +447,101 @@ spend._setDir(spendDir);
     ok('.env.example documents JARVIS_RUNTIME (default legacy) and MODEL_PROVIDER', /JARVIS_RUNTIME=legacy/.test(envExample) && /MODEL_PROVIDER=anthropic/.test(envExample));
     ok('jarvis.js is not required by the runtime modules (the legacy loop is not a dependency of its replacement)',
       !/require\(['"]\.\.\/jarvis['"]\)/.test(read('sources/runtime/index.js') + read('sources/runtime/squad.js')));
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  section('10. REVIEW ROUND 1 (PR #81) — hang, trace leak, bad tool input, handoff attribution, own-id reads:');
+  {
+    const squadMod = require('./runtime/squad');
+    const sdk = await import('@openai/agents');
+
+    // (a) A transport that never answers → aborted at the stall bound, said honestly, presence closed.
+    resetHarness();
+    understand = NOT_A_PROBLEM;
+    hangFetch = true;
+    const events = [];
+    claude.setActivityListener((ev) => events.push(ev));
+    const t0 = Date.now();
+    await runtime.ask('is sw1 up?', { conversationId: 'c10a' });
+    const took = Date.now() - t0;
+    claude.setActivityListener(null);
+    ok('a model call that sends NO bytes is aborted at JARVIS_RUNTIME_TIMEOUT_MS (1000ms here), not left hanging', took >= 900 && took < 4000, `${took}ms`);
+    ok('…and the honest failure line names the stall — nothing invented', said.length === 1 && /I couldn't complete my reasoning — .*stalled — no bytes for 1000ms/.test(said[0].text), trim(said));
+    ok('…no presence span left open (a call that never started streaming opened none), Jarvis idle — no "thinking" left on screen',
+      events.filter((e) => e.phase === 'start').length === events.filter((e) => e.phase === 'end').length && statuses[statuses.length - 1].agent === 'jarvis' && statuses[statuses.length - 1].state === 'idle', trim({ events, last: statuses[statuses.length - 1] }));
+
+    // (b) A stream that starts and then stalls mid-answer → aborted:true delta + the honest line settling that bubble.
+    resetHarness();
+    understand = NOT_A_PROBLEM;
+    stallAfter = 3;   // message_start, content_block_start, one delta — then silence
+    script = [{ chunks: ['sw1 looks ', 'fine so far.'] }];
+    const ev2 = [];
+    claude.setActivityListener((ev) => ev2.push(ev));
+    await runtime.ask('sw1 quick check', { conversationId: 'c10b' });
+    claude.setActivityListener(null);
+    const lastDelta = deltas[deltas.length - 1];
+    ok('…the open "typing" span is closed with reason:error and Jarvis is idle', ev2.some((e) => e.phase === 'stream') && ev2.some((e) => e.phase === 'end' && e.reason === 'error') && statuses[statuses.length - 1].state === 'idle', trim(ev2));
+    ok('a stream that goes silent mid-answer is aborted at the stall bound (aborted:true on the preview)', !!lastDelta && lastDelta.done === true && lastDelta.aborted === true, trim(deltas));
+    ok('…and the honest line carries the SAME messageId, so the half-written bubble settles', said.length === 1 && /stalled/.test(said[0].text) && said[0].env && said[0].env.messageId === lastDelta.messageId, trim(said));
+
+    // (c) The SDK's tracing exporter never fires: OPENAI_API_KEY is set for this whole suite, and nothing has left for openai.com.
+    const provider = sdk.getGlobalTraceProvider();
+    const seen = [];
+    provider.registerProcessor({ onTraceStart: async (t) => seen.push(t), onTraceEnd: async () => {}, onSpanStart: async () => {}, onSpanEnd: async () => {}, shutdown: async () => {}, forceFlush: async () => {} });
+    const realFetch = globalThis.fetch;
+    const outbound = [];
+    globalThis.fetch = async (url, init) => { outbound.push(String(url)); return realFetch(url, init); };
+    resetHarness();
+    understand = NOT_A_PROBLEM;
+    script = [{ text: 'sw1 is not something I have a reading for yet.' }];
+    await runtime.ask('anything about sw1?', { conversationId: 'c10c' });
+    await provider.forceFlush().catch(() => {});
+    globalThis.fetch = realFetch;
+    ok('tracing is OFF: with OPENAI_API_KEY in the environment, no trace was created and nothing was sent to openai.com (law 5; review #81)',
+      seen.length === 0 && !outbound.some((u) => /openai\.com/.test(u)), `${seen.length} traces, outbound=${JSON.stringify(outbound)}`);
+    ok('…the runtime disables it before the first run, in code, unconditionally', /setTracingDisabled\(true\)/.test(fs.readFileSync(path.join(__dirname, 'runtime', 'index.js'), 'utf8')));
+
+    // (d) Arguments that fail the tool's schema: nothing runs, nothing is said, the model gets OUR wording.
+    resetHarness();
+    understand = NOT_A_PROBLEM;
+    script = [
+      { tool: { name: 'delegate_read', input: { agentId: 'netops', question: 'q', device: null, incidentId: 42 } } },   // incidentId must be string|null
+      { text: 'The read could not be made because the arguments were wrong. I have no reading.' },
+    ];
+    await runtime.ask('sw1 incident?', { conversationId: 'c10d' });
+    ok('a schema-invalid tool call runs NOTHING: zero reads, no "@NetOps —" line, no NetOps status flip', gathers.length === 0 && !said.some((m) => /^@NetOps/.test(m.text)) && !statuses.some((s) => s.agent === 'netops'), trim({ gathers, said: said.map((m) => m.text), statuses }));
+    ok('…and the model reads OUR words (did not run / did not match / nothing invented), not the SDK\'s "An error occurred…" boilerplate',
+      /evidence\[none\] delegate_read: the tool did not run — the arguments did not match/.test(calls[1].toolResult) && /nothing was invented/.test(calls[1].toolResult) && !/An error occurred while running the tool/.test(calls[1].toolResult), trim(calls[1].toolResult));
+
+    // (e) Every engineer gets a read tool bound to ITSELF; only Jarvis can pick an engineer by id.
+    const built = await squadMod.build({ roster: () => ROSTER.slice(), nameOf: (id) => id, abilities: () => [], gather: async () => null }, { model: await model.build() });
+    ok('Jarvis holds delegate_read (any engineer) + a handoff to every engineer', built.jarvis.tools.some((t) => t.name === 'delegate_read') && built.jarvis.handoffs.length === ROSTER.length);
+    ok('each engineer holds exactly ONE read tool, bound to its own id (read_as_<id>), never delegate_read',
+      built.engineers.every((e) => e.tools.length === 1 && e.tools[0].name === `read_as_${squadMod._test.toolSafe(built.idOfAgent(e.name))}`), trim(built.engineers.map((e) => e.tools.map((t) => t.name))));
+    ok('modelSettingsFor(anthropic) = max 3000 + top-level cache_control; another provider gets the bound only',
+      squadMod._test.modelSettingsFor('anthropic').maxTokens === 3000 && squadMod._test.modelSettingsFor('anthropic').providerData.providerOptions.anthropic.cacheControl.type === 'ephemeral' && !squadMod._test.modelSettingsFor('openai').providerData);
+
+    // (f) A handoff: Router-Expert takes it, reads AS ITSELF, and its answer is posted as Router-Expert — not as Jarvis.
+    resetHarness();
+    understand = NOT_A_PROBLEM;
+    gatherImpl = async (agentId) => ({ agentId, name: 'Router-Expert', connected: true, stance: 'evidence', text: 'ACI fabric healthy: 0 faults critical.',
+      cli: [{ host: 'apic1', command: 'show faults', output: '0 critical', transport: 'api', source: 'aci' }] });
+    script = [
+      { tool: { name: 'transfer_to_Router_Expert', input: {} } },
+      { tool: { name: 'read_as_router_expert', input: { question: 'fabric faults', device: null, incidentId: null } } },
+      { chunks: ['Fabric is clean: ', '0 critical faults on apic1.'] },
+    ];
+    await runtime.ask('any fabric faults?', { conversationId: 'c10f' });
+    ok('after the handoff the model saw ONLY the engineer\'s own read tool (no delegate_read, no handoffs)', calls.length === 3 && calls[1].tools.join() === 'read_as_router_expert', trim(calls.map((c) => c.tools)));
+    ok('the read ran as router-expert (own id, never another engineer)', gathers.length === 1 && gathers[0].agentId === 'router-expert', trim(gathers));
+    ok('the "@Router-Expert — fabric faults" line is spoken by router-expert itself', withKind('say').some((m) => m.agent === 'router-expert' && /^@Router-Expert — fabric faults/.test(m.text)), trim(withKind('say')));
+    const finalRE = withKind('say').filter((m) => m.env.messageId).pop();
+    ok('the answer is posted AS Router-Expert (chat_message agent + every delta), settling one preview', !!finalRE && finalRE.agent === 'router-expert' && finalRE.text === 'Fabric is clean: 0 critical faults on apic1.' && deltas.length > 0 && deltas.every((d) => d.agent === 'router-expert' && d.messageId === finalRE.env.messageId), trim({ finalRE, deltas }));
+    ok('Router-Expert flipped active ("Took the handoff") → idle, Jarvis ends idle', statuses.some((s) => s.agent === 'router-expert' && s.state === 'active' && /handoff/.test(s.label)) && statuses.some((s) => s.agent === 'router-expert' && s.state === 'idle') && statuses[statuses.length - 1].agent === 'jarvis' && statuses[statuses.length - 1].state === 'idle', trim(statuses));
+
+    // (g) The key never sits in the model cache signature.
+    const modelSrc = fs.readFileSync(path.join(__dirname, 'runtime', 'model.js'), 'utf8');
+    ok('model.js keys its cache on a digest of the key, never the key itself', /keyTag/.test(modelSrc) && !/\|\$\{key\}`/.test(modelSrc));
   }
 
   claude.reason = realReason;

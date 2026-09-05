@@ -5,7 +5,8 @@
 // per engineer with Jarvis holding a HANDOFF to each, and a small set of tools
 // whose `execute` is one of OUR gate-wrapped functions:
 //
-//   delegate_read({agentId, question, device, incidentId})
+//   delegate_read({agentId, question, device, incidentId})   (Jarvis)
+//   read_as_<id>({question, device, incidentId})             (that engineer only)
 //       → ctx.gather(...)  — the SAME delegated read jarvis.js makes
 //         (live.gatherWithEvidence: permission gate + read-only guardrail +
 //         session log + terminal evidence). The tool result the model sees is
@@ -46,6 +47,10 @@ function toolNameFor(id) {
   const base = parsed ? `mcp__${parsed.server}__${parsed.tool}` : String(id);
   return base.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
 }
+
+// The SDK normalises tool names to [A-Za-z0-9_] — do the same so the name in an
+// engineer's instructions is the name the model is offered.
+function toolSafe(id) { return String(id).replace(/[^a-zA-Z0-9_]/g, '_'); }
 
 function noResponse(agentId, name, text) {
   return { agentId, name: name || agentId, connected: true, stance: 'unreachable', text };
@@ -135,6 +140,32 @@ function honest(name, fn) {
   };
 }
 
+// The SDK calls this (not execute) when the MODEL's arguments fail the schema
+// or the tool throws outside execute. Its default wording is the SDK's
+// ("An error occurred while running the tool. Please try again…"); ours says,
+// in the app's words, that nothing ran and nothing was invented (review of
+// PR #81: a non-string incidentId reached the model as SDK boilerplate).
+function honestErrorText(name, err) {
+  const raw = err && err.message ? String(err.message) : 'an unexpected error';
+  const why = /Invalid JSON input|InvalidToolInputError|schema|expected|invalid_type/i.test(raw)
+    ? 'the arguments did not match the tool\'s schema'
+    : raw;
+  return `evidence[none] ${name}: the tool did not run — ${why}. No reading to show, and nothing was invented. ` +
+    `Say so to the operator; do not guess.`;
+}
+
+// Model settings shared by every agent: the legacy call's output bound
+// (claude.js maxTokens 3000, so the adapter's 128k default never goes on the
+// wire) and prompt caching (CW-10) as the provider's own top-level
+// cache_control — the whole prompt prefix is cached, every call.
+function modelSettingsFor(providerName) {
+  const settings = { maxTokens: 3000 };
+  if (providerName === 'anthropic') {
+    settings.providerData = { providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } } };
+  }
+  return settings;
+}
+
 function rosterLine(a) {
   const head = `- ${a.id} (${a.name})` + (a.connected ? '' : ' [NOT CONNECTED]');
   const sees = a.sees && a.sees.length ? `\n    sees: ${a.sees.join('; ')}` : '';
@@ -166,9 +197,9 @@ function engineerInstructions(a) {
   return `You are ${a.name} (${a.id}), an engineer on a live NOC squad, handed a question by Jarvis.
 You can see ONLY: ${(a.sees && a.sees.length) ? a.sees.join('; ') : 'nothing listed'}.
 ${a.connected ? '' : 'You are NOT CONNECTED to any live source right now — say so plainly; never invent a reading.\n'}
-To read anything, call delegate_read with agentId "${a.id}" and a concrete question. Never state a
-device fact that did not come back from a tool result tagged evidence[<id>]. Answer SHORT (under
-280 characters): what the reading shows, and what it does not.`;
+To read anything, call read_as_${toolSafe(a.id)} with a concrete question — it makes YOUR real, gated read.
+Never state a device fact that did not come back from a tool result tagged evidence[<id>]. Answer SHORT
+(under 280 characters): what the reading shows, and what it does not.`;
 }
 
 /**
@@ -184,35 +215,61 @@ async function build(ctx, { model, hooks } = {}) {
   const { Agent, tool, handoff } = await import('@openai/agents');
   const { z } = await import('zod');
   const onFinding = (hooks && typeof hooks.onFinding === 'function') ? hooks.onFinding : () => {};
+  // Called the moment a delegated read STARTS — after the SDK validated the
+  // arguments, inside execute — so the "@NetOps — question" line on the wire
+  // only ever names a read that is really being made. (The tool_called stream
+  // event fires before validation; a bad argument set used to post the line
+  // and flip the engineer active for a read that never ran.)
+  const onDelegate = (hooks && typeof hooks.onDelegate === 'function') ? hooks.onDelegate : () => {};
+  const providerName = (hooks && hooks.provider) || 'anthropic';
+  const modelSettings = modelSettingsFor(providerName);
 
   const roster = (ctx.roster && ctx.roster()) || [];
   const engineersOnRoster = roster.filter((a) => a && a.id && !mcp.isMcpId(a.id));
   const mcpOnRoster = roster.filter((a) => a && a.id && mcp.isMcpId(a.id));
   const ids = engineersOnRoster.map((a) => a.id);
 
-  // ── delegate_read: the gate-wrapped delegated read ─────────────────────
+  // ── The gate-wrapped delegated read, as a tool ─────────────────────────
+  // Jarvis gets `delegate_read` (any engineer on the roster, by id). Each
+  // engineer gets `read_as_<id>` — the SAME read with the id FIXED to itself,
+  // so an engineer handed a question can never read as somebody else (review
+  // of PR #81: Router-Expert delegated to NetOps).
+  async function delegatedRead({ agentId, question, device, incidentId }, by) {
+    const name = (ctx.nameOf && ctx.nameOf(agentId)) || agentId;
+    try { onDelegate(agentId, name, String(question || ''), by); } catch (e) { /* display never breaks the read */ }
+    const evidenceId = newEvidenceId();
+    const finding = await gatherGuarded(ctx, { agentId, question, device, incidentId });
+    const shown = (finding && finding.name) || name;
+    const envelopes = findingEnvelopes(shown, finding, evidenceId);
+    try { onFinding(agentId, shown, finding, evidenceId, envelopes); } catch (e) { /* display never breaks the read */ }
+    return renderForModel(shown, finding, evidenceId, envelopes);
+  }
+  const readParams = {
+    question: z.string().describe('The concrete sub-question, in plain words.'),
+    device: z.string().nullable().describe('The exact device hostname for a device-CLI read, or null.'),
+    incidentId: z.string().nullable().describe('One of this console\'s own incident ids when the question is about it, or null.'),
+  };
   const delegateRead = tool({
     name: 'delegate_read',
     description:
       'Ask ONE named squad engineer to make ONE real, read-only check and report back with terminal evidence. ' +
       'Goes through the permission gate, the read-only guardrail and the session log. ' +
       'Returns the finding text plus an evidence[<id>] block; a denied / not-connected / unreachable outcome is reported honestly.',
-    parameters: z.object({
-      agentId: ids.length ? z.enum(ids) : z.string(),
-      question: z.string().describe('The concrete sub-question for that engineer, in plain words.'),
-      device: z.string().nullable().describe('The exact device hostname for a device-CLI read, or null.'),
-      incidentId: z.string().nullable().describe('One of this console\'s own incident ids when the question is about it, or null.'),
-    }),
-    execute: honest('delegate_read', async ({ agentId, question, device, incidentId }) => {
-      const name = (ctx.nameOf && ctx.nameOf(agentId)) || agentId;
-      const evidenceId = newEvidenceId();
-      const finding = await gatherGuarded(ctx, { agentId, question, device, incidentId });
-      const shown = (finding && finding.name) || name;
-      const envelopes = findingEnvelopes(shown, finding, evidenceId);
-      try { onFinding(agentId, shown, finding, evidenceId, envelopes); } catch (e) { /* display never breaks the read */ }
-      return renderForModel(shown, finding, evidenceId, envelopes);
-    }),
+    parameters: z.object({ agentId: ids.length ? z.enum(ids) : z.string(), ...readParams }),
+    errorFunction: (_c, err) => honestErrorText('delegate_read', err),
+    execute: honest('delegate_read', (args) => delegatedRead(args, 'jarvis')),
   });
+  const ownReadTool = (a) => {
+    const name = `read_as_${toolSafe(a.id)}`.slice(0, 64);
+    return tool({
+      name,
+      description: `Make ONE real, read-only check as ${a.name || a.id} (yourself) and report back with terminal evidence. ` +
+        'Same gate, guardrail and session log as every read; a denied / not-connected / unreachable outcome is reported honestly.',
+      parameters: z.object(readParams),
+      errorFunction: (_c, err) => honestErrorText(name, err),
+      execute: honest(name, (args) => delegatedRead({ ...args, agentId: a.id }, a.id)),
+    });
+  };
 
   // ── MCP tools: one per connected roster entry, through OUR connector ────
   const toolIds = new Map();     // tool name → roster id
@@ -236,6 +293,7 @@ async function build(ctx, { model, hooks } = {}) {
       // A write-classified tool PAUSES the run before executing (the SDK's
       // approval interruption) — the runtime rejects it, so it never runs.
       needsApproval: !readOnly,
+      errorFunction: (_c, err) => honestErrorText(name, err),
       execute: honest(name, async ({ question, args_json }) => {
         let args = {};
         if (args_json && String(args_json).trim() && String(args_json).trim() !== '{}') {
@@ -258,7 +316,8 @@ async function build(ctx, { model, hooks } = {}) {
     name: a.name || a.id,
     instructions: engineerInstructions(a),
     model,
-    tools: [delegateRead],
+    modelSettings,
+    tools: [ownReadTool(a)],
   }));
   const idOfName = new Map(engineersOnRoster.map((a) => [a.name || a.id, a.id]));
 
@@ -270,6 +329,7 @@ async function build(ctx, { model, hooks } = {}) {
       `\n\nWhat you can do yourself, for a greeting or a "what can you do" ask:\n` +
       abilitiesText((ctx.abilities && ctx.abilities()) || []),
     model,
+    modelSettings,
     tools: [delegateRead, ...mcpTools],
     handoffs: engineers.map((e) => handoff(e)),
   });
@@ -292,5 +352,5 @@ function abilitiesText(list) {
 
 module.exports = {
   build,
-  _test: { gatherGuarded, findingEnvelopes, renderForModel, honest, toolNameFor, newEvidenceId, GATHER_TIMEOUT_MS },
+  _test: { gatherGuarded, findingEnvelopes, renderForModel, honest, honestErrorText, modelSettingsFor, toolNameFor, toolSafe, newEvidenceId, GATHER_TIMEOUT_MS },
 };

@@ -28,7 +28,13 @@
 // The provider packages are ESM-only, so they are imported lazily (a plain
 // dynamic import from this CommonJS app works on every supported Node).
 
+const crypto = require('crypto');
 const spend = require('../spend-store');
+
+// The SAME bound claude.js puts on a model call (CLAUDE_TIMEOUT_MS): a call that
+// sends no bytes for this long is aborted and reported as a timeout — never
+// left hanging with Jarvis "thinking" forever (review of PR #81, hang attack).
+const TIMEOUT_MS = Math.max(1000, Number(process.env.JARVIS_RUNTIME_TIMEOUT_MS || process.env.CLAUDE_TIMEOUT_MS) || 60000);
 
 const DEFAULT_MODEL = 'claude-opus-5';
 const DEFAULT_PROVIDER = 'anthropic';
@@ -86,7 +92,9 @@ async function build() {
   if (!key || !String(key).trim()) {
     throw new Error('no_api_key');
   }
-  const signature = `${p}|${id}|${fetchOverride ? 'mock-transport' : 'live'}|${key}`;
+  // The key never sits in a string anyone could log — a digest stands in for it.
+  const keyTag = crypto.createHash('sha256').update(String(key)).digest('hex').slice(0, 16);
+  const signature = `${p}|${id}|${fetchOverride ? 'mock-transport' : 'live'}|${keyTag}`;
   if (cached && cachedFor === signature) return cached;
 
   const { aisdk } = await import('@openai/agents-extensions/ai-sdk');
@@ -94,8 +102,7 @@ async function build() {
   switch (p) {
     case 'anthropic': {
       const { createAnthropic } = await import('@ai-sdk/anthropic');
-      const opts = { apiKey: key };
-      if (fetchOverride) opts.fetch = fetchOverride;
+      const opts = { apiKey: key, fetch: withStallTimeout(fetchOverride || globalThis.fetch.bind(globalThis), TIMEOUT_MS) };
       languageModel = createAnthropic(opts)(id);
       break;
     }
@@ -107,6 +114,54 @@ async function build() {
   cached = aisdk(languageModel);
   cachedFor = signature;
   return cached;
+}
+
+// ── The stall timeout ───────────────────────────────────────────────────────
+// Wraps the provider's fetch: the request is aborted when NO BYTES arrive for
+// TIMEOUT_MS — before the headers, or between two chunks of a stream. A slow
+// but live stream is never cut; a dead socket is. The abort reason is a plain
+// Error whose message the runtime's honest failure line can speak.
+function withStallTimeout(baseFetch, ms) {
+  return async (url, init) => {
+    const ac = new AbortController();
+    const outer = init && init.signal;
+    if (outer) {
+      if (outer.aborted) ac.abort(outer.reason);
+      else outer.addEventListener('abort', () => ac.abort(outer.reason), { once: true });
+    }
+    let timer = null;
+    const stalled = () => ac.abort(new Error(`model call stalled — no bytes for ${ms}ms`));
+    const arm = () => { clearTimeout(timer); timer = setTimeout(stalled, ms); };
+    const disarm = () => clearTimeout(timer);
+    arm();
+    let res;
+    try { res = await baseFetch(url, { ...(init || {}), signal: ac.signal }); }
+    catch (e) { disarm(); throw e; }
+    if (!res || !res.body || typeof res.body.getReader !== 'function') { disarm(); return res; }
+    const reader = res.body.getReader();
+    // The abort must end the body read even when the underlying stream ignores
+    // the signal (a transport that simply never sends another byte).
+    const aborted = new Promise((_, reject) => {
+      if (ac.signal.aborted) reject(ac.signal.reason);
+      else ac.signal.addEventListener('abort', () => reject(ac.signal.reason), { once: true });
+    });
+    aborted.catch(() => {});
+    const body = new ReadableStream({
+      async pull(controller) {
+        arm();
+        try {
+          const { done, value } = await Promise.race([reader.read(), aborted]);
+          if (done) { disarm(); controller.close(); } else controller.enqueue(value);
+        } catch (e) {
+          disarm();
+          try { reader.cancel(e).catch(() => {}); } catch (e2) { /* already closed */ }
+          controller.error(e);
+        }
+      },
+      cancel(reason) { disarm(); return reader.cancel(reason); },
+    });
+    return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
+  };
 }
 
 // ── Spend ───────────────────────────────────────────────────────────────────
@@ -166,5 +221,6 @@ function _reset() { cached = null; cachedFor = null; }
 
 module.exports = {
   build, hasKey, provider, modelId, describe, recordUsage,
-  _test: { setFetch: _setFetch, reset: _reset, usageOf },
+  TIMEOUT_MS,
+  _test: { setFetch: _setFetch, reset: _reset, usageOf, withStallTimeout },
 };

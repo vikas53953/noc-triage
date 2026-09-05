@@ -40,6 +40,22 @@ const PURPOSE = 'runtime';
 const MAX_TURNS = Math.max(2, Number(process.env.JARVIS_RUNTIME_MAX_TURNS) || 8);
 // How many times one ask may resume after an approval pause was rejected.
 const MAX_RESUMES = 1;
+// The outer bound on one whole run (every turn, every read) — belt over the
+// per-call stall timeout in runtime/model.js and the per-read GATHER timeout.
+const RUN_TIMEOUT_MS = Math.max(10000, Number(process.env.JARVIS_RUNTIME_RUN_TIMEOUT_MS) || 600000);
+
+// The SDK ships a tracing exporter that POSTs every run's spans (prompts, tool
+// arguments, tool results) to OpenAI whenever OPENAI_API_KEY is in the
+// environment. This app never sends a byte anywhere the operator did not ask
+// for (law 5), so tracing is OFF before the first run, unconditionally —
+// review of PR #81 caught a live trace upload with that key set.
+let tracingOff = false;
+async function disableTracing(sdk) {
+  if (tracingOff) return;
+  if (typeof sdk.setTracingDisabled === 'function') sdk.setTracingDisabled(true);
+  if (typeof sdk.setTraceProcessors === 'function') sdk.setTraceProcessors([]);
+  tracingOff = true;
+}
 
 // ── The pinned-envelope helpers (mirror jarvis.js speak / sayDelta) ─────────
 function speak(agentId, env) { ctx.say(agentId, env.text, env); }
@@ -49,13 +65,13 @@ function newMessageId() { return `jv-${Date.now().toString(36)}-${(deltaSeq += 1
 let callSeq = 0;
 function newCallId() { return `rt-${Date.now().toString(36)}-${(++callSeq).toString(36)}`; }
 
-function sayDelta(messageId, delta, done, flags) {
+function sayDelta(messageId, delta, done, flags, speaker) {
   if (!ctx || typeof ctx.sayDelta !== 'function') return;
   try {
     const payload = { kind: 'say-delta', messageId, delta: String(delta == null ? '' : delta), done: Boolean(done) };
     if (flags && flags.aborted) payload.aborted = true;
     if (flags && flags.discard) payload.discard = true;
-    ctx.sayDelta('jarvis', payload);
+    ctx.sayDelta(speaker || 'jarvis', payload);
   } catch (e) { /* a display optimisation must never break the answer */ }
 }
 
@@ -63,11 +79,11 @@ function sayDelta(messageId, delta, done, flags) {
 // conduct.TEXT_MAX on a word boundary, holds back a trailing partial word, and
 // releases it on flush() — so a preview never ends mid-word and never shows
 // text the conduct layer would cap away.
-function cappedDeltas(messageId) {
+function cappedDeltas(messageId, speaker) {
   let shownLen = 0;
   let pending = '';
   let stopped = false;
-  function emit(text) { if (!text) return; shownLen += text.length; sayDelta(messageId, text, false); }
+  function emit(text) { if (!text) return; shownLen += text.length; sayDelta(messageId, text, false, null, speaker); }
   function fits(text) {
     const room = conduct.TEXT_MAX - shownLen;
     if (room <= 0) return '';
@@ -130,8 +146,10 @@ function readableError(err) {
     e = e.cause;
   }
   const root = messages[messages.length - 1] || String(err);
+  // Only a real HTTP failure carries the status; a stall or a socket death
+  // after a 200 is named for what it is.
   const status = Number(err.statusCode || err.status);
-  return Number.isFinite(status) && status > 0 ? `provider error (${status}): ${root}` : root;
+  return Number.isFinite(status) && status >= 400 ? `provider error (${status}): ${root}` : root;
 }
 
 function reasoningError(q, err, messageId) {
@@ -238,17 +256,37 @@ function safeJson(s) { try { return JSON.parse(s); } catch (e) { return null; } 
 async function runOnRuntime(q, gate, { conversationId, operatorTz }) {
   ctx.status('jarvis', 'active', 'Reasoning on the agent runtime…');
 
-  const engaged = new Set();         // engineer ids flipped active during the run
-  const callAgent = new Map();       // tool callId → engineer id
+  const engaged = new Set();         // engineer ids flipped active by a HANDOFF
+  // Who is speaking on the wire right now: Jarvis, or the engineer a handoff
+  // moved the run to. A handed-off engineer's words are posted as THAT
+  // engineer's — never as Jarvis's (review of PR #81).
+  let speaker = 'jarvis';
   let messageId = null;              // the preview in flight (null = none open)
   let deltas = null;
   let buffered = '';                 // text of the response in flight
   let modelCallId = null;            // the presence span in flight
   let streamedOnce = false;
   let lastResult = null;
+  let stream = null;                 // the run (or resume) in flight
+  // rawResponses is the RunState's cumulative list — a resume after an approval
+  // pause carries every earlier response too. Record each response ONCE.
+  let recorded = 0;
+  const recordNew = (s) => {
+    const all = (s && Array.isArray(s.rawResponses)) ? s.rawResponses : [];
+    if (all.length > recorded) { model.recordUsage(all.slice(recorded), { purpose: PURPOSE, conversationId }); recorded = all.length; }
+  };
 
   const activity = (ev) => claude.activity({ ...ev, purpose: PURPOSE, conversationId });
   const idleEngaged = () => { for (const id of engaged) ctx.status(id, 'idle', 'Reported back to Jarvis'); engaged.clear(); };
+
+  // The "@NetOps — question" line, the moment a validated read starts (the
+  // same line jarvis.js speaks when it delegates). The engineer's own status
+  // flips (active → idle) are live-agents' — gatherWithEvidence sets them —
+  // so the runtime does not flip them a second time.
+  const onDelegate = (agentId, name, question, by) => {
+    speak(by === 'jarvis' ? 'jarvis' : by, conduct.envelope.say(`@${name} — ${question}`));
+    ctx.log(`[Jarvis] Runtime → ${by === 'jarvis' ? 'delegate_read' : `read_as_${by}`} ${agentId} — "${question.slice(0, 60)}"`);
+  };
 
   // A delegated read's envelopes go on the wire as `finding` messages — one per
   // terminal block — the moment the read returns, exactly as jarvis.js does.
@@ -269,11 +307,12 @@ async function runOnRuntime(q, gate, { conversationId, operatorTz }) {
     const text = buffered.trim();
     if (text) {
       deltas.flush();
-      sayDelta(messageId, '', true);
-      speak('jarvis', { ...conduct.envelope.say(text), messageId });
+      sayDelta(messageId, '', true, null, speaker);
+      speak(speaker, { ...conduct.envelope.say(text), messageId });
     }
     messageId = null; deltas = null; buffered = '';
   };
+  const openPreview = () => { messageId = newMessageId(); deltas = cappedDeltas(messageId, speaker); buffered = ''; };
 
   const onEvent = (ev, squadInfo) => {
     if (ev.type === 'raw_model_stream_event') {
@@ -281,11 +320,11 @@ async function runOnRuntime(q, gate, { conversationId, operatorTz }) {
       if (d.type === 'response_started') {
         modelCallId = newCallId(); streamedOnce = false;
         activity({ phase: 'start', callId: modelCallId, streaming: true });
-        messageId = newMessageId(); deltas = cappedDeltas(messageId); buffered = '';
+        openPreview();
       } else if (d.type === 'output_text_delta') {
         if (!modelCallId) { modelCallId = newCallId(); activity({ phase: 'start', callId: modelCallId, streaming: true }); }
         if (!streamedOnce) { streamedOnce = true; activity({ phase: 'stream', callId: modelCallId }); }
-        if (!messageId) { messageId = newMessageId(); deltas = cappedDeltas(messageId); buffered = ''; }
+        if (!messageId) openPreview();
         buffered += String(d.delta || '');
         deltas(d.delta);
       } else if (d.type === 'response_done') {
@@ -297,21 +336,13 @@ async function runOnRuntime(q, gate, { conversationId, operatorTz }) {
       }
     } else if (ev.type === 'run_item_stream_event') {
       const raw = (ev.item && ev.item.rawItem) || {};
+      // Wire effects of a delegated read (the "@Name — question" line, the
+      // engineer's status) happen INSIDE the validated execute (onDelegate /
+      // live-agents), never here: this event fires before the SDK validates
+      // the arguments, so it may describe a read that never runs.
       if (ev.name === 'tool_called') {
-        const args = typeof raw.arguments === 'string' ? safeJson(raw.arguments) : (raw.arguments || null);
-        if (raw.name === 'delegate_read' && args && args.agentId) {
-          const name = (ctx.nameOf && ctx.nameOf(args.agentId)) || args.agentId;
-          engaged.add(args.agentId);
-          if (raw.callId) callAgent.set(raw.callId, args.agentId);
-          ctx.status(args.agentId, 'active', `Jarvis delegation: ${String(args.question || '').slice(0, 60)}`);
-          speak('jarvis', conduct.envelope.say(`@${name} — ${String(args.question || '')}`));
-          ctx.log(`[Jarvis] Runtime → delegate_read ${args.agentId} — "${String(args.question || '').slice(0, 60)}"`);
-        } else {
-          ctx.log(`[Jarvis] Runtime → tool ${raw.name || '?'} (${(squadInfo && squadInfo.agentOfTool(raw.name)) || 'not an engineer'})`);
-        }
-      } else if (ev.name === 'tool_output') {
-        const id = raw.callId && callAgent.get(raw.callId);
-        if (id) { ctx.status(id, 'idle', 'Reported back to Jarvis'); engaged.delete(id); callAgent.delete(raw.callId); }
+        const who = (squadInfo && squadInfo.agentOfTool(raw.name)) || null;
+        ctx.log(`[Jarvis] Runtime → tool ${raw.name || '?'}${who ? ` (${who})` : ''} requested by ${speaker}`);
       } else if (ev.name === 'handoff_occurred') {
         const target = ev.item && ev.item.targetAgent && ev.item.targetAgent.name;
         const id = target && squadInfo ? squadInfo.idOfAgent(target) : null;
@@ -321,23 +352,31 @@ async function runOnRuntime(q, gate, { conversationId, operatorTz }) {
         ctx.log(`[Jarvis] Runtime: tool ${raw.name || '?'} asked for approval — held`);
       }
     } else if (ev.type === 'agent_updated_stream_event') {
-      ctx.log(`[Jarvis] Runtime: ${ev.agent && ev.agent.name} is answering`);
+      // The run moved to another agent: from here its words are its own.
+      const name = ev.agent && ev.agent.name;
+      const id = (name && squadInfo && squadInfo.idOfAgent(name)) || 'jarvis';
+      if (id !== speaker) { settleNarration(); speaker = id; }
+      ctx.log(`[Jarvis] Runtime: ${name || '?'} is answering`);
     }
   };
 
   let squadInfo = null;
+  const runAbort = new AbortController();
+  const runTimer = setTimeout(() => runAbort.abort(new Error(`the run exceeded ${Math.round(RUN_TIMEOUT_MS / 1000)}s`)), RUN_TIMEOUT_MS);
   try {
+    const sdk = await import('@openai/agents');
+    await disableTracing(sdk);
     const m = await model.build();
-    squadInfo = await squad.build(ctx, { model: m, hooks: { onFinding } });
-    const { run } = await import('@openai/agents');
+    squadInfo = await squad.build(ctx, { model: m, hooks: { onFinding, onDelegate, provider: model.provider() } });
+    const { run } = sdk;
 
     let input = inputFor(q, gate, operatorTz);
     for (let attempt = 0; attempt <= MAX_RESUMES; attempt++) {
-      const stream = await run(squadInfo.jarvis, input, { stream: true, maxTurns: MAX_TURNS });
+      stream = await run(squadInfo.jarvis, input, { stream: true, maxTurns: MAX_TURNS, signal: runAbort.signal });
       for await (const ev of stream) onEvent(ev, squadInfo);
       await stream.completed;
       lastResult = stream;
-      model.recordUsage(stream.rawResponses, { purpose: PURPOSE, conversationId });
+      recordNew(stream);
 
       const pauses = stream.interruptions || [];
       if (!pauses.length) break;
@@ -349,7 +388,7 @@ async function runOnRuntime(q, gate, { conversationId, operatorTz }) {
         const name = (item.rawItem && item.rawItem.name) || 'that tool';
         const id = squadInfo.agentOfTool(name) || name;
         stream.state.reject(item);
-        speak('jarvis', conduct.envelope.say(
+        speak(speaker, conduct.envelope.say(
           `"${id}" is classified as a write, so I did not run it — nothing was sent. Writes go through the change engine, approve-first.`));
         session.audit({
           what: `runtime tool held for approval: ${String(id).slice(0, 200)}`,
@@ -358,7 +397,7 @@ async function runOnRuntime(q, gate, { conversationId, operatorTz }) {
         ctx.log(`[Jarvis] Runtime: approval pause on ${id} — rejected, not run`);
       }
       if (attempt === MAX_RESUMES) {
-        speak('jarvis', conduct.envelope.say(
+        speak(speaker, conduct.envelope.say(
           'I stopped there: the only step left was a write, which this path does not do. Ask for a read, or open a change.'));
         ctx.status('jarvis', 'idle', 'Stopped at a write — nothing applied');
         idleEngaged();
@@ -367,18 +406,24 @@ async function runOnRuntime(q, gate, { conversationId, operatorTz }) {
       input = stream.state;
     }
   } catch (err) {
+    clearTimeout(runTimer);
     if (modelCallId) { activity({ phase: 'end', callId: modelCallId, reason: 'error' }); modelCallId = null; }
-    if (messageId) { sayDelta(messageId, '', true, { aborted: true }); }
+    if (messageId) { sayDelta(messageId, '', true, { aborted: true }, speaker); }
     idleEngaged();
-    if (lastResult) model.recordUsage(lastResult.rawResponses, { purpose: PURPOSE, conversationId });
+    recordNew(stream);                 // the turns that did complete before the failure
     reasoningError(q, err, messageId);
     return;
   }
+  clearTimeout(runTimer);
 
-  // (d) The final answer, in the pinned envelope, settling the preview.
+  // (d) The final answer, in the pinned envelope, settling the preview — posted
+  // by whoever actually wrote it (Jarvis, or the engineer a handoff moved to).
+  const last = lastResult && lastResult.lastAgent && lastResult.lastAgent.name;
+  const lastId = (last && squadInfo && squadInfo.idOfAgent(last)) || 'jarvis';
+  if (lastId !== speaker) { settleNarration(); speaker = lastId; }
   const answer = String((lastResult && lastResult.finalOutput) || buffered || '').trim();
   if (!answer) {
-    if (messageId) sayDelta(messageId, '', true, { aborted: true });
+    if (messageId) sayDelta(messageId, '', true, { aborted: true }, speaker);
     ctx.say('jarvis',
       `🎖️ The readings from each engineer are above, all real — the runtime finished without a written summary, so I am not inventing one.`,
       messageId ? { messageId } : undefined);
@@ -386,14 +431,14 @@ async function runOnRuntime(q, gate, { conversationId, operatorTz }) {
     idleEngaged();
     return;
   }
-  if (!messageId) { messageId = newMessageId(); deltas = cappedDeltas(messageId); }
+  if (!messageId) openPreview();
   deltas.flush();
-  sayDelta(messageId, '', true);
-  speak('jarvis', { ...conduct.envelope.say(answer), messageId });
+  sayDelta(messageId, '', true, null, speaker);
+  speak(speaker, { ...conduct.envelope.say(answer), messageId });
   session.recordReasoning({
     command: 'SYNTHESIS',
     raw: answer,
-    interpretation: 'Composed on the agent runtime strictly from the tool findings above — no number, device, or status invented.',
+    interpretation: `Composed on the agent runtime by ${speaker} strictly from the tool findings above — no number, device, or status invented.`,
   });
   idleEngaged();
   ctx.status('jarvis', 'idle', 'Answered from live findings');
@@ -402,5 +447,5 @@ async function runOnRuntime(q, gate, { conversationId, operatorTz }) {
 
 module.exports = {
   init, ask,
-  _test: { cappedDeltas, askNarrowing, inputFor, readableError, MAX_TURNS, MAX_RESUMES, PURPOSE },
+  _test: { cappedDeltas, askNarrowing, inputFor, readableError, MAX_TURNS, MAX_RESUMES, RUN_TIMEOUT_MS, PURPOSE },
 };
