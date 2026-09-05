@@ -1775,85 +1775,12 @@ function handleMention(fromAgentId, toAgentId, message) {
   // Log to activity
   appendToActivityLog(`[${timestamp}] [${fromAgent.name}] @mentioned ${toAgent.name}: ${message}\n`);
 
-  // Simulate target agent acknowledging (1-2s delay)
-  const responseDelay = 1000 + Math.random() * 1000;
-  setTimeout(() => {
-    const response = generateMentionResponse(toAgentId, fromAgentId, message);
-    broadcast('chat_message', {
-      type: 'incoming',
-      agent: toAgentId,
-      agentName: toAgent.name,
-      agentIcon: toAgent.icon,
-      text: response,
-      timestamp: new Date().toISOString()
-    });
-    // handleMention is only ever reached from an operator-typed command, so the
-    // responding agent answered the operator's @mention — not fromAgent, which is
-    // merely the operator's currently-focused chat. Name the true relationship.
-    appendToActivityLog(`[${new Date().toISOString()}] [${toAgent.name}] Responded to the operator's @mention\n`);
-  }, responseDelay);
-}
-
-// Generate contextual response based on agent specialty
-function generateMentionResponse(responderId, fromId, message) {
-  const responder = agents[responderId];
-  const from = agents[fromId];
-  const msg = message.toLowerCase();
-
-  // An acknowledgement may only promise what the agent can actually do, which
-  // is read its own live source (Catalyst Center, the ACI fabric, or vManage).
-  // Never name a tool, feed or capability that does not exist here — a
-  // fabricated capability is as dishonest as a fabricated reading.
-  const responses = {
-    'netops': [
-      `@${from.name} Roger that — reading live device inventory from Catalyst Center.`,
-      `@${from.name} On it — checking current device reachability on Catalyst Center.`,
-      `@${from.name} Acknowledged. Pulling the live device list and health score.`
-    ],
-    // No backend wired up — say so rather than promise a report we cannot make.
-    'sentinel': [
-      `@${from.name} I'm not connected to a CVE feed yet — no credentials, so I have nothing real to report.`
-    ],
-    'firewall-pro': [
-      `@${from.name} I'm not connected to a firewall source yet — no credentials, so I have nothing real to report.`
-    ],
-    'loadbal-pro': [
-      `@${from.name} I'm not connected to a load balancer — F5 has no Cisco DevNet sandbox. Nothing real to report.`
-    ],
-    'router-expert': [
-      `@${from.name} On it — querying the live ACI fabric / SD-WAN overlay.`
-    ],
-    'monitor-eye': [
-      `@${from.name} On it — reading the live health score and open issues from Catalyst Center.`,
-      `@${from.name} Acknowledged. Checking current health and SD-WAN alarm counts.`,
-      `@${from.name} Roger — pulling what my live sources report right now.`
-    ],
-    // No backup store, no compliance baseline and no config-diff engine exists —
-    // this agent can only read running software versions and reachability.
-    'config-keeper': [
-      `@${from.name} On it — reading the running software versions from Catalyst Center.`,
-      `@${from.name} Acknowledged. Checking what versions the devices actually report.`,
-      `@${from.name} Roger — I hold no backups or baselines, but I can read current state.`
-    ],
-    'incident-handler': [
-      `@${from.name} On it — reading open issues from Catalyst Center and faults from the ACI fabric.`,
-      `@${from.name} Acknowledged. Checking what is currently open on my live sources.`,
-      `@${from.name} Roger — pulling the current issue and fault list.`
-    ],
-    'doc-writer': [
-      `@${from.name} On it — reading the connected sandboxes so anything I write is backed by live data.`,
-      `@${from.name} Acknowledged. Checking what the live sources can actually confirm.`,
-      `@${from.name} Roger — gathering current readings from the connected sources.`
-    ],
-    'jarvis': [
-      `@${from.name} Understood. I'll coordinate the team on this.`,
-      `@${from.name} Copy. Triaging and assigning as needed.`,
-      `@${from.name} Acknowledged. Monitoring progress.`
-    ]
-  };
-
-  const agentResponses = responses[responderId] || [`@${from.name} Acknowledged. Working on it.`];
-  return agentResponses[Math.floor(Math.random() * agentResponses.length)];
+  // Polish P1 (Law 1, 2026-09-05): the canned "On it — querying…" acknowledgement
+  // that used to be posted here on a random 1–2 s timer is GONE. It was a
+  // deterministic phrase table pretending to be the agent, it could land AFTER
+  // the agent's real answer, and it said nothing the real answer did not. The
+  // @mention's only response is now the agent's real read (simulateAgentAction,
+  // scheduled by the caller) — or its honest "not connected".
 }
 
 // ============ AGENT NLU — per-agent intent detection ============
@@ -2151,174 +2078,11 @@ function jarvisCapabilityScreen(command) {
   return false;
 }
 
-// Jarvis: Daily standup — collect status from all agents
-function simulateStandup(agentId) {
-  const jarvis = agents[agentId];
-  updateAgentStatus(agentId, 'active', 'Running daily standup');
-  addTaskToBoard('inProgress', { title: 'Daily Standup', agent: 'Jarvis' });
-
-  const managedAgents = jarvis.manages || [];
-
-  setTimeout(() => {
-    broadcast('chat_message', {
-      type: 'incoming', agent: agentId, agentName: jarvis.name, agentIcon: jarvis.icon,
-      text: `📢 **DAILY STANDUP — ${new Date().toLocaleDateString()}**\nCollecting status from ${managedAgents.length} agents...`,
-      timestamp: new Date().toISOString()
-    });
-    appendToActivityLog(`[${new Date().toISOString()}] [Jarvis] Daily standup initiated\n`);
-  }, 500);
-
-  let delay = 1500;
-  const statusLines = [];
-
-  managedAgents.forEach((id) => {
-    const a = agents[id];
-    setTimeout(() => {
-      const statusIcon = a ? (a.status === 'active' ? '🟢' : a.status === 'idle' ? '🟡' : '🔴') : '⚫';
-      const name = a ? a.name : id;
-      const icon = a ? a.icon : '🤖';
-      const action = a ? a.lastAction : 'Not deployed';
-      const line = `${statusIcon} ${icon} **${name}** — ${action}`;
-      statusLines.push(line);
-
-      broadcast('chat_message', {
-        type: 'incoming', agent: agentId, agentName: jarvis.name, agentIcon: jarvis.icon,
-        text: `${statusIcon} ${icon} ${name}: ${action}`,
-        timestamp: new Date().toISOString()
-      });
-    }, delay);
-    delay += 800;
-  });
-
-  setTimeout(() => {
-    const activeCount = managedAgents.filter(id => agents[id]?.status === 'active').length;
-    const idleCount = managedAgents.filter(id => agents[id]?.status === 'idle').length;
-    const offlineCount = managedAgents.length - activeCount - idleCount;
-
-    broadcast('chat_message', {
-      type: 'incoming', agent: agentId, agentName: jarvis.name, agentIcon: jarvis.icon,
-      text: `📊 **Standup Summary**\n🟢 Active: ${activeCount} | 🟡 Idle: ${idleCount} | 🔴 Offline: ${offlineCount}\n✅ Standup complete. All agents accounted for.`,
-      timestamp: new Date().toISOString()
-    });
-
-    appendToActivityLog(`[${new Date().toISOString()}] [Jarvis] Standup complete — Active: ${activeCount}, Idle: ${idleCount}, Offline: ${offlineCount}\n`);
-    updateAgentStatus(agentId, 'active', 'Standup complete — monitoring squad');
-    moveTaskOnBoard('Daily Standup', 'inProgress', 'done');
-  }, delay + 500);
-}
-
-// Jarvis: Squad status / roll call
-function simulateSquadStatus(agentId) {
-  const jarvis = agents[agentId];
-  updateAgentStatus(agentId, 'active', 'Checking squad status');
-
-  setTimeout(() => {
-    const managedAgents = jarvis.manages || [];
-    const lines = managedAgents.map(id => {
-      const a = agents[id];
-      if (!a) return `⚫ 🤖 ${id} — Not deployed`;
-      const statusIcon = a.status === 'active' ? '🟢' : a.status === 'idle' ? '🟡' : '🔴';
-      return `${statusIcon} ${a.icon} ${a.name} — ${a.lastAction}`;
-    });
-
-    broadcast('chat_message', {
-      type: 'incoming', agent: agentId, agentName: jarvis.name, agentIcon: jarvis.icon,
-      text: `🎖️ **Squad Status Report**\n━━━━━━━━━━━━━━━━━━━━\n${lines.join('\n')}\n━━━━━━━━━━━━━━━━━━━━\nTotal: ${managedAgents.length} agents`,
-      timestamp: new Date().toISOString()
-    });
-    updateAgentStatus(agentId, 'active', 'Monitoring squad');
-  }, 1000);
-}
-
-// Jarvis: Weekly summary report
-function simulateWeeklyReport(agentId) {
-  const jarvis = agents[agentId];
-  updateAgentStatus(agentId, 'active', 'Generating weekly report');
-  addTaskToBoard('inProgress', { title: 'Weekly Summary Report', agent: 'Jarvis' });
-
-  const steps = [
-    { delay: 500, msg: '📊 Generating weekly squad report...' },
-    { delay: 1500, msg: '📁 Scanning task history...' },
-    { delay: 2500, msg: '📈 Analyzing agent performance...' },
-  ];
-
-  steps.forEach(step => {
-    setTimeout(() => {
-      broadcast('chat_message', {
-        type: 'incoming', agent: agentId, agentName: jarvis.name, agentIcon: jarvis.icon,
-        text: step.msg,
-        timestamp: new Date().toISOString()
-      });
-    }, step.delay);
-  });
-
-  setTimeout(() => {
-    const tasks = getTasks();
-    const doneCount = (tasks.done || []).length;
-    const inProgressCount = (tasks.inProgress || []).length;
-    const inboxCount = (tasks.inbox || []).length;
-    const managedAgents = jarvis.manages || [];
-    const activeCount = managedAgents.filter(id => agents[id]?.status === 'active').length;
-
-    const reportContent = `# Weekly Squad Report
-**Generated:** ${new Date().toISOString()}
-**Squad Lead:** Jarvis 🎖️
-
-## Squad Overview
-- Total Agents: ${managedAgents.length}
-- Active: ${activeCount}
-- Idle: ${managedAgents.length - activeCount}
-
-## Task Summary
-- Completed: ${doneCount}
-- In Progress: ${inProgressCount}
-- Inbox: ${inboxCount}
-
-## Agent Status
-${managedAgents.map(id => {
-  const a = agents[id];
-  if (!a) return `| ${id} | Not Deployed | - |`;
-  return `| ${a.icon} ${a.name} | ${a.status} | ${a.lastAction} |`;
-}).join('\n')}
-
-## Recommendations
-- ${inboxCount > 0 ? `${inboxCount} tasks pending triage in INBOX` : 'All tasks triaged'}
-- ${activeCount === 0 ? 'No agents currently active — consider scheduling tasks' : `${activeCount} agents actively working`}
-
----
-*Report generated by Jarvis, Network Squad Lead*
-`;
-
-    const reportName = `weekly-report-${Date.now()}.md`;
-    const reportPath = path.join(SQUAD_ROOT, 'agents', 'jarvis', reportName);
-    // Runs inside a timer — a raw write here would throw where nothing can
-    // catch it and would silently abandon the rest of the report.
-    safeWrite(reportPath, reportContent, `weekly report ${reportName}`);
-
-    broadcast('chat_message', {
-      type: 'incoming', agent: agentId, agentName: jarvis.name, agentIcon: jarvis.icon,
-      text: `✅ **Weekly Report Complete**\n📋 Tasks — Done: ${doneCount} | Active: ${inProgressCount} | Inbox: ${inboxCount}\n👥 Squad — ${managedAgents.length} agents, ${activeCount} active\n📁 Report saved: ${reportName}`,
-      timestamp: new Date().toISOString()
-    });
-
-    appendToActivityLog(`[${new Date().toISOString()}] [Jarvis] Weekly report generated: ${reportName}\n`);
-    updateAgentStatus(agentId, 'active', `Weekly report: ${reportName}`);
-    moveTaskOnBoard('Weekly Summary Report', 'inProgress', 'done');
-  }, 4000);
-}
-
-// Jarvis help
-function showJarvisHelp(agentId) {
-  const jarvis = agents[agentId];
-  setTimeout(() => {
-    broadcast('chat_message', {
-      type: 'incoming', agent: agentId, agentName: jarvis.name, agentIcon: jarvis.icon,
-      text: `🎖️ **Jarvis — Squad Lead (Natural Language)**\n━━━━━━━━━━━━━━━━━━━━\nJust talk to me naturally. I understand intent, not just commands.\n\n📢 **Standup** — "check in with the team", "morning briefing", "how's everyone doing?"\n👥 **Squad status** — "who's online?", "show me all agents", "roll call"\n🔍 **Triage/assign** — "we need someone to look at the BGP issue", "assign the firewall audit"\n📊 **Reports** — "give me a summary of the week", "what have we completed?"\n🚨 **Escalate** — "the router is down", "we have a critical outage", "BGP is flapping"\n💬 **Anything else** — just describe the situation and I'll figure out the right action\n━━━━━━━━━━━━━━━━━━━━\nManaging ${(jarvis.manages || []).length} agents`,
-      timestamp: new Date().toISOString()
-    });
-    updateAgentStatus(agentId, 'active', 'Help displayed');
-  }, 500);
-}
+// Polish P1 (2026-09-05): simulateStandup / simulateSquadStatus / simulateWeeklyReport /
+// showJarvisHelp were removed here. They had no call sites since the Class 1
+// fix (2026-08-18) took the phrase-table front door away — dead deterministic
+// answering code, the exact class Law 1 forbids. Standup / roll-call / report
+// come back, if ever, as planner-invoked functions built on real reads.
 
 // Update agent status and broadcast
 function updateAgentStatus(agentId, status, lastAction) {
@@ -3668,7 +3432,9 @@ function setupFileWatcher() {
       const agentId = AGENT_IDS.find(id => filePath.includes(path.sep + id + path.sep) || filePath.includes('/' + id + '/'));
       if (agentId && agents[agentId]) {
         loadAgentStatus(agentId);
-        broadcast('agent_status', agents[agentId]);
+        // Same shape as updateAgentStatus (transparency contract): a client
+        // reading `agentId` / `status` / `note` used to get undefined here.
+        broadcast('agent_status', { ...agents[agentId], agentId, status: agents[agentId].status, note: agents[agentId].lastAction || null });
       }
     } else if (filename === 'ALERTS.md') {
       broadcast('alerts_updated', { timestamp: new Date().toISOString() });

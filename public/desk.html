@@ -701,6 +701,19 @@ pre.term{
   /* the live/not-connected wording is long; the dot still carries the state */
   .top-right .chip{max-width:92px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .whotag span{max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* Polish P1: the right-hand group must never push the page wider than the
+     phone. It shrinks (and clips its own contents) before the page scrolls. */
+  .top-right{flex:0 1 auto;overflow:hidden;flex-wrap:nowrap}
+  .top-right .iconbtn,.top-right .capbtn{flex-shrink:0}
+}
+@media (max-width:480px){
+  /* phone: the name tag becomes the avatar alone, the Capabilities button its
+     gear — every control still there, nothing wider than the screen. */
+  .whotag span{display:none}
+  .whotag{padding:.2rem}
+  .top-right .chip{max-width:70px}
+  .capbtn{font-size:0;padding:.3rem .45rem}
+  .capbtn::before{content:'⚙';font-size:.9rem}
 }
 
 /* ============================================================
@@ -764,6 +777,11 @@ pre.term{
   font-size:.68rem;color:var(--ink3);line-height:1.55
 }
 @media (max-width:760px){ .cap-drawer{width:100vw} }
+/* Polish P1: while closed the drawer is off-canvas AND hidden — it cannot be
+   tabbed into, read by a screen reader, or counted as page width. The delay
+   keeps the slide-out animation; the slide-in shows it at once. */
+.cap-drawer:not(.on){visibility:hidden;transition:transform .24s cubic-bezier(.4,0,.2,1),visibility 0s linear .24s}
+.cap-drawer.on{visibility:visible}
 /* CW-9 on a phone: the conversation keeps the room, the session pane sits under
    it as a shorter strip the operator can scroll — never the other way round. */
 @media (max-width:760px){
@@ -798,7 +816,7 @@ pre.term{
 <header class="top">
   <div class="brand">
     <h1>Jarvis Copilot Desk</h1>
-    <span class="dirtag">Cockpit · CW-3</span>
+    <span class="dirtag" title="Direction C — the cockpit layout Vikas approved at Gate 2">Cockpit</span>
   </div>
   <div class="top-right">
     <span class="chip wait" id="connChip"><span class="dot"></span>Connecting…</span>
