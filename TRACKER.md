@@ -804,3 +804,15 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - Public-repo guard (secrets.public.test.js) wired into npm test → 37 suites.
 - Vikas (mid-session, quota reset): keep building whether he is there or not; park anything needing him;
   where to test = his PC at http://localhost:3000/desk.html after git pull.
+
+## 2026-09-05 — CW-14 contract pinned (runtime adoption); CW-13 round-2 review running
+- Vikas (his words): NetClaw = the reference LIBRARY of ready-made integrations, not "an MCP server";
+  frameworks for runtime/orchestration — "I really don't want to make that mistake again".
+- CW-14 pick: OpenAI Agents SDK (JS, @openai/agents 0.17) + @openai/agents-extensions `aisdk` adapter →
+  model from Vercel AI SDK providers (Anthropic today via @ai-sdk/anthropic, OpenAI/OpenRouter next).
+  Alternatives weighed in the contract (Vercel-only fallback; Anthropic Tool Runner / Claude Agent SDK /
+  Managed Agents rejected against decision 7). Stage A = spike behind JARVIS_RUNTIME=agents with the 4
+  flagship behaviours as the bar; laws + WS wire unchanged. Vikas can veto in one word.
+- CW-13 round 1 FIX-FIRST (3 HIGH: child inherited the whole parent env; stderr leaked into status;
+  unpinned vetting) → fixed at class level (env boundary, redaction, toolNames + sha256 pin + pinned
+  NetClaw commit, strict annotations, honest truncation, real live names). 38 suites green. Round 2 running.

@@ -107,8 +107,11 @@ public/desk.html + public/cw9-bridge.js/.css (shared UI module; dev fixtures in 
    that streams → "Jarvis is typing…" with dots; @Router-Expert a read → "Router-Expert is checking…";
    ask-mode approval → amber "waiting for your approval". Fixture for the look: paste test/cw12-fixture.js
    in the console and run cw12All().
-2. **CW-13 candidate** — vet + wire the first real external MCP server through the CW-8 connector
-   (Vikas saw the recommendation; not yet approved — ask him).
+2. **CW-13 — adopt NetClaw's MCP server library (first: catc-mcp)** — IN FLIGHT: PR #80, review round 2
+   (Vikas's pick 2026-09-05; contract docs/copilot-cw13-netclaw-contract.md).
+2b. **CW-14 — adopt an agent runtime, stop hand-rolling the loop** — CONTRACT PINNED, NOT BUILT
+   (docs/copilot-cw14-runtime-contract.md): OpenAI Agents SDK (JS) + `aisdk` adapter → Anthropic today,
+   other providers next (laws 9/10). Stage A spike behind `JARVIS_RUNTIME=agents`. Vikas may veto the pick.
 3. Polish backlog: probe planner sometimes asks bare "ping"/"traceroute" (Config-Keeper honestly refuses —
    wasted rounds); lesson consult chip dark until a first real lesson exists; 2 LOW review leftovers in
    PR #74/#76 comments (the CW-10 preview "shrink" reflow is a known cosmetic, not a bug); short-device-error
