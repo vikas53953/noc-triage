@@ -1,6 +1,7 @@
-# noc-triage — HANDOFF (any tool — Claude Code, Cursor, anything — resumes from this + TRACKER.md)
+# Jarvis NOC Copilot (noc-triage) — HANDOFF (any tool — Claude Code, Cursor, anything — resumes from this + TRACKER.md)
 
-Live, honest NOC/SOC triage console for Vikas. Private repo **vikas53953/noc-triage**.
+Live, honest NOC/SOC triage console for Vikas. Repo **vikas53953/noc-triage** (GitHub lists it PUBLIC —
+see PROJECT.md). PROJECT.md is the one-page brief; this file is the deep-dive build state.
 Run: `cd C:\Users\vikasmit\noc-triage && npm install && PORT=3000 node server.js` → open
 **http://localhost:3000/desk.html** (the real console; the root page is the older classic view).
 Tests: `npm test` (33 suites, ~1800 assertions, must stay green — chain exits non-zero on any failure).
@@ -71,8 +72,8 @@ sources/spend-store.js · sources/live-agents.js (per-agent reads, AGENT_SOURCES
 public/desk.html + public/cw9-bridge.js/.css (shared UI module; dev fixtures in test/) · public/index.html
 (classic view). Contracts: docs/copilot-cw9/10/11/12-*.md. Live state: TRACKER.md (append-only log).
 
-## NEXT (in order, nothing in flight right now)
-1. **CW-12 Live Presence** — RECORDED, NOT BUILT. Contract: docs/copilot-cw12-presence-contract.md
+## NEXT (in order)
+1. **CW-12 Live Presence** — IN FLIGHT since 2026-09-05 (Claude Code web session). Contract: docs/copilot-cw12-presence-contract.md
    (Vikas's words inside). Typing/working indicators + message receipt states, driven ONLY by real events.
 2. **CW-13 candidate** — vet + wire the first real external MCP server through the CW-8 connector
    (Vikas saw the recommendation; not yet approved — ask him).

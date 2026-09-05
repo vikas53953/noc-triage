@@ -1,4 +1,7 @@
-# noc-triage — an honest NOC/SOC triage console
+# Jarvis NOC Copilot (`noc-triage`) — an honest NOC/SOC triage console
+
+> **New here or coming back after a break? Read [`PROJECT.md`](PROJECT.md) first** — the one-page
+> brief: what this is, where everything lives, where we are, and what is next.
 
 When something breaks on the network, this is the room you walk into.
 
@@ -50,7 +53,7 @@ Two things are worth filling in first:
   at [devnetsandbox.cisco.com](https://devnetsandbox.cisco.com). These are the
   real devices the agents read.
 
-This is a **private** repo, but treat it as if it were public: real credentials
+GitHub currently lists this repo as **public** (see the visibility note in `PROJECT.md`), so: real credentials
 belong only in `.env.local`, which is gitignored.
 
 ## What it can do today

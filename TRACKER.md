@@ -695,3 +695,18 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   HANDOFF.md fully rewritten as the deep-dive pickup doc (laws, wave process, complete built map, key
   files, NEXT queue, creds list, operational notes incl. how to disable the auto-resume task).
 - Everything pushed. Nothing in flight. Desk live on :3000 (default Opus).
+
+## 2026-09-05 — RESUMED in Claude Code (web) after a 16-day pause; project named + centralised
+- Vikas: weekly quota reset; "pick the project, understand it, write it all down on GitHub, name it,
+  then build". Session link pointed at the 2026-08-18 "CW-3 tickets" session (bridge on his PC).
+- Located the project across GitHub: THIS repo (last commit 2026-08-20), predecessor mission-control,
+  and node-one (separate project — a Managed-Agents control plane, NOT this one). No Cursor commits
+  ever landed after the 08-20 handoff; nothing was in flight.
+- NAMED: **Jarvis NOC Copilot** (repo stays noc-triage). PROJECT.md written as the one-page brief and
+  linked from README/HANDOFF/docs/INDEX. package.json name drift (mission-control) fixed.
+- FOUND: GitHub lists the repo PUBLIC while HANDOFF/README said private. Secret scan clean. Decision
+  needed from Vikas (make private, or keep public knowingly).
+- Environment: Claude Code web container — 33 suites green here (node 22). No ANTHROPIC_API_KEY and no
+  DevNet reach in the container, so live-LLM/device verification stays on the PC; fixtures + suites +
+  headless browser run here.
+- NEXT: CW-12 Live Presence (contract docs/copilot-cw12-presence-contract.md) — building now.

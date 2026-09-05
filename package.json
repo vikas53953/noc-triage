@@ -1,7 +1,7 @@
 {
-  "name": "mission-control",
+  "name": "noc-triage",
   "version": "1.0.0",
-  "description": "Live Mission Control Dashboard for AI Agent Squad",
+  "description": "Jarvis NOC Copilot — an honest NOC/SOC triage console",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
