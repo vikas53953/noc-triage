@@ -833,3 +833,22 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - Master: 38 suites green. Needs Vikas on the PC: scripts/netclaw-setup.ps1 + enable netclaw-catc, then
   "what does Catalyst Center say about sw1's compliance?" with the real key.
 - In flight: CW-14 stage A (builder agent, own clone). Next pick for Vikas: CW-13b server order; CW-14 veto.
+
+## 2026-09-05 — CW-14 stage A SHIPPED ✅ (PR #81 merged as a8834cc, 2 review rounds → APPROVE)
+- Jarvis on an ADOPTED runtime (OpenAI Agents SDK 0.17 + aisdk adapter + @ai-sdk/anthropic) behind
+  `JARVIS_RUNTIME=agents`, default legacy. Same conduct gate first, same envelope / say_delta / presence on
+  the wire through the identical jarvisCtx; tools = our gate-wrapped reads only; MCP writes pause + reject.
+- Round 1 (different agent; it hit its quota before a verdict — findings lifted from its transcript) found
+  7 real ones, all HIGH/MED: the SDK's tracing exporter posting spans to OpenAI when OPENAI_API_KEY is set;
+  a hung model call never aborted; spend double-counted on a pause/resume; "@NetOps —" line + status flip
+  before argument validation with SDK boilerplate reaching the model; an engineer reading as another
+  engineer and answering as Jarvis; max_tokens 128000 + no caching; raw key in a cache signature. Class
+  fixes in 22f3634 (+22 checks). Round 2 (different agent) APPROVE with live proof on two servers; its two
+  non-blocking leftovers folded in pre-merge (unknown tool → honest result to the model, run continues;
+  key-shaped tokens scrubbed from provider error bodies). 41 suites green; runtime suite 93/93 ×3.
+- Process note: `pkill -f` on a pattern that appears in your own shell's command line kills the shell
+  (exit 144) — kill by pid from `pgrep -f "^node …"`. The public-repo guard caught a key-shaped test
+  fixture of mine before it reached master (fixed: `sk-ant-fake-not-real-…`).
+- Needs Vikas on the PC (one sitting): pull master, npm install, restart; eyeball CW-12; try
+  `JARVIS_RUNTIME=agents` with the real key (watch for a 400 on top-level cache_control); NetClaw setup.
+- Next: CW-14 stage B (parity + cut-over) unless Vikas vetoes the pick; CW-13b once he orders the servers.

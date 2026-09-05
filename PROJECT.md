@@ -29,7 +29,7 @@ Two screens in one app:
 | Classic console | `http://localhost:3000/` | The older triage view, kept working, shares the same modules |
 
 Stack: plain Node 18+ and Express, WebSockets for live push, no build step, JSON stores, one test
-runner (`npm test`, 35 suites, ~2000 assertions, must stay green).
+runner (`npm test`, 41 suites, ~2300 assertions, must stay green).
 
 ## Where everything lives
 
@@ -81,6 +81,7 @@ control plane above Claude Managed Agents (TypeScript, pnpm monorepo). A separat
 | CW-13 | NetClaw's ready-made MCP servers adopted as our integration library (first: Catalyst Center, all 514 read-only operations) behind an env boundary, redaction and a pinned read-only vetting record | PR #80 (3 review rounds), `docs/copilot-cw13-netclaw-contract.md` |
 | Polish P1 | Law-1 leftovers removed (canned @mention ack, Jarvis-attributed relay, dead simulators), watcher honesty, phone-width header | PR #79 |
 | CW-12 | Live presence: "Jarvis is typing…", "Router-Expert is checking…", "waiting for your approval", receipt ticks sent → picked up → answered — driven by real events only, never persisted | PR #78 (3 review rounds), `docs/shots/cw12-*` |
+| CW-14 A | Jarvis on an adopted agent runtime (OpenAI Agents SDK + provider adapter, Anthropic today) behind `JARVIS_RUNTIME=agents` — the loop, tool calling, handoffs and approval pauses are the framework's; the laws and the wire are ours and unchanged | PR #81 (2 review rounds), `docs/copilot-cw14-runtime-contract.md` |
 
 The **laws** (never regressed, every reviewer checks them): intent-first routing, ask-before-assume,
 never fabricate, permission gate + read-only guardrail, secrets never persist, short messages
@@ -91,7 +92,8 @@ never fabricate, permission gate + read-only guardrail, secrets never persist, s
 - The project was idle from 2026-08-20 (Vikas paused at ~90% weekly quota; no Cursor commits landed).
 - 2026-09-05: resumed in Claude Code on the web. Named, centralised (this file), and **CW-12 Live
   Presence shipped** — built, adversarially reviewed over three rounds, merged as PR #78.
-- Master is green: 38 suites (incl. the public-repo secret guard). In flight: CW-14 stage A (Jarvis on the OpenAI Agents SDK behind a flag).
+- **CW-14 stage A shipped** (PR #81): Jarvis runs on the OpenAI Agents SDK behind a flag; the hand-rolled
+  loop is still the default until stage B proves parity on the PC. Master is green: 41 suites.
 - The cloud container has no `ANTHROPIC_API_KEY` and no DevNet reach, so the live-LLM parts of CW-12
   were proven with a mock endpoint; the streamed "typing" and a real device "checking" are still to be
   eyeballed on the PC.
@@ -102,9 +104,10 @@ never fabricate, permission gate + read-only guardrail, secrets never persist, s
    Jarvis something that streams. Paste `test/cw12-fixture.js` into the browser console and run
    `cw12All()` to see every state without waiting on a device.
 2. **CW-14 — the agent runtime** (Vikas 2026-09-05: "use the agentic framework … I really don't want to
-   make that mistake again"). Stage A in flight: Jarvis on the OpenAI Agents SDK with a provider
-   adapter (Anthropic today, OpenAI/OpenRouter next) behind `JARVIS_RUNTIME=agents`. Contract:
-   `docs/copilot-cw14-runtime-contract.md`. Vikas may veto the pick in one word.
+   make that mistake again"). Stage A merged (flagged, default legacy). Next: stage B parity + cut-over,
+   C delete the hand-rolled loop, D second provider (OpenAI/OpenRouter, cheap models — needs a key in
+   `.env.local` on the PC). Contract: `docs/copilot-cw14-runtime-contract.md`. Vikas may veto in one word;
+   first try `JARVIS_RUNTIME=agents` on the PC with the real key.
 3. **CW-13b — the next NetClaw servers** for our other agents (ACI, SD-WAN, syslog/SNMP feeds, ISE,
    Meraki, F5, Check Point, Fortinet, NVD). Same seam, one vetting record each. Needs Vikas's order.
    On the PC: run `scripts/netclaw-setup.ps1` and enable `netclaw-catc` to see CW-13 live.

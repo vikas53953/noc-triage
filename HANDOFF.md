@@ -5,7 +5,7 @@ Live, honest NOC/SOC triage console for Vikas. Repo **vikas53953/noc-triage** �
 suite guards the tree). PROJECT.md is the one-page brief; this file is the deep-dive build state.
 Run: `cd C:\Users\vikasmit\noc-triage && npm install && PORT=3000 node server.js` → open
 **http://localhost:3000/desk.html** (the real console; the root page is the older classic view).
-Tests: `npm test` (38 suites incl. the public-repo secret guard, ~2300 assertions, must stay green — chain exits non-zero on any failure).
+Tests: `npm test` (41 suites incl. the public-repo secret guard and the CW-14 runtime suite, ~2300 assertions, must stay green — chain exits non-zero on any failure).
 `.env.local` (gitignored) holds Cisco DevNet sandbox creds + `ANTHROPIC_API_KEY`.
 Jarvis default model `claude-opus-5`; ALL testing uses `JARVIS_MODEL=claude-sonnet-5` (Vikas's spend rule).
 
@@ -103,6 +103,19 @@ account) — the approval signal is a PR comment starting "VERDICT: APPROVE".
   local catc_find, honest not_configured / unreachable, appliance stamp intact, password nowhere). A real
   appliance read + the planner picking the tool with a live model: PC.
 
+- **CW-14 stage A — Jarvis on an ADOPTED agent runtime** (2026-09-05, PR #81, 2 review rounds → APPROVE):
+  `sources/runtime/` behind `JARVIS_RUNTIME=agents` (default stays `legacy`): OpenAI Agents SDK 0.17 (JS)
+  + `@openai/agents-extensions` `aisdk` adapter → model from a Vercel AI SDK provider (`@ai-sdk/anthropic`
+  today; `MODEL_PROVIDER` is the seam, stage D adds OpenAI/OpenRouter — laws 9/10). The loop, tool calling,
+  handoffs and approval pauses are the SDK's; conduct gate FIRST, same CW-9 envelope + CW-10 say_delta +
+  CW-12 presence on the wire through the IDENTICAL `jarvisCtx`. Tools = our gate-wrapped reads only
+  (`delegate_read` for Jarvis, `read_as_<id>` bound to each engineer; MCP tools through `mcp.gather`
+  `approved:false`, write-classified ones pause and are rejected). Review-driven: tracing to OpenAI OFF
+  unconditionally; stall timeout + run bound; spend once per response; honest tool-error wording; handoff
+  answers posted as the engineer; `max_tokens` 3000 + top-level `cache_control`; key-shaped tokens scrubbed
+  from provider errors. Contract + as-built: docs/copilot-cw14-runtime-contract.md. 93 offline checks.
+  LIVE with a real key: PC (`JARVIS_RUNTIME=agents` in .env.local).
+
 ## Key files
 server.js (routes, WS broadcast, gate wiring — NAMED_WRITE_SURFACES lists gated non-/api/copilot surfaces;
 CW-12 livePresence + settle() request-end seam) · sources/presence.js (CW-12 tracker)
@@ -115,14 +128,19 @@ public/desk.html + public/cw9-bridge.js/.css (shared UI module; dev fixtures in 
 (classic view). Contracts: docs/copilot-cw9/10/11/12-*.md. Live state: TRACKER.md (append-only log).
 
 ## NEXT (in order, nothing in flight right now)
-1. **Vikas eyeballs CW-12 on the PC** with a real key: pull master, restart :3000, ask Jarvis something
-   that streams → "Jarvis is typing…" with dots; @Router-Expert a read → "Router-Expert is checking…";
-   ask-mode approval → amber "waiting for your approval". Fixture for the look: paste test/cw12-fixture.js
-   in the console and run cw12All().
-2. **CW-14 — adopt an agent runtime, stop hand-rolling the loop** — IN FLIGHT: stage A build (builder
-   agent, branch feat/cw14-runtime-a) after a 12/12 offline spike (docs/copilot-cw14-runtime-contract.md):
-   OpenAI Agents SDK (JS) + `aisdk` adapter → Anthropic today, other providers next (laws 9/10). Behind
-   `JARVIS_RUNTIME=agents`, default legacy. Vikas may veto the pick in one word.
+1. **Vikas on the PC, one sitting** (real key): pull master, `npm install` (new runtime deps), restart
+   :3000. (a) CW-12: ask Jarvis something that streams → "Jarvis is typing…"; @Router-Expert a read →
+   "…is checking…"; ask-mode approval → amber. Fixture: paste test/cw12-fixture.js, run cw12All().
+   (b) CW-14: set `JARVIS_RUNTIME=agents` in .env.local, restart, ask "is sw1 healthy?" → same desk
+   behaviour, plus `[Jarvis] Runtime → …` activity lines; if the provider 400s on the top-level
+   `cache_control`, unset it in `sources/runtime/squad.js modelSettingsFor` and note it in TRACKER.
+   (c) CW-13: scripts/netclaw-setup.ps1, enable netclaw-catc, ask about Catalyst Center compliance.
+2. **CW-14 stage B — parity + cut-over** (docs/copilot-cw14-runtime-contract.md): investigation rounds,
+   reflexion/lessons/predictions as tools/hooks on the runtime; presence actor for a handed-off engineer's
+   model call; the rejected-approval wording to the model; the 24/24 e2e map green on
+   `JARVIS_RUNTIME=agents`; then the flag flips default. Stage C deletes the hand-rolled loop; stage D =
+   second provider (needs an OpenAI/OpenRouter key in .env.local — never in the repo). Vikas may still
+   veto the runtime pick in one word.
 2b. **CW-13b — the next NetClaw servers** (each = its own vetting record + config entry, seam unchanged):
    candidates by value for our agents — ACI_MCP (Sentinel/fabric), cisco-sdwan-mcp (WAN), syslog-mcp /
    snmptrap-mcp / ipfix-mcp (feeds, no creds), ISE_MCP, meraki, f5-mcp-server, checkpoint, fortinet-mcp
