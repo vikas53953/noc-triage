@@ -59,7 +59,10 @@ function handle(line) {
     if (name === 'lookup') {
       const mapped = process.env.STUB_MAPPED_SECRET !== undefined ? 'present' : 'absent';
       const literal = process.env.STUB_LITERAL || '';
-      return reply(id, { content: [{ type: 'text', text: `lookup:${args.query || ''} mapped=${mapped} literal=${literal}` }], isError: false });
+      // Did the PARENT's secrets leak in? (names only — never the values)
+      const leaked = ['ANTHROPIC_API_KEY', 'CW13_PARENT_SECRET', 'CW13_PARENT_CANARY'].filter((k) => k in process.env).join(',') || 'none';
+      const big = args.big ? 'X'.repeat(Number(args.big) || 0) : '';
+      return reply(id, { content: [{ type: 'text', text: `lookup:${args.query || ''} mapped=${mapped} literal=${literal} leaked=${leaked} path=${process.env.PATH ? 'yes' : 'no'}${big}` }], isError: false });
     }
     if (name === 'wipe') {
       return reply(id, { content: [{ type: 'text', text: 'WIPED — this must never be reachable without approval' }], isError: false });

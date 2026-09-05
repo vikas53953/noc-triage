@@ -1,4 +1,10 @@
-# CW-13 — NetClaw as the first real external MCP server — CONTRACT + VETTING RECORD (2026-09-05)
+# CW-13 — adopt NetClaw's MCP server library (first: catc-mcp) — CONTRACT + VETTING RECORD (2026-09-05)
+
+Vikas's clarification (2026-09-05, later the same day): NetClaw is not "an MCP server" to plug in — it is
+the **reference library of ready-made integrations** for dozens of networking tools, so we never build
+those ourselves ("he already figured it out and is already connecting to multiple tools in the networking
+space"). CW-13 adopts the first server from that library as-is; later waves adopt more (a map of which
+NetClaw server covers which of our agents is in `docs/netclaw-assessment.md`).
 
 Vikas's ask, HIS WORDS (2026-09-05): "on the MCP server, there is one repo. I really want you to plug in
 that repo as an MCP because that plugin is really good … https://github.com/automateyournetwork/netclaw
@@ -42,9 +48,11 @@ operations** behind 10 tools (`catc_find` local search → `catc_describe_operat
 
 Residual risks, stated plainly: the server is Python run as a child process of our Node server (a venv per
 machine; `mcp<2` is load-bearing — 2.0 removed `mcp.server.fastmcp`); large GET responses are returned
-whole and our connector clips tool text at 4,000 characters (honest truncation, not a fabrication);
-"read-only" also depends on using a **least-privilege account** on the appliance — the DevNet sandbox
-account is shared and read-only in practice.
+whole and our connector clips tool text at `maxTextChars` (12,000 for this server) WITH an explicit
+truncation marker; a full-catalogue `catc_find` is ~84,000 characters, so the planner must search with a
+keyword; "read-only" also depends on using a **least-privilege account** on the appliance — the DevNet
+sandbox account is shared and read-only in practice. `${VAR}` in `command` lets an operator's own
+`.env.local` choose the binary — config is operator-owned and gitignored, and the example ships disabled.
 
 ## The seam (what CW-13 adds to the connector — additive, all optional)
 
@@ -52,7 +60,13 @@ account is shared and read-only in practice.
 |---|---|---|
 | `"${VAR}"` in `command` / `args` / `cwd` | expanded from the server's own environment (`.env.local`) | one committed example config works on every machine; an unset var stays visibly unexpanded |
 | `envFrom: { CHILD: "PARENT" }` | the child gets `PARENT`'s value from our process env under the name `CHILD` | no credential value is ever written in the config file; an unset parent var is not passed and is reported in status by NAME only |
-| `vettedReadOnly: { by, date, why }` | the operator's record that this server is read-only by construction | honoured only with `by` AND `why`; a tool that DECLARES itself a write stays a write; every call still passes the permission gate (deny = zero wire) and the audit |
+| **the env boundary** (always on) | the child sees ONLY an allowlisted base (PATH, HOME, TEMP, locale, proxy/CA, Python/venv vars) + literal `env` + `envFrom` | a third-party child can never read `ANTHROPIC_API_KEY` or another integration's credentials just because we spawned it (review round 1, #1) |
+| **stderr redaction** (always on) | whatever the child prints on its way out is logged to the server console in full, but every mapped credential value and every secret-shaped parent value is replaced by `[redacted]` before it can reach a status route or a chat card | a Python traceback at import time cannot leak a key (review round 1, #2) |
+| `vettedReadOnly: { by, date, why, toolNames, file?, sha256? }` | the operator's record that this server is read-only by construction — naming WHICH tools, and pinned to the server file's hash | honoured only with `by`, `why` AND `toolNames`; a tool the record does not name stays a write; if `sha256` is set and the file on disk no longer matches, the record is VOID (status shows `vettingDrift`) — a vetting cannot silently bless code that changed under it (review round 1, #3); a tool that DECLARES anything but a clean `readOnlyHint:true` stays a write (#4); every call still passes the permission gate (deny = zero wire) and the audit |
+| `maxTextChars` | per-server cap on a tool result's text (default 4000; the NetClaw example sets 12000) | a clipped result ends with `[truncated: showing N of M characters — the result above is INCOMPLETE …]` so a cut list is never presented as the whole list (#5) |
+
+The NetClaw checkout is **pinned** to commit `c703a8fe292a87a6a55a0b7ea9438d89a7ec5aa6` (setup scripts check it out;
+they never `pull`), and the example record carries the sha256 of `server.py` at that commit.
 
 Pinned by `sources/mcp.cw13.test.js` on a no-annotation stub (`test/mcp-noannot-server.js`) and, when a
 NetClaw checkout + Python are present, LIVE on the real `catc-mcp` (10 tools, a real local catalogue
@@ -76,7 +90,8 @@ NETCLAW_PYTHON=C:\Users\vikasmit\netclaw-venv\Scripts\python.exe
 `scripts/netclaw-setup.ps1` does steps 1–3. On Linux/macOS: `scripts/netclaw-setup.sh`.
 
 ## What "done" looks like for CW-13 (live, on the PC)
-- `GET /api/copilot/mcp/status` → `netclaw-catc` connected, `toolCount: 10`, `vettedReadOnly` shown, `envMissing` empty.
+- `GET /api/copilot/mcp/status` → `netclaw-catc` connected, `toolCount: 10`, `vettedReadOnly` shown with
+  `pinned: true`, no `vettingDrift`, no `unvettedTools`, `envMissing` empty.
 - Ask Jarvis "what does Catalyst Center say about sw1's compliance?" → the planner delegates to
   `mcp:netclaw-catc:catc_find` then a `catc_<group>` read; the finding shows the real envelope
   (`appliance`, `observed_at`, `outcome`), and an empty result is narrated as "the controller returned

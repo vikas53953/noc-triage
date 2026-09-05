@@ -30,7 +30,9 @@ function ok(name, cond, extra) {
   else { fail++; console.log(`  FAIL ${name}${extra ? ` — ${extra}` : ''}`); }
 }
 const STUB = path.join(__dirname, '..', 'test', 'mcp-noannot-server.js');
-const { expandVars, vettingOf, childEnv, classifyTool } = mcp._cw13;
+const { expandVars, vettingOf, childEnv, classifyTool, makeRedactor, checkVettingPin, CHILD_ENV_BASE } = mcp._cw13;
+const LEAKY = path.join(__dirname, '..', 'test', 'mcp-leaky-server.js');
+const crypto = require('crypto');
 
 function configure(extra) {
   process.env.MCP_SERVERS = JSON.stringify([
@@ -51,19 +53,50 @@ function configure(extra) {
     const declaredWrite = { name: 'w', annotations: { readOnlyHint: false } };
     const destructive = { name: 'd', annotations: { readOnlyHint: true, destructiveHint: true } };
     const plain = { config: {} };
-    const vetted = { config: { vettedReadOnly: { by: 'Vikas', why: 'GET-only catalogue', date: '2026-09-05' } } };
+    const V = { by: 'Vikas', why: 'GET-only catalogue', date: '2026-09-05', toolNames: ['lookup', 'r', 'w', 'd', 'x'] };
+    const vetted = { config: { vettedReadOnly: V } };
     const blank = { config: { vettedReadOnly: true } };
-    const halfRecord = { config: { vettedReadOnly: { by: 'Vikas' } } };
+    const halfRecord = { config: { vettedReadOnly: { by: 'Vikas', toolNames: ['lookup'] } } };
+    const noTools = { config: { vettedReadOnly: { by: 'Vikas', why: 'x' } } };
     ok('no annotations + no vetting → write (fail safe, unchanged CW-8 rule)', classifyTool(noAnn, plain) === 'write');
-    ok('no annotations + a real vetting record → read', classifyTool(noAnn, vetted) === 'read');
+    ok('no annotations + a real vetting record naming the tool → read', classifyTool(noAnn, vetted) === 'read');
     ok('a blank `vettedReadOnly: true` is NOT a record → still write', classifyTool(noAnn, blank) === 'write' && vettingOf(blank) === null);
     ok('a record without `why` is not a record either', classifyTool(noAnn, halfRecord) === 'write' && vettingOf(halfRecord) === null);
+    ok('a record without toolNames is not a record (it must say WHICH tools were vetted — review #3)', classifyTool(noAnn, noTools) === 'write' && vettingOf(noTools) === null);
+    ok('a tool the record does NOT name stays a write even on a vetted server', classifyTool({ name: 'catc_apply_template', annotations: null }, vetted) === 'write');
     ok('declared read-only is read, vetted or not', classifyTool(declaredRead, plain) === 'read' && classifyTool(declaredRead, vetted) === 'read');
     ok('a DECLARED write stays a write even on a vetted server (the server\'s word wins)', classifyTool(declaredWrite, vetted) === 'write');
     ok('destructiveHint:true stays a write even with readOnlyHint:true and vetting', classifyTool(destructive, vetted) === 'write');
+    // malformed annotations are NOT silence (review #4): anything declared that is not the clean read shape → write
+    const malformed = [
+      { readOnlyHint: 'true' }, { readOnlyHint: 'false' }, { readOnlyHint: 0 }, { readOnlyHint: null }, { readOnlyHint: 1 },
+      { destructiveHint: 1 }, { destructiveHint: 'true' }, { destructiveHint: null }, { destructiveHint: false },
+      { readOnlyHint: true, destructiveHint: 1 }, { readOnlyHint: true, destructiveHint: null },
+    ];
+    const verdicts = malformed.map((a) => classifyTool({ name: 'x', annotations: a }, vetted));
+    ok('every malformed annotation shape is a write, vetted or not', verdicts.every((v) => v === 'write') && malformed.every((a) => classifyTool({ name: 'x', annotations: a }, plain) === 'write'), JSON.stringify(verdicts));
+    ok('readOnlyHint:true + destructiveHint:false (the clean read shape) is read', classifyTool({ name: 'x', annotations: { readOnlyHint: true, destructiveHint: false } }, plain) === 'read');
+    ok('annotations as an array / empty object / string count as ABSENT (vetting fills, else write)',
+      classifyTool({ name: 'x', annotations: [] }, plain) === 'write' && classifyTool({ name: 'x', annotations: [] }, vetted) === 'read'
+      && classifyTool({ name: 'x', annotations: {} }, vetted) === 'read' && classifyTool({ name: 'x', annotations: 'yes' }, plain) === 'write');
     const v = vettingOf(vetted);
-    ok('the record is normalised and bounded', v && v.by === 'Vikas' && v.why === 'GET-only catalogue' && v.date === '2026-09-05');
-    ok('a huge record is clipped, not rejected', (vettingOf({ config: { vettedReadOnly: { by: 'x'.repeat(500), why: 'y'.repeat(2000) } } }) || {}).by.length === 120);
+    ok('the record is normalised and bounded', v && v.by === 'Vikas' && v.why === 'GET-only catalogue' && v.date === '2026-09-05' && v.toolNames.length === 5 && v.sha256 === null);
+    ok('a huge record is clipped, not rejected', (vettingOf({ config: { vettedReadOnly: { by: 'x'.repeat(500), why: 'y'.repeat(2000), toolNames: ['t'] } } }) || {}).by.length === 120);
+    // the pin: a sha256 that no longer matches the file voids the record
+    const tmp = path.join(require('os').tmpdir(), `cw13-pin-${process.pid}.py`);
+    fs.writeFileSync(tmp, 'print("v1")\n');
+    const sha = crypto.createHash('sha256').update(fs.readFileSync(tmp)).digest('hex');
+    const pinned = { config: { command: 'python', args: [tmp], vettedReadOnly: Object.assign({}, V, { sha256: sha }) } };
+    checkVettingPin(pinned);
+    ok('a pinned record whose file matches is honoured', !pinned.vettingDrift && classifyTool(noAnn, pinned) === 'read' && vettingOf(pinned).sha256 === sha);
+    fs.writeFileSync(tmp, 'print("v2")  # changed\n');
+    checkVettingPin(pinned);
+    ok('…and once the file changes, the record is VOID: drift recorded, tool → write', /does not match/.test(pinned.vettingDrift || '') && classifyTool(noAnn, pinned) === 'write' && vettingOf(pinned) === null);
+    const gone = { config: { args: ['/nonexistent/server.py'], vettedReadOnly: Object.assign({}, V, { sha256: sha }) } };
+    checkVettingPin(gone);
+    ok('an unreadable pinned file voids the record honestly', /could not be read/.test(gone.vettingDrift || '') && vettingOf(gone) === null);
+    ok('a record with no sha256 is unpinned (allowed, shown as pinned:false)', (() => { const r = { config: { vettedReadOnly: V } }; checkVettingPin(r); return !r.vettingDrift && vettingOf(r).sha256 === null; })());
+    try { fs.unlinkSync(tmp); } catch (e) {}
   }
 
   // ── 2. ${VAR} expansion + envFrom (secret-safe) ────────────────────────────
@@ -75,11 +108,23 @@ function configure(extra) {
     ok('non-strings pass through', expandVars(null) === null && expandVars(3) === 3);
     process.env.CW13_PARENT_SECRET = 'hunter2';
     delete process.env.CW13_PARENT_UNSET;
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test-canary-never-real-000';
+    process.env.CW13_PARENT_CANARY = 'canary-value-not-mapped';
     const ce = childEnv({ env: { STUB_LITERAL: 'lit-${CW13_TEST_DIR}' }, envFrom: { STUB_MAPPED_SECRET: 'CW13_PARENT_SECRET', STUB_OTHER: 'CW13_PARENT_UNSET' } });
     ok('envFrom copies the parent value into the child under the child name', ce.env && ce.env.STUB_MAPPED_SECRET === 'hunter2');
     ok('a literal env value is expanded too', ce.env && ce.env.STUB_LITERAL === 'lit-/opt/netclaw');
     ok('an unset parent var is NOT passed and is reported by NAME', !('STUB_OTHER' in ce.env) && ce.missing.join() === 'STUB_OTHER');
-    ok('no env at all → null (the client inherits the parent env as before)', childEnv({}).env === null && childEnv({}).missing.length === 0);
+    ok('THE BOUNDARY: the child env carries the allowlisted base only — never ANTHROPIC_API_KEY, never the parent var by its own name, never an unmapped parent value (review #1)',
+      !('ANTHROPIC_API_KEY' in ce.env) && !('CW13_PARENT_SECRET' in ce.env) && !('CW13_PARENT_CANARY' in ce.env) && Object.keys(ce.env).every((k) => CHILD_ENV_BASE.includes(k) || k === 'STUB_LITERAL' || k === 'STUB_MAPPED_SECRET'));
+    ok('…but PATH (and the rest of the base) does come through, so a venv python still runs', ('PATH' in ce.env) === ('PATH' in process.env));
+    ok('no config env at all → the base only, never null (the boundary holds for every server)', childEnv({}).env && !('ANTHROPIC_API_KEY' in childEnv({}).env) && childEnv({}).missing.length === 0);
+    ok('mapped (envFrom) values are reported back for the redactor; literal env values are not (they are non-secrets by contract)', ce.injected.includes('hunter2') && !ce.injected.includes('lit-/opt/netclaw'));
+    // the redactor: every mapped value and every secret-shaped parent value is wiped from text
+    const red = makeRedactor(ce.injected);
+    const sample = 'boot: MAPPED=hunter2 "quoted" KEY=sk-ant-test-canary-never-real-000 lit=lit-/opt/netclaw fine=hello';
+    const out = red(sample);
+    ok('the redactor wipes mapped values and the parent API key, keeps harmless text and literals', !out.includes('hunter2') && !out.includes('sk-ant-test-canary') && out.includes('lit-/opt/netclaw') && /fine=hello/.test(out) && /\[redacted\]/.test(out), out);
+    ok('a value containing another is wiped whole (longest first)', !makeRedactor(['ab', 'abcdef'])('x abcdef y').includes('cdef'));
   }
 
   // ── 3. end to end on the no-annotation stub ────────────────────────────────
@@ -99,9 +144,10 @@ function configure(extra) {
     process.env.CW13_PARENT_SECRET = 'hunter2';
     delete process.env.CW13_PARENT_UNSET;
     configure({
-      vettedReadOnly: { by: 'Vikas', date: '2026-09-05', why: 'test stub — read-only by construction' },
+      vettedReadOnly: { by: 'Vikas', date: '2026-09-05', why: 'test stub — read-only by construction', toolNames: ['lookup'] },
       env: { STUB_LITERAL: 'from-${CW13_TEST_DIR}' },
       envFrom: { STUB_MAPPED_SECRET: 'CW13_PARENT_SECRET', STUB_MISSING: 'CW13_PARENT_UNSET' },
+      maxTextChars: 300,
     });
     await mcp.connectAll();
     const st = mcp.status();
@@ -112,6 +158,12 @@ function configure(extra) {
     ok('the un-annotated tool now auto-runs as a read (real stub result, not invented)', r.ok === true && /^lookup:sw1 /.test(r.text), JSON.stringify(r));
     ok('the child received the mapped credential (present) and the expanded literal', /mapped=present/.test(r.text) && /literal=from-\/opt\/netclaw/.test(r.text));
     ok('the credential VALUE is not in the result (the stub never echoes it)', !r.text.includes('hunter2'));
+    ok('LIVE BOUNDARY: the spawned child could NOT see ANTHROPIC_API_KEY, the parent var, or an unmapped canary — and still had PATH', /leaked=none/.test(r.text) && /path=yes/.test(r.text), r.text);
+    ok('status shows the vetting record with its tool list and pinned:false, and the declared-write tool as unvetted', st.servers[0].vettedReadOnly.toolNames.join() === 'lookup' && st.servers[0].vettedReadOnly.pinned === false && (st.servers[0].unvettedTools || []).join() === 'wipe');
+    const big = await mcp.callTool({ server: 'noannot', tool: 'lookup', args: { query: 'big', big: 2000 } });
+    ok('a result over maxTextChars is clipped WITH an honest marker (review #5)', big.ok === true && big.truncated === true && /\[truncated: showing 300 of \d+ characters — the result above is INCOMPLETE/.test(big.text) && big.text.indexOf('[truncated') >= 300);
+    const small = await mcp.callTool({ server: 'noannot', tool: 'lookup', args: { query: 'small' } });
+    ok('…and a result under the cap carries no marker', small.ok === true && small.truncated === false && !/truncated/.test(small.text));
     const w = await mcp.callTool({ server: 'noannot', tool: 'wipe', args: {} });
     ok('the DECLARED destructive tool is still refused on the vetted server', w.refused === true && w.kind === 'write');
     const ros = mcp.rosterEntries();
@@ -123,6 +175,25 @@ function configure(extra) {
     approvals.setMode('auto');
     const g = await mcp.gather('mcp:noannot:lookup', 'look up {"query":"core-1"}');
     ok('the Jarvis delegation seam returns evidence from the vetted tool', g.stance === 'evidence' && /lookup:core-1/.test(g.text));
+  }
+  // 3c. A HOSTILE child that dumps its env to stderr and dies: nothing it saw
+  //     is secret (boundary), and nothing it printed reaches status / chat raw.
+  {
+    process.env.CW13_PARENT_SECRET = 'hunter2';
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test-canary-never-real-000';
+    process.env.MCP_SERVERS = JSON.stringify([{ name: 'leaky', transport: 'stdio', command: process.execPath, args: [LEAKY], enabled: true,
+      env: { STUB_LITERAL: 'literal-value-1234' }, envFrom: { STUB_MAPPED_SECRET: 'CW13_PARENT_SECRET' } }]);
+    delete process.env.MCP_SERVERS_FILE; mcp._reset();
+    await mcp.connectAll();
+    const st = mcp.status();
+    const sj = JSON.stringify(st);
+    ok('the leaky child fails to connect and status says why', st.servers[0].connected === false && /initialize failed|exited/.test(st.servers[0].reason || ''), st.servers[0].reason);
+    ok('status carries NEITHER the mapped secret NOR the API key (review #2)', !sj.includes('hunter2') && !sj.includes('sk-ant-test-canary'), sj.slice(0, 300));
+    ok('…what it printed is redacted, not merely dropped (the connector\'s [redacted] and/or the scrubber\'s «redacted»)', /(\[redacted\]|«redacted»)/.test(st.servers[0].reason || ''), st.servers[0].reason);
+    ok('the child never SAW the API key or the parent name in the first place (boundary — the child reports what it could see)', /parent_key_seen=no/.test(st.servers[0].reason || '') && /parent_name_seen=no/.test(st.servers[0].reason || ''), st.servers[0].reason);
+    const g = await mcp.gather('mcp:leaky:anything', 'x');
+    ok('the chat-facing finding for a dead server is redacted too', g.stance === 'not-connected' && !g.text.includes('hunter2') && !g.text.includes('sk-ant-test-canary'));
+    mcp._reset();
   }
 
   // ── 4. LIVE: the real NetClaw catc-mcp server, when present ────────────────
@@ -153,12 +224,28 @@ function configure(extra) {
       ok('LIVE: with no DNAC_* set, the three mapped credentials are reported missing by name', (st.servers[0].envMissing || []).sort().join() === 'CATALYST_CENTER_HOST,CATALYST_CENTER_PASSWORD,CATALYST_CENTER_USERNAME');
       const ros = mcp.rosterEntries();
       ok('LIVE: all 10 are read-only delegation targets for the planner', ros.length === 10 && ros.every((e) => e.readOnly === true));
+      ok('LIVE: the pinned record matches the checkout (no drift), all 10 tools vetted, none unvetted', st.servers[0].vettedReadOnly && st.servers[0].vettedReadOnly.pinned === true && !st.servers[0].vettingDrift && !st.servers[0].unvettedTools, JSON.stringify(st.servers[0]));
       const f = await mcp.callTool({ server: 'netclaw-catc', tool: 'catc_find', args: { query: 'health', limit: 3 } });
       ok('LIVE: catc_find answers from the LOCAL catalogue (no appliance)', f.ok === true && /"outcome": "ok"/.test(f.text) && /LOCAL catalogue/.test(f.text), f.text && f.text.slice(0, 200));
-      const dv = await mcp.callTool({ server: 'netclaw-catc', tool: 'catc_devices', args: { operation: 'getDeviceList', params: {} } });
-      ok('LIVE: a device read with no appliance configured is REFUSED honestly (not_configured / refused), never data', dv.ok === true && /"outcome": "(not_configured|refused)"/.test(dv.text) && !/"data"/.test(dv.text));
-      const near = await mcp.callTool({ server: 'netclaw-catc', tool: 'catc_describe_operation', args: { operation: 'getDeviceCount' } });
-      ok('LIVE: describe works for a real operation name', near.ok === true && /"outcome": "ok"/.test(near.text) || /Unknown operation/.test(near.text));
+      // real operation names from the catalogue (review #6): api_* names
+      const REAL = 'api_countDevicesEnergy';
+      const dv = await mcp.callTool({ server: 'netclaw-catc', tool: 'catc_devices', args: { operation: REAL, params: {} } });
+      ok('LIVE: a REAL device operation with no appliance configured → outcome not_configured, no data', dv.ok === true && /"outcome": "not_configured"/.test(dv.text) && !/"data"/.test(dv.text), dv.text && dv.text.slice(0, 200));
+      const near = await mcp.callTool({ server: 'netclaw-catc', tool: 'catc_describe_operation', args: { operation: REAL } });
+      ok('LIVE: describe works for the real operation name (outcome ok, method GET)', near.ok === true && /"outcome": "ok"/.test(near.text) && /"method": "GET"/.test(near.text), near.text && near.text.slice(0, 200));
+      const wide = await mcp.callTool({ server: 'netclaw-catc', tool: 'catc_find', args: { query: 'device', limit: 40 } });
+      ok('LIVE: a 40-hit catalogue search fits under the example\'s maxTextChars (12000) — no clip', wide.ok === true && wide.truncated === false, String(wide.text.length));
+      mcp._reset();
+      // a dead appliance → unreachable, honestly, no data, no password anywhere
+      process.env.DNAC_HOST = 'https://127.0.0.1:9'; process.env.DNAC_USER = 'u'; process.env.DNAC_PASS = 'p@ss-never-real-1';
+      process.env.MCP_SERVERS = JSON.stringify([Object.assign({}, catc, { enabled: true })]);
+      mcp._reset(); await mcp.connectAll();
+      const st2 = mcp.status();
+      ok('LIVE: with DNAC_* set, nothing is reported missing', !st2.servers[0].envMissing);
+      const dead = await mcp.callTool({ server: 'netclaw-catc', tool: 'catc_devices', args: { operation: REAL, params: {} } });
+      ok('LIVE: a dead appliance → outcome unreachable, no data, "NOT AN EMPTY RESULT"', dead.ok === true && /"outcome": "unreachable"/.test(dead.text) && !/"data"/.test(dead.text) && /NOT AN EMPTY RESULT/.test(dead.text), dead.text && dead.text.slice(0, 200));
+      ok('LIVE: the password never appears in the result or status', !dead.text.includes('p@ss-never-real-1') && !JSON.stringify(st2).includes('p@ss-never-real-1'));
+      delete process.env.DNAC_HOST; delete process.env.DNAC_USER; delete process.env.DNAC_PASS;
       mcp._reset();
     }
   }

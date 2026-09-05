@@ -16,6 +16,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { McpClient } = require('./mcp-client');
 const approvals = require('./approvals');
 const session = require('./session-log');
@@ -34,14 +35,35 @@ const NS = 'mcp'; // namespace prefix: mcp:<server>:<tool>
 //   var that is unset is simply not passed (and reported by NAME in status), so
 //   the child says "not configured" honestly instead of inheriting a blank.
 //
-//   vettedReadOnly: { by, date, why } — the OPERATOR's record that this server
-//   is read-only by construction (NetClaw's catc-mcp catalogues GET operations
-//   only), for servers that declare no MCP annotations. With it, a tool that
-//   carries NO annotations is auto-callable as a read; a tool that DECLARES
-//   itself a write (readOnlyHint:false or destructiveHint:true) is STILL a
-//   write — the server's own word always wins over the operator's vetting. The
-//   record is honoured only when it names who vetted and why, so a blank
-//   `vettedReadOnly: true` does nothing: the vetting must be on the record.
+//   vettedReadOnly: { by, date, why, toolNames, sha256?, file? } — the
+//   OPERATOR's record that this server is read-only by construction (NetClaw's
+//   catc-mcp catalogues GET operations only), for servers that declare no MCP
+//   annotations. With it, a LISTED tool that carries NO annotations is
+//   auto-callable as a read; a tool that DECLARES itself a write (or carries
+//   any annotation that is not a clean readOnlyHint:true) is STILL a write —
+//   the server's own word always wins over the operator's vetting. The record
+//   is honoured only when it names who, why and WHICH tools (a blank
+//   `vettedReadOnly: true` does nothing), and — when it carries a sha256 of the
+//   server file — only while that file still matches: a vetted record cannot
+//   silently bless code that changed under it (review CW-13 #3). Drift or an
+//   unlisted tool → write, and status says so by name.
+//
+//   ENV BOUNDARY (review CW-13 #1): the child sees ONLY an allowlisted base
+//   (PATH, HOME, TEMP, locale, Python/venv vars …) + literal `env` + `envFrom`.
+//   Never the parent's whole environment — a third-party program must not be
+//   able to read ANTHROPIC_API_KEY or another integration's credentials just
+//   because it was spawned by us.
+const CHILD_ENV_BASE = [
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TEMP', 'TMP',
+  'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'TZ', 'TERM',
+  'USERPROFILE', 'SYSTEMROOT', 'SystemRoot', 'COMSPEC', 'ComSpec', 'PATHEXT', 'WINDIR', 'SystemDrive',
+  'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA', 'ProgramData', 'ProgramFiles', 'PROGRAMFILES',
+  'PYTHONPATH', 'PYTHONHOME', 'PYTHONIOENCODING', 'PYTHONUTF8', 'PYTHONUNBUFFERED', 'VIRTUAL_ENV',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
+  'SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'NODE_EXTRA_CA_CERTS', 'CURL_CA_BUNDLE',
+];
+const SECRETISH_NAME = /(pass|secret|token|key|auth|cred|pwd)/i;
+
 function expandVars(v) {
   if (typeof v !== 'string') return v;
   return v.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (m, k) => (process.env[k] !== undefined ? process.env[k] : m));
@@ -51,13 +73,43 @@ function vettingOf(rec) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
   const by = String(v.by || '').trim();
   const why = String(v.why || '').trim();
-  if (!by || !why) return null;
-  return { by: by.slice(0, 120), why: why.slice(0, 400), date: String(v.date || '').trim().slice(0, 40) || null };
+  const toolNames = Array.isArray(v.toolNames) ? v.toolNames.filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim().slice(0, 120)) : [];
+  if (!by || !why || !toolNames.length) return null;
+  // A record that pins a file hash is only valid while the file matches.
+  if (rec.vettingDrift) return null;
+  return {
+    by: by.slice(0, 120), why: why.slice(0, 400), date: String(v.date || '').trim().slice(0, 40) || null,
+    toolNames, sha256: (typeof v.sha256 === 'string' && /^[0-9a-f]{64}$/i.test(v.sha256)) ? v.sha256.toLowerCase() : null,
+  };
 }
-// Build the child's env: literal `env` (expanded) + `envFrom` (values from the
-// parent process, never from the file). Returns { env, missing:[childNames] }.
+// Verify the record's file hash against the server file on disk (before every
+// connect). Sets rec.vettingDrift (an honest sentence) on mismatch / unreadable.
+function checkVettingPin(rec) {
+  rec.vettingDrift = null;
+  const v = rec.config && rec.config.vettedReadOnly;
+  if (!v || typeof v !== 'object') return;
+  const want = (typeof v.sha256 === 'string' && /^[0-9a-f]{64}$/i.test(v.sha256)) ? v.sha256.toLowerCase() : null;
+  if (!want) return;
+  const file = expandVars(v.file || (Array.isArray(rec.config.args) && rec.config.args[0]) || '');
+  if (!file) { rec.vettingDrift = 'vettedReadOnly.sha256 is set but no file to check (set vettedReadOnly.file)'; return; }
+  try {
+    const got = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    if (got !== want) rec.vettingDrift = `vetting record does not match ${path.basename(file)} (sha256 ${got.slice(0, 12)}… ≠ vetted ${want.slice(0, 12)}…) — the vetted code changed; every tool is treated as a write until re-vetted`;
+  } catch (e) {
+    rec.vettingDrift = `vetted file could not be read (${path.basename(file)}): ${e.code || e.message}`;
+  }
+}
+// Build the child's env: an allowlisted BASE from the parent + literal `env`
+// (expanded) + `envFrom` (values from the parent process, never from the file).
+// Returns { env, missing:[childNames], injected:[values] }.
 function childEnv(config) {
   const env = {};
+  for (const k of CHILD_ENV_BASE) if (process.env[k] !== undefined) env[k] = process.env[k];
+  // `injected` feeds the redactor: ONLY the envFrom values (credentials from the
+  // parent). Literal `env` values are operator-written non-secrets by contract
+  // (the config file must never carry a secret) — redacting them would wipe
+  // ordinary words like "true" out of every tool result.
+  const injected = [];
   const lit = (config && config.env && typeof config.env === 'object') ? config.env : {};
   for (const k of Object.keys(lit)) env[k] = expandVars(String(lit[k]));
   const missing = [];
@@ -65,10 +117,24 @@ function childEnv(config) {
   for (const child of Object.keys(from)) {
     const parent = String(from[child] || '');
     const val = parent ? process.env[parent] : undefined;
-    if (val !== undefined && String(val).trim() !== '') env[child] = String(val);
+    if (val !== undefined && String(val).trim() !== '') { env[child] = String(val); injected.push(env[child]); }
     else missing.push(child);
   }
-  return { env: Object.keys(env).length ? env : null, missing };
+  return { env, missing, injected };
+}
+// The redactor for anything a child says that can reach an error / status /
+// chat: every value we injected, plus every secret-shaped parent value. Longer
+// values first so a value that contains another is wiped whole.
+function makeRedactor(injected) {
+  const vals = new Set();
+  for (const v of injected || []) if (v && String(v).length >= 4) vals.add(String(v));
+  for (const [k, v] of Object.entries(process.env)) if (SECRETISH_NAME.test(k) && v && v.length >= 8) vals.add(v);
+  const list = [...vals].sort((a, b) => b.length - a.length);
+  return (text) => {
+    let t = String(text == null ? '' : text);
+    for (const v of list) t = t.split(v).join('[redacted]');
+    return t;
+  };
 }
 
 // One connection record per configured server.
@@ -164,12 +230,16 @@ async function connectOne(rec) {
   if (rec.client) { try { rec.client.close(); } catch (e) { /* ignore */ } rec.client = null; }
   const ce = childEnv(rec.config);
   rec.envMissing = ce.missing;            // names only — never values
+  rec.redact = makeRedactor(ce.injected);
+  checkVettingPin(rec);
   const client = new McpClient({
     name: rec.name,
     transport: 'stdio',
     command: expandVars(rec.config.command),
     args: (rec.config.args || []).map(expandVars),
     env: ce.env,
+    inheritEnv: false,                    // the boundary: only what childEnv built
+    redact: rec.redact,
     cwd: expandVars(rec.config.cwd) || null,
     timeoutMs: rec.config.timeoutMs || undefined,
     maxBufferBytes: rec.config.maxBufferBytes || undefined,
@@ -186,7 +256,7 @@ async function connectOne(rec) {
     rec.client = null;
     rec.connected = false;
     rec.tools = [];
-    rec.reason = err && err.message ? err.message : String(err);
+    rec.reason = session.scrub(rec.redact(err && err.message ? err.message : String(err))).slice(0, 600);
   }
   return snapshot(rec);
 }
@@ -199,14 +269,22 @@ async function connectOne(rec) {
 // refuse unless the caller explicitly approved it (approve-first, mirroring the
 // change engine). Returns 'read' | 'write'.
 function classifyTool(tool, rec) {
-  const a = tool && tool.annotations;
-  // The server's OWN declaration always wins: a declared write is a write even
-  // on a server the operator vetted as read-only.
-  if (a && (a.readOnlyHint === false || a.destructiveHint === true)) return 'write';
-  if (a && a.readOnlyHint === true) return 'read';
-  // No annotations at all: unknown danger → write (fail safe) — UNLESS the
-  // operator put a vetting record on this server (CW-13, see vettingOf).
-  if (rec && vettingOf(rec)) return 'read';
+  const raw = tool && tool.annotations;
+  // Anything that is not a plain object is "no annotations".
+  const a = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : null;
+  const declares = !!(a && ('readOnlyHint' in a || 'destructiveHint' in a));
+  if (declares) {
+    // The server's OWN declaration always wins, and only the CLEAN read shape
+    // counts as a read: readOnlyHint === true with destructiveHint absent or
+    // exactly false. 'true', 1, null, 0, 'false' … are malformed → write
+    // (review CW-13 #4).
+    const clean = a.readOnlyHint === true && (a.destructiveHint === undefined || a.destructiveHint === false);
+    return clean ? 'read' : 'write';
+  }
+  // Silence: unknown danger → write (fail safe) — UNLESS the operator's vetting
+  // record names THIS tool and the record still matches the code on disk.
+  const v = rec && vettingOf(rec);
+  if (v && tool && v.toolNames.includes(tool.name)) return 'read';
   return 'write';
 }
 
@@ -268,8 +346,9 @@ async function callTool({ server, tool, args, who, approved } = {}) {
     });
   } catch (err) {
     // The call ran (gate approved) but the server/tool errored — honest, not faked.
-    audit({ server, tool, argKeys, who, result: `error: ${err && err.message ? err.message : err}` });
-    return { ok: false, error: session.scrub(String(err && err.message ? err.message : err)), tool, server };
+    const msg = (rec.redact || ((t) => t))(String(err && err.message ? err.message : err));
+    audit({ server, tool, argKeys, who, result: `error: ${session.scrub(msg).slice(0, 200)}` });
+    return { ok: false, error: session.scrub(msg), tool, server };
   }
 
   if (g.denied) {
@@ -278,9 +357,16 @@ async function callTool({ server, tool, args, who, approved } = {}) {
   }
 
   const r = g.result || {};
-  const text = session.scrub(String(r.text || '')).slice(0, 4000);
-  audit({ server, tool, argKeys, who, result: r.isError ? 'tool-error' : 'ok' });
-  return { ok: true, isError: !!r.isError, text, tool, server };
+  // Bounded, and HONEST about the bound (review CW-13 #5): a clipped result
+  // says so, so a cut list is never presented as the whole list. Per-server
+  // `maxTextChars` in config; default 4000.
+  const cap = Math.max(200, Math.min(200000, Number(rec.config.maxTextChars) || 4000));
+  const full = session.scrub((rec.redact || ((t) => t))(String(r.text || '')));
+  const text = full.length > cap
+    ? `${full.slice(0, cap)}\n[truncated: showing ${cap} of ${full.length} characters — the result above is INCOMPLETE; ask with a smaller limit or a narrower query]`
+    : full;
+  audit({ server, tool, argKeys, who, result: r.isError ? 'tool-error' : (full.length > cap ? 'ok-truncated' : 'ok') });
+  return { ok: true, isError: !!r.isError, text, tool, server, truncated: full.length > cap };
 }
 
 // A refusal that runs NOTHING but is still audited (an attempted call is a real
@@ -397,10 +483,20 @@ function snapshot(rec) {
   const out = { name: rec.name, connected: !!rec.connected, toolCount: rec.connected ? rec.tools.length : 0 };
   if (!rec.connected && rec.reason) out.reason = rec.reason;
   if (!rec.connected && !rec.reason) out.reason = 'not connected';
-  // CW-13: the vetting record (who / when / why) and which mapped env vars the
-  // parent did not have — NAMES only, so the status route stays secret-free.
+  // CW-13: the vetting record (who / when / why / which tools / pin), any drift,
+  // tools the record does NOT cover, and which mapped env vars the parent did
+  // not have — NAMES only, so the status route stays secret-free. `reason` is
+  // redacted + scrubbed at connect time; scrubbed again here as a belt.
+  if (out.reason) out.reason = session.scrub(out.reason);
   const v = vettingOf(rec);
-  if (v) out.vettedReadOnly = v;
+  if (v) {
+    out.vettedReadOnly = { by: v.by, date: v.date, why: v.why, toolNames: v.toolNames.slice(), pinned: !!v.sha256 };
+    if (rec.connected) {
+      const unvetted = rec.tools.map((t) => t.name).filter((n) => !v.toolNames.includes(n));
+      if (unvetted.length) out.unvettedTools = unvetted;
+    }
+  }
+  if (rec.vettingDrift) out.vettingDrift = rec.vettingDrift;
   if (Array.isArray(rec.envMissing) && rec.envMissing.length) out.envMissing = rec.envMissing.slice();
   return out;
 }
@@ -431,7 +527,7 @@ function _reset() {
 module.exports = {
   configured, connectAll, connectOne, status, anyToolsConnected,
   // CW-13 (tests): the config affordances, exposed so they can be pinned.
-  _cw13: { expandVars, vettingOf, childEnv, classifyTool },
+  _cw13: { expandVars, vettingOf, childEnv, classifyTool, makeRedactor, checkVettingPin, CHILD_ENV_BASE },
   rosterEntries, gather, callTool, classifyTool, isMcpId, parseToolId,
   _reset,
 };

@@ -3,27 +3,51 @@
     "name": "netclaw-catc",
     "transport": "stdio",
     "command": "${NETCLAW_PYTHON}",
-    "args": ["${NETCLAW_DIR}/mcp-servers/catc-mcp/server.py"],
+    "args": [
+      "${NETCLAW_DIR}/mcp-servers/catc-mcp/server.py"
+    ],
     "envFrom": {
       "CATALYST_CENTER_HOST": "DNAC_HOST",
       "CATALYST_CENTER_USERNAME": "DNAC_USER",
       "CATALYST_CENTER_PASSWORD": "DNAC_PASS"
     },
-    "env": { "CATALYST_CENTER_VERIFY_SSL": "true" },
+    "env": {
+      "CATALYST_CENTER_VERIFY_SSL": "true"
+    },
     "vettedReadOnly": {
       "by": "Vikas (recorded by the CW-13 build, 2026-09-05)",
       "date": "2026-09-05",
-      "why": "NetClaw catc-mcp catalogues GET operations only (the one POST is absent from the catalogue); every response is stamped with the appliance and time; no file writes, no subprocess, no shell; egress only to CATALYST_CENTER_HOST; deps mcp<2 + httpx<1. Vetting record: docs/copilot-cw13-netclaw-contract.md"
+      "why": "NetClaw catc-mcp catalogues GET operations only (the one POST is absent from the catalogue); every response is stamped with the appliance and time; no file writes, no subprocess, no shell; egress only to CATALYST_CENTER_HOST; deps mcp<2 + httpx<1. Vetting record: docs/copilot-cw13-netclaw-contract.md",
+      "toolNames": [
+        "catc_find",
+        "catc_describe_operation",
+        "catc_devices",
+        "catc_sites",
+        "catc_wireless",
+        "catc_health",
+        "catc_compliance",
+        "catc_software",
+        "catc_events",
+        "catc_other"
+      ],
+      "file": "${NETCLAW_DIR}/mcp-servers/catc-mcp/server.py",
+      "sha256": "ad5d28fa6cd8b6e755aae2a875f4e9cdf0b6bceff3ab3cdacd10ffafab81ef34",
+      "netclawCommit": "c703a8fe292a87a6a55a0b7ea9438d89a7ec5aa6"
     },
     "timeoutMs": 60000,
-    "enabled": false
+    "enabled": false,
+    "maxTextChars": 12000
   },
   {
     "name": "example-stdio",
     "transport": "stdio",
     "command": "node",
-    "args": ["/absolute/path/to/some-mcp-server.js"],
-    "env": { "SOME_API_KEY": "set-in-env-not-here" },
+    "args": [
+      "/absolute/path/to/some-mcp-server.js"
+    ],
+    "env": {
+      "SOME_API_KEY": "set-in-env-not-here"
+    },
     "enabled": false
   }
 ]
