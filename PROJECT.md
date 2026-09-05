@@ -6,7 +6,7 @@ word, remember **Jarvis** — the squad lead that runs the console.
 
 This file is the one-page answer to "what is this, where is it, where are we, what next".
 Written 2026-09-05 from everything on GitHub (this repo, `mission-control`, `node-one`) and the last
-Claude Code session on Vikas's PC ("Build CW-3 tickets feature and verify live LLM"). For the
+Claude Code session on Vikas's PC; product structure corrected by Vikas the same day ("Build CW-3 tickets feature and verify live LLM"). For the
 detailed build state read `HANDOFF.md`; for the day-by-day log read `TRACKER.md`.
 
 ## What it is, in plain words
@@ -46,17 +46,22 @@ lists `vikas53953/noc-triage` as **public**. A secret scan of the tree found not
 hostnames and `.env.example` placeholders), so nothing leaked — but decide on purpose: make it
 private in repo settings, or keep it public and treat it that way.
 
-## Lineage — how this project came to be
+## One product, two interfaces (Vikas, 2026-09-05)
 
-1. **`mission-control`** (July–Aug 2026, public) — the first chat-first dashboard for a squad of ten
-   network agents. Its big finding: most agent answers were simulated. Vikas's decision on 2026-08-14:
-   *real read-only reads against Cisco DevNet always-on sandboxes, no fabricated data, ever.*
-2. **`noc-triage`** (Aug 2026) — the rebuild on that rule. Triage engine, baselines, alarm grouping,
-   config diffs, permission gate, read-only guardrail, ServiceNow export. Then the **Jarvis NOC
-   Copilot** expansion (Vikas's ask, 2026-08-17): "anyone comes in and asks any question related to
-   network and Jarvis should be able to answer" — built as Copilot Waves CW-1 … CW-11.
-3. **`node-one`** (from 2026-08-21, private) — a *separate* project: "Node One", a mission and safety
-   control plane above Claude Managed Agents (TypeScript, pnpm monorepo). Not part of this one.
+This is **one product** with two front doors, not a predecessor and a successor:
+
+| Interface | Repo | When the user is there |
+|---|---|---|
+| **1. Mission Control** | `vikas53953/mission-control` | The first screen after onboarding — the everyday home: chat with the squad, see status, ask questions. |
+| **2. NOC Triage / Jarvis desk** | `vikas53953/noc-triage` (this repo) | The room the user walks into **when they choose to** — an incident, a bridge, a deep investigation, tickets, changes. |
+
+Both are built on the same rule (2026-08-14): real read-only reads against Cisco DevNet sandboxes, no
+fabricated data, ever. All the Copilot waves (CW-1 … CW-12) landed in this repo; Mission Control has not
+been touched since 2026-08-15. Joining the two into one onboarding → home → triage flow is future work
+that needs Vikas's design call (see "What is next").
+
+Not part of this product: **`node-one`** (from 2026-08-21, private) — "Node One", a mission and safety
+control plane above Claude Managed Agents (TypeScript, pnpm monorepo). A separate project.
 
 ## What is built (all merged on master, all live-verified on the PC)
 
@@ -101,7 +106,10 @@ never fabricate, permission gate + read-only guardrail, secrets never persist, s
    first real lesson; two LOW review leftovers on PRs #74/#76; short-device-error over-scrub; header
    badge still reads "COCKPIT · CW-3"; 390 px horizontal overflow; dead Law-1 leftovers and the canned
    "On it — querying…" relay line (found by the CW-12 reviewer).
-4. Parked, need Vikas's pick — FortiGate / F5 / threat feeds, RBAC/SSO, PDF/email export, HA front.
+4. **Join the two interfaces** — onboarding → Mission Control (home) → NOC Triage (on demand): one
+   operator identity, one way in, cross-links both ways. Needs Vikas's design call on what "onboarding"
+   means in v1 (name tag only, as today, or a real sign-in).
+5. Parked, need Vikas's pick — FortiGate / F5 / threat feeds, RBAC/SSO, PDF/email export, HA front.
 
 ## What only Vikas can supply (each flips a built feature live)
 
