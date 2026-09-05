@@ -22,6 +22,55 @@ const session = require('./session-log');
 
 const NS = 'mcp'; // namespace prefix: mcp:<server>:<tool>
 
+// ── CW-13: adopting a real external server (NetClaw) ────────────────────────
+// Three small, honest config affordances, all optional, all secret-safe:
+//
+//   "${VAR}" in command / args / cwd is expanded from the SERVER's environment
+//   (.env.local), so one committed example config works on every machine.
+//
+//   envFrom: { CHILD_VAR: "PARENT_VAR" } hands the child a value from the
+//   server's own environment WITHOUT the value ever being written in the config
+//   file — e.g. NetClaw's CATALYST_CENTER_PASSWORD from our DNAC_PASS. A parent
+//   var that is unset is simply not passed (and reported by NAME in status), so
+//   the child says "not configured" honestly instead of inheriting a blank.
+//
+//   vettedReadOnly: { by, date, why } — the OPERATOR's record that this server
+//   is read-only by construction (NetClaw's catc-mcp catalogues GET operations
+//   only), for servers that declare no MCP annotations. With it, a tool that
+//   carries NO annotations is auto-callable as a read; a tool that DECLARES
+//   itself a write (readOnlyHint:false or destructiveHint:true) is STILL a
+//   write — the server's own word always wins over the operator's vetting. The
+//   record is honoured only when it names who vetted and why, so a blank
+//   `vettedReadOnly: true` does nothing: the vetting must be on the record.
+function expandVars(v) {
+  if (typeof v !== 'string') return v;
+  return v.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (m, k) => (process.env[k] !== undefined ? process.env[k] : m));
+}
+function vettingOf(rec) {
+  const v = rec && rec.config && rec.config.vettedReadOnly;
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const by = String(v.by || '').trim();
+  const why = String(v.why || '').trim();
+  if (!by || !why) return null;
+  return { by: by.slice(0, 120), why: why.slice(0, 400), date: String(v.date || '').trim().slice(0, 40) || null };
+}
+// Build the child's env: literal `env` (expanded) + `envFrom` (values from the
+// parent process, never from the file). Returns { env, missing:[childNames] }.
+function childEnv(config) {
+  const env = {};
+  const lit = (config && config.env && typeof config.env === 'object') ? config.env : {};
+  for (const k of Object.keys(lit)) env[k] = expandVars(String(lit[k]));
+  const missing = [];
+  const from = (config && config.envFrom && typeof config.envFrom === 'object') ? config.envFrom : {};
+  for (const child of Object.keys(from)) {
+    const parent = String(from[child] || '');
+    const val = parent ? process.env[parent] : undefined;
+    if (val !== undefined && String(val).trim() !== '') env[child] = String(val);
+    else missing.push(child);
+  }
+  return { env: Object.keys(env).length ? env : null, missing };
+}
+
 // One connection record per configured server.
 //   { name, transport, enabled, client, connected, tools:[...], reason, config }
 const servers = new Map();
@@ -113,13 +162,15 @@ async function connectOne(rec) {
   }
   // Tear down any previous client before reconnecting.
   if (rec.client) { try { rec.client.close(); } catch (e) { /* ignore */ } rec.client = null; }
+  const ce = childEnv(rec.config);
+  rec.envMissing = ce.missing;            // names only — never values
   const client = new McpClient({
     name: rec.name,
     transport: 'stdio',
-    command: rec.config.command,
-    args: rec.config.args || [],
-    env: rec.config.env || null,
-    cwd: rec.config.cwd || null,
+    command: expandVars(rec.config.command),
+    args: (rec.config.args || []).map(expandVars),
+    env: ce.env,
+    cwd: expandVars(rec.config.cwd) || null,
     timeoutMs: rec.config.timeoutMs || undefined,
     maxBufferBytes: rec.config.maxBufferBytes || undefined,
   });
@@ -147,10 +198,16 @@ async function connectOne(rec) {
 // danger (no annotations at all) — is treated like a device write: fail safe,
 // refuse unless the caller explicitly approved it (approve-first, mirroring the
 // change engine). Returns 'read' | 'write'.
-function classifyTool(tool) {
+function classifyTool(tool, rec) {
   const a = tool && tool.annotations;
-  if (a && a.readOnlyHint === true && a.destructiveHint !== true) return 'read';
-  return 'write'; // declared write OR unknown → treat as write (fail safe)
+  // The server's OWN declaration always wins: a declared write is a write even
+  // on a server the operator vetted as read-only.
+  if (a && (a.readOnlyHint === false || a.destructiveHint === true)) return 'write';
+  if (a && a.readOnlyHint === true) return 'read';
+  // No annotations at all: unknown danger → write (fail safe) — UNLESS the
+  // operator put a vetting record on this server (CW-13, see vettingOf).
+  if (rec && vettingOf(rec)) return 'read';
+  return 'write';
 }
 
 function findTool(rec, toolName) {
@@ -187,7 +244,7 @@ async function callTool({ server, tool, args, who, approved } = {}) {
 
   // 2. READ-ONLY posture. A write/unknown tool is refused unless explicitly
   //    approved. This is BEFORE the gate and before the wire — zero external call.
-  const kind = classifyTool(toolDef);
+  const kind = classifyTool(toolDef, rec);
   if (kind === 'write' && !approved) {
     return refuse('write', `"${server}:${tool}" is not declared read-only, so it is treated as a write and was NOT auto-run. ` +
       `Approve it explicitly (approve-first, like a device change) to call it.`, { server, tool, argKeys, who });
@@ -259,7 +316,7 @@ function rosterEntries() {
   for (const rec of servers.values()) {
     if (!rec.connected) continue;
     for (const t of rec.tools) {
-      const kind = classifyTool(t);
+      const kind = classifyTool(t, rec);
       out.push({
         id: `${NS}:${rec.name}:${t.name}`,
         name: `MCP · ${rec.name} · ${t.name}`,
@@ -340,6 +397,11 @@ function snapshot(rec) {
   const out = { name: rec.name, connected: !!rec.connected, toolCount: rec.connected ? rec.tools.length : 0 };
   if (!rec.connected && rec.reason) out.reason = rec.reason;
   if (!rec.connected && !rec.reason) out.reason = 'not connected';
+  // CW-13: the vetting record (who / when / why) and which mapped env vars the
+  // parent did not have — NAMES only, so the status route stays secret-free.
+  const v = vettingOf(rec);
+  if (v) out.vettedReadOnly = v;
+  if (Array.isArray(rec.envMissing) && rec.envMissing.length) out.envMissing = rec.envMissing.slice();
   return out;
 }
 
@@ -368,6 +430,8 @@ function _reset() {
 
 module.exports = {
   configured, connectAll, connectOne, status, anyToolsConnected,
+  // CW-13 (tests): the config affordances, exposed so they can be pinned.
+  _cw13: { expandVars, vettingOf, childEnv, classifyTool },
   rosterEntries, gather, callTool, classifyTool, isMcpId, parseToolId,
   _reset,
 };

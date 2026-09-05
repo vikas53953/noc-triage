@@ -1,5 +1,24 @@
 [
   {
+    "name": "netclaw-catc",
+    "transport": "stdio",
+    "command": "${NETCLAW_PYTHON}",
+    "args": ["${NETCLAW_DIR}/mcp-servers/catc-mcp/server.py"],
+    "envFrom": {
+      "CATALYST_CENTER_HOST": "DNAC_HOST",
+      "CATALYST_CENTER_USERNAME": "DNAC_USER",
+      "CATALYST_CENTER_PASSWORD": "DNAC_PASS"
+    },
+    "env": { "CATALYST_CENTER_VERIFY_SSL": "true" },
+    "vettedReadOnly": {
+      "by": "Vikas (recorded by the CW-13 build, 2026-09-05)",
+      "date": "2026-09-05",
+      "why": "NetClaw catc-mcp catalogues GET operations only (the one POST is absent from the catalogue); every response is stamped with the appliance and time; no file writes, no subprocess, no shell; egress only to CATALYST_CENTER_HOST; deps mcp<2 + httpx<1. Vetting record: docs/copilot-cw13-netclaw-contract.md"
+    },
+    "timeoutMs": 60000,
+    "enabled": false
+  },
+  {
     "name": "example-stdio",
     "transport": "stdio",
     "command": "node",
