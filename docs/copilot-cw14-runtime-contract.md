@@ -54,6 +54,21 @@ into tool execution (the SDK's tool `needsApproval` / run hooks vs our `approval
 accounting per call (our spend store reads `usage`). Any of these failing → fallback to Vercel AI SDK
 alone with our thin orchestration, still no hand-rolled loop.
 
+## Spike result (2026-09-05, offline, scratchpad → `test/cw14-runtime-spike.mjs`) — every named risk retired
+
+Mock Anthropic transport (JSON + SSE) under `@ai-sdk/anthropic` → `aisdk()` → `@openai/agents` 0.17.0:
+
+| Risk | Result |
+|---|---|
+| (1) tool-call fidelity through the adapter with an Anthropic model | the model's `tool_use` ran OUR function, the SDK sent the `tool_result` back, the model answered — the loop is the SDK's; parallel tools not yet exercised |
+| handoffs | Jarvis → Router-Expert (generated tool `transfer_to_Router_Expert`) → read → answer; `lastAgent` is Router-Expert |
+| (3) permission gate seam | a tool with `needsApproval: true` PAUSES the run with an interruption before executing; `state.reject()` resumes with the tool never run — this is exactly `approvals.gate` deny = zero wire |
+| MCP stdio | `MCPServerStdio` spawned the real NetClaw catc-mcp, listed its 10 tools, the model called `catc_find` and got the real local-catalogue result. (Stage A will NOT use the SDK's MCP client directly — every MCP call still goes through our connector posture — but it proves the shapes agree.) |
+| (2) streaming | `run(..., {stream:true})` yields `raw_model_stream_event` text deltas (our `say_delta`) plus item/agent events (our presence) |
+| (4) spend | `rawResponses[i].usage` carries input/output tokens |
+
+12/12 checks. Not proven offline: structured outputs for the planner's strict JSON (stage A measures), and behaviour parity on the 4 flagship behaviours (stage A's bar).
+
 ## Stages (each = a PR with a DIFFERENT-agent adversarial review, laws-first)
 
 | Stage | Deliverable | Done when |

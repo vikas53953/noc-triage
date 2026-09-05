@@ -816,3 +816,10 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - CW-13 round 1 FIX-FIRST (3 HIGH: child inherited the whole parent env; stderr leaked into status;
   unpinned vetting) → fixed at class level (env boundary, redaction, toolNames + sha256 pin + pinned
   NetClaw commit, strict annotations, honest truncation, real live names). 38 suites green. Round 2 running.
+
+## 2026-09-05 — CW-14 spike: 12/12 offline (test/cw14-runtime-spike.mjs)
+- OpenAI Agents SDK 0.17 + aisdk adapter + @ai-sdk/anthropic against a mock Anthropic transport: tool loop,
+  handoff (Jarvis → Router-Expert), approval interrupt before a write tool (= our gate seam, zero wire),
+  the REAL NetClaw catc-mcp spawned as MCP tools (10 listed, catc_find answered), streamed deltas, usage.
+  Every risk the contract named is retired; stage A build launched in its own clone (builder agent),
+  branch feat/cw14-runtime-a, behind JARVIS_RUNTIME=agents.
