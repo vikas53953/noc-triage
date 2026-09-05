@@ -553,9 +553,9 @@ spend._setDir(spendDir);
     // (i) Round 2: a provider error body that echoes a key never reaches the wire.
     resetHarness();
     understand = NOT_A_PROBLEM;
-    script = [{ status: 401, message: 'invalid x-api-key: sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 (authorization: Bearer sk-ant-api03-ABCDEFGHIJ)' }];
+    script = [{ status: 401, message: 'invalid x-api-key: sk-ant-fake-not-real-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 (authorization: Bearer sk-ant-fake-not-real-ABCDEFGHIJ)' }];
     await runtime.ask('is sw1 up', { conversationId: 'c10i' });
-    ok('a 401 whose body echoes the key → the honest line carries «redacted», never the key', said.length === 1 && /provider error \(401\)/.test(said[0].text) && /«redacted»/.test(said[0].text) && !/sk-ant-api03/.test(said[0].text) && !/sk-ant-api03/.test(logs.join('\n')), trim(said));
+    ok('a 401 whose body echoes the key → the honest line carries «redacted», never the key', said.length === 1 && /provider error \(401\)/.test(said[0].text) && /«redacted»/.test(said[0].text) && !/sk-ant-fake/.test(said[0].text) && !/sk-ant-fake/.test(logs.join('\n')), trim(said));
     ok('readableError trims the SDK\'s trailing full stop (no "..")', runtime._test.readableError(new Error('Tool x not found in agent Jarvis.')) === 'Tool x not found in agent Jarvis');
 
     // (g) The key never sits in the model cache signature.
