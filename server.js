@@ -1620,8 +1620,17 @@ function handleCommandInner(data) {
   });
   // simulateAgentAction already reports a failure to the operator (honest line
   // in chat); here only the receipt's colour follows the outcome.
-  const settle = (result, actorId) => Promise.resolve(result)
-    .then(() => answered(actorId, 'done'), () => answered(actorId, 'error'));
+  // FAIL CLOSED (review round 2): only a THENABLE is trusted to mean "finished
+  // when it settles". A handler that returns nothing while its reply is still
+  // on a timer would otherwise get an "answered" receipt before the answer
+  // exists — so a non-thenable emits NO receipt at all, never 'done'. The rule
+  // for every handler path is therefore: return a promise that resolves after
+  // its LAST reply is broadcast (see simulatePing / showAgentHelp / live.handle
+  // / resumeClarification).
+  const settle = (result, actorId) => {
+    if (!result || typeof result.then !== 'function') return;
+    result.then(() => answered(actorId, 'done'), () => answered(actorId, 'error'));
+  };
 
   // An @mention nobody answers to is a typo, not a task. Say so and stop —
   // creating live work against real kit for a name that does not exist is the
@@ -1913,8 +1922,12 @@ function runAgentAction(agentId, command) {
   // the command they already typed. Checked here, before every other route, so
   // BOTH surfaces inherit it: Jarvis and a direct @mention. It returns false for
   // anything that is not an answer, and that message routes normally as before.
-  if (live.maybeForget(agentId, command)) return;
-  if (live.resumeClarification(agentId, command)) return;
+  // CW-12: each of these replies synchronously (maybeForget) or returns the
+  // read's own promise (resumeClarification) — so the answered receipt fires
+  // after the reply, never before. A plain `true` here would fail closed.
+  if (live.maybeForget(agentId, command)) return Promise.resolve(true);
+  const resumed = live.resumeClarification(agentId, command);
+  if (resumed) return resumed;
 
   updateAgentStatus(agentId, 'active', `Processing: ${command}`);
 
@@ -1961,7 +1974,7 @@ function runAgentAction(agentId, command) {
     // sink every refused write passes through. Logging it here as well would
     // double-count this branch while the other refusal paths still logged
     // nothing, which is exactly the hole this move closes.
-    return live.refuseWrite(agentId, command, writeIntent);
+    return Promise.resolve(live.refuseWrite(agentId, command, writeIntent));   // the refusal IS the reply (sync)
   }
 
   // Jarvis keeps its squad-coordination intents (standup, roll call, triage);
@@ -1972,7 +1985,7 @@ function runAgentAction(agentId, command) {
 
   switch (intent) {
     // Read-only is enforced before anything reaches a device.
-    case 'configure_device': return live.refuseWrite(agentId, command);
+    case 'configure_device': return Promise.resolve(live.refuseWrite(agentId, command));
     case 'ping':             return simulatePing(agentId);
     case 'help':             return showAgentHelp(agentId);
     default:                 return live.handle(agentId, command);
@@ -1989,7 +2002,9 @@ function simulatePing(agentId) {
 
   addTaskToBoard('inProgress', { title: taskTitle, agent: agent.name });
 
-  setTimeout(() => {
+  // CW-12: resolves AFTER the reply is broadcast, so the answered receipt can
+  // never precede the Pong.
+  return new Promise((resolve) => setTimeout(() => {
     broadcast('chat_message', {
       type: 'incoming',
       agent: agentId,
@@ -2000,7 +2015,8 @@ function simulatePing(agentId) {
     });
     updateAgentStatus(agentId, 'idle', 'Ping responded');
     moveTaskOnBoard(taskTitle, 'inProgress', 'done');
-  }, 500);
+    resolve(true);
+  }, 500));
 }
 
 // Show agent help.
@@ -2024,7 +2040,8 @@ function showAgentHelp(agentId) {
         `Read-only is enforced in code (sources/guardrails.js), not by convention.`
       : `I have no live data source mapped, so I will report "not connected" rather than guess.`;
 
-  setTimeout(() => {
+  // CW-12: resolves AFTER the reply is broadcast (see simulatePing).
+  return new Promise((resolve) => setTimeout(() => {
     broadcast('chat_message', {
       type: 'incoming',
       agent: agentId,
@@ -2034,7 +2051,8 @@ function showAgentHelp(agentId) {
       timestamp: new Date().toISOString()
     });
     updateAgentStatus(agentId, 'idle', 'Help displayed');
-  }, 500);
+    resolve(true);
+  }, 500));
 }
 
 // Main Jarvis entry point.

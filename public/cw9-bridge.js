@@ -1179,8 +1179,9 @@
      'not-sent' = the server refused it or could not be reached; 'picked-up' =
      the server said an actor started on it; 'answered' = the server said the
      handler for it FINISHED, and at least one reply for it has been painted;
-     'replied' = it finished but the last reply was Jarvis's narrowing question,
-     so it is the operator's turn, not an answer. NEVER inferred from a reply
+     'replied' = it finished but the last reply was Jarvis's narrowing question
+     — a question back, not an answer (the operator's reply goes down its own
+     route, so this tick is final and worded as a fact, not an instruction). NEVER inferred from a reply
      alone — "let me think…", a roster, an agent's finding all carry the request
      id and none of them is an answer. There is no "read" — nobody reads. */
   var RECEIPTS = {
@@ -1188,7 +1189,7 @@
     'not-sent':  { ticks: '✕',  label: 'Not sent' },
     'picked-up': { ticks: '✓✓', label: 'Picked up' },
     answered:    { ticks: '✓✓', label: 'Answered' },
-    replied:     { ticks: '✓✓', label: 'Replied — needs your answer' },
+    replied:     { ticks: '✓✓', label: 'Replied — asked you a question' },
   };
   function receiptHtml(state, who) {
     var st = Object.prototype.hasOwnProperty.call(RECEIPTS, state) ? state : 'sent';

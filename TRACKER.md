@@ -746,3 +746,17 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - Verified: 35 suites green (presence.cw12 59, desk.cw12.ui 116); browser 34/34 on :3123 incl. the
   reviewer's repros (interim reply → still picked-up; ask → replied; stranded stream settles on the
   recorded message); live 18/18 on :3124 (mock 401). Re-review requested.
+
+## 2026-09-05 — CW-12 review round 2: FIX-FIRST (1 HIGH residual, 3 LOW) → fixed
+- HIGH residual: `settle()` trusted any handler return; ping / help (reply on a timer) and the
+  clarification-resume path (fire-and-forget read) returned nothing, so "answered" fired ~480ms early.
+  FIX (class): settle FAILS CLOSED (non-thenable → no receipt, never 'done'); the rule "every handler path
+  returns a promise that resolves after its last reply" applied — ping/help return a Promise resolved
+  inside their timer, resumeClarification/pickCandidate return the read's own promise (say-only branches
+  return a resolved promise), maybeForget and write refusals wrapped at the call site, live.handle wraps
+  its sync not-connected/cannot-answer lines. Pinned in presence.cw12.test (66) + browser ping timeline
+  (answered never before the Pong, on screen and on the wire).
+- LOW: "Replied — asked you a question" (a fact, not an instruction; the resume route is separate).
+- LOW: NOT SENT / REPLIED survive a reload (facts); SENT / PICKED-UP still swept.
+- Info: dev hooks guard null. Pre-existing canned "On it — querying…" line noted for a Law-1 cleanup.
+- Verified: 35 suites exit 0; browser 37/37 (:3123) + 18/18 (:3124). Round-3 re-review requested.

@@ -3421,7 +3421,7 @@ function cw12Seed(list){ if(!PRES) return; try{ PRES.seed(list); }catch(e){} pre
 function cw12Drop(){ if(!PRES) return; try{ if(PRES.clear()) presenceRender(); }catch(e){} }
 /* DEV/TEST ONLY — nothing in the app calls these. Fixture: test/cw12-fixture.js */
 window.__cw12DevPresence = function(d){ return onPresence(d); };
-window.__cw12DevChat = function(msg){ return renderChat(msg); };
+window.__cw12DevChat = function(msg){ return msg ? renderChat(msg) : false; };
 window.__cw12DevDrop = function(){ return cw12Drop(); };
 window.__cw12DevSeed = function(list){ return cw12Seed(list); };
 

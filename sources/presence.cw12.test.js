@@ -239,9 +239,24 @@ console.log('\nCW-12 backend — presence is a mirror of real work, never a gues
     ok('the receipt fires right before the handler runs (never on enqueue)',
       /pickedUp\(agent\);\s*\n\s*settle\(simulateAgentAction\(agent, command\), agent\)/.test(server) && /pickedUp\(targetId\);\s*\n\s*settle\(simulateAgentAction\(targetId, mentionMessage\), targetId\)/.test(server));
     ok('ANSWERED is sent from the one seam that owns the request end (handler promise settled), never inferred',
-      /const settle = \(result, actorId\) => Promise\.resolve\(result\)\s*\n\s*\.then\(\(\) => answered\(actorId, 'done'\), \(\) => answered\(actorId, 'error'\)\)/.test(server)
+      /const settle = \(result, actorId\) => \{\s*\n\s*if \(!result \|\| typeof result\.then !== 'function'\) return;\s*\n\s*result\.then\(\(\) => answered\(actorId, 'done'\), \(\) => answered\(actorId, 'error'\)\);/.test(server)
       && /livePresence\.answered\(/.test(server));
     ok('the unknown-@mention refusal is itself the answer', /Unknown @mention refused[\s\S]{0,120}answered\(agent, 'done'\)/.test(server));
+    // review round 2: the seam FAILS CLOSED, and every handler path returns a promise that resolves after its last reply
+    ok('settle() fails closed: a non-thenable result emits NO answered receipt', /if \(!result \|\| typeof result\.then !== 'function'\) return;/.test(server));
+    ok('ping and help resolve AFTER their delayed reply', (server.match(/return new Promise\(\(resolve\) => setTimeout\(\(\) => \{/g) || []).length === 2
+      && /moveTaskOnBoard\(taskTitle, 'inProgress', 'done'\);\s*\n\s*resolve\(true\);/.test(server) && /'Help displayed'\);\s*\n\s*resolve\(true\);/.test(server));
+    ok('maybeForget (sync reply) and resumeClarification (the read\'s promise) both hand a thenable back',
+      /if \(live\.maybeForget\(agentId, command\)\) return Promise\.resolve\(true\);/.test(server) && /const resumed = live\.resumeClarification\(agentId, command\);\s*\n\s*if \(resumed\) return resumed;/.test(server));
+    ok('write refusals (sync) are wrapped so the refusal counts as the reply', (server.match(/Promise\.resolve\(live\.refuseWrite\(/g) || []).length === 2);
+    const la = fs.readFileSync(path.join(__dirname, 'live-agents.js'), 'utf8');
+    ok('resumeClarification returns the read\'s promise for a pick / "all", and a resolved promise after a sync line',
+      /return configKeeper\(p\.agentId, p\.request, \{ allDevices: true \}\)/.test(la) && /return configKeeper\(p\.agentId, p\.request, \{ device: c\.hostname \}\)/.test(la)
+      && (la.match(/return Promise\.resolve\(true\);   \/\/ the line above IS the reply/g) || []).length === 2);
+    ok('live.handle wraps its synchronous honest replies (not connected / cannot answer)', (la.match(/Promise\.resolve\((notConnected|cannotAnswer)\(/g) || []).length === 3);
+    // functional: every runAgentAction-style return is a thenable or false
+    const live = require('./live-agents');
+    ok('maybeForget still returns false for a non-forget message (route continues)', live.maybeForget('netops', 'show version on sw1') === false);
     ok('the outgoing echo carries the clientMessageId the page sent', /type: 'outgoing',[\s\S]{0,200}clientMessageId: cmid/.test(server));
     ok('the client id is bounded at the boundary', /clientMessageId\.trim\(\)\.slice\(0, 96\)/.test(server));
     ok('the init snapshot carries live presence (and nothing is persisted)', /presence: livePresence\.snapshot\(\)/.test(server)

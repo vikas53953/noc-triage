@@ -1363,19 +1363,19 @@ function cw12Seed(list){ if(!PRES) return; try{ PRES.seed(list); }catch(e){} pre
 /* The socket dropped: we no longer know what is in flight, so we show nothing
    — the reconnect's init snapshot brings back whatever is still real. */
 function cw12Drop(){ if(!PRES) return; try{ if(PRES.clear()) presenceRender(); }catch(e){} }
-/* A restored transcript may carry ticks from before the reload. ANSWERED is a
-   fact that stays true; SENT / PICKED-UP are claims about an answer we can no
-   longer track from this page, so they are removed rather than left implying
-   something is still coming. */
+/* A restored transcript may carry ticks from before the reload. ANSWERED,
+   REPLIED and NOT SENT are facts that stay true; SENT / PICKED-UP are claims
+   about an answer we can no longer track from this page, so they are removed
+   rather than left implying something is still coming. */
 function cw12SweepRestoredReceipts(){
   var host = $('chat'); if(!host) return;
-  var stale = host.querySelectorAll('.cw12-rcpt:not(.answered)');
+  var stale = host.querySelectorAll('.cw12-rcpt:not(.answered):not(.replied):not(.not-sent)');
   for(var i = 0; i < stale.length; i++) stale[i].parentNode.removeChild(stale[i]);
 }
 /* DEV/TEST ONLY — nothing in the app calls these. Fixture: test/cw12-fixture.js */
 window.__cw12DevPresence = function(d){ return onPresence(d); };
 window.__cw12DevSend = function(text){ var n = meMsg(text); return cw12Tag(n); };
-window.__cw12DevChat = function(msg){ return onChat(msg); };
+window.__cw12DevChat = function(msg){ return msg ? onChat(msg) : false; };
 window.__cw12DevDrop = function(){ return cw12Drop(); };
 window.__cw12DevSeed = function(list){ return cw12Seed(list); };
 
