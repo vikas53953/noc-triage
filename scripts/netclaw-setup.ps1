@@ -11,10 +11,11 @@ $ErrorActionPreference = "Stop"
 # refuses the record on a changed server.py anyway.
 $NetclawPin = if ($env:NETCLAW_PIN) { $env:NETCLAW_PIN } else { "c703a8fe292a87a6a55a0b7ea9438d89a7ec5aa6" }
 if (-not (Test-Path "$NetclawDir\.git")) {
-  git clone --no-checkout https://github.com/automateyournetwork/netclaw $NetclawDir
+  git -c core.autocrlf=false clone --no-checkout https://github.com/automateyournetwork/netclaw $NetclawDir
+  git -C $NetclawDir config core.autocrlf false
 }
 git -C $NetclawDir fetch --quiet origin $NetclawPin 2>$null; if ($LASTEXITCODE -ne 0) { git -C $NetclawDir fetch --quiet origin }
-git -C $NetclawDir checkout --quiet $NetclawPin
+git -C $NetclawDir -c core.autocrlf=false checkout --quiet $NetclawPin
 if (-not (Test-Path "$VenvDir\Scripts\python.exe")) {
   py -3.11 -m venv $VenvDir
 }

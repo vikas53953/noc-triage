@@ -30,7 +30,7 @@ function ok(name, cond, extra) {
   else { fail++; console.log(`  FAIL ${name}${extra ? ` — ${extra}` : ''}`); }
 }
 const STUB = path.join(__dirname, '..', 'test', 'mcp-noannot-server.js');
-const { expandVars, vettingOf, childEnv, classifyTool, makeRedactor, checkVettingPin, CHILD_ENV_BASE } = mcp._cw13;
+const { expandVars, vettingOf, childEnv, classifyTool, makeRedactor, checkVettingPin, pinHash, pinTarget, scrubThenRedact, CHILD_ENV_BASE } = mcp._cw13;
 const LEAKY = path.join(__dirname, '..', 'test', 'mcp-leaky-server.js');
 const crypto = require('crypto');
 
@@ -94,7 +94,23 @@ function configure(extra) {
     ok('…and once the file changes, the record is VOID: drift recorded, tool → write', /does not match/.test(pinned.vettingDrift || '') && classifyTool(noAnn, pinned) === 'write' && vettingOf(pinned) === null);
     const gone = { config: { args: ['/nonexistent/server.py'], vettedReadOnly: Object.assign({}, V, { sha256: sha }) } };
     checkVettingPin(gone);
-    ok('an unreadable pinned file voids the record honestly', /could not be read/.test(gone.vettingDrift || '') && vettingOf(gone) === null);
+    ok('an unreadable / missing pinned file voids the record honestly', /could not be read|no file to check/.test(gone.vettingDrift || '') && vettingOf(gone) === null);
+    // round 2 #4: a malformed sha256 is DRIFT, not "unpinned"
+    const bad = { config: { args: [tmp], vettedReadOnly: Object.assign({}, V, { sha256: 'ZZ' }) } };
+    fs.writeFileSync(tmp, 'print("v1")\n'); checkVettingPin(bad);
+    ok('a malformed sha256 voids the record with an honest reason (never silently unpins)', /sha256 is malformed/.test(bad.vettingDrift || '') && vettingOf(bad) === null, bad.vettingDrift);
+    // round 2 #2: CRLF vs LF is not code drift (Git for Windows autocrlf)
+    const lf = fs.readFileSync(tmp); const crlf = Buffer.from(lf.toString().replace(/\n/g, '\r\n'));
+    ok('the pin hashes LF-normalised bytes: a CRLF checkout of the same file has the SAME hash', pinHash(lf) === pinHash(crlf) && pinHash(lf) !== crypto.createHash('sha256').update(crlf).digest('hex'));
+    // round 2 #5: `file` cannot decoy the pin away from the entry point
+    const decoy = path.join(require('os').tmpdir(), `cw13-decoy-${process.pid}.txt`); fs.writeFileSync(decoy, 'static decoy\n');
+    const dec = { config: { command: 'python', args: [tmp], vettedReadOnly: Object.assign({}, V, { file: decoy, sha256: pinHash(fs.readFileSync(decoy)) }) } };
+    checkVettingPin(dec);
+    ok('with a real args[0], `file` is ignored (noted) and the ENTRY POINT is what is hashed → a decoy record drifts', /does not match/.test(dec.vettingDrift || '') && /ignored/.test(dec.pinNote || ''), dec.vettingDrift);
+    const dec2 = { config: { command: 'python', args: ['-m', 'somemodule'], vettedReadOnly: Object.assign({}, V, { file: tmp, sha256: pinHash(fs.readFileSync(tmp)) }) } };
+    checkVettingPin(dec2);
+    ok('…while `file` IS the target when args[0] is not a file (python -m module)', !dec2.vettingDrift && pinTarget(dec2).file === tmp);
+    try { fs.unlinkSync(decoy); } catch (e) {}
     ok('a record with no sha256 is unpinned (allowed, shown as pinned:false)', (() => { const r = { config: { vettedReadOnly: V } }; checkVettingPin(r); return !r.vettingDrift && vettingOf(r).sha256 === null; })());
     try { fs.unlinkSync(tmp); } catch (e) {}
   }
@@ -110,21 +126,31 @@ function configure(extra) {
     delete process.env.CW13_PARENT_UNSET;
     process.env.ANTHROPIC_API_KEY = 'sk-ant-test-canary-never-real-000';
     process.env.CW13_PARENT_CANARY = 'canary-value-not-mapped';
-    const ce = childEnv({ env: { STUB_LITERAL: 'lit-${CW13_TEST_DIR}' }, envFrom: { STUB_MAPPED_SECRET: 'CW13_PARENT_SECRET', STUB_OTHER: 'CW13_PARENT_UNSET' } });
+    process.env.CW13_HOST_VALUE = 'https://sandboxdnac.cisco.com'; process.env.CW13_USER_VALUE = 'admin'; process.env.CW13_HOOK = 'https://outlook.example/webhook/AAAA-BBBB';
+    const ce = childEnv({ env: { STUB_LITERAL: 'lit-${CW13_TEST_DIR}', STUB_PLAIN: 'true', STUB_HOOK: '${CW13_HOOK}' },
+      envFrom: { STUB_MAPPED_SECRET: 'CW13_PARENT_SECRET', STUB_OTHER: 'CW13_PARENT_UNSET', STUB_HOST: 'CW13_HOST_VALUE', STUB_USERNAME: 'CW13_USER_VALUE', STUB_OPTIN: { from: 'CW13_USER_VALUE', secret: true } } });
     ok('envFrom copies the parent value into the child under the child name', ce.env && ce.env.STUB_MAPPED_SECRET === 'hunter2');
     ok('a literal env value is expanded too', ce.env && ce.env.STUB_LITERAL === 'lit-/opt/netclaw');
     ok('an unset parent var is NOT passed and is reported by NAME', !('STUB_OTHER' in ce.env) && ce.missing.join() === 'STUB_OTHER');
     ok('THE BOUNDARY: the child env carries the allowlisted base only — never ANTHROPIC_API_KEY, never the parent var by its own name, never an unmapped parent value (review #1)',
-      !('ANTHROPIC_API_KEY' in ce.env) && !('CW13_PARENT_SECRET' in ce.env) && !('CW13_PARENT_CANARY' in ce.env) && Object.keys(ce.env).every((k) => CHILD_ENV_BASE.includes(k) || k === 'STUB_LITERAL' || k === 'STUB_MAPPED_SECRET'));
+      !('ANTHROPIC_API_KEY' in ce.env) && !('CW13_PARENT_SECRET' in ce.env) && !('CW13_PARENT_CANARY' in ce.env) && !('CW13_HOST_VALUE' in ce.env) && Object.keys(ce.env).every((k) => CHILD_ENV_BASE.includes(k) || /^STUB_/.test(k)));
     ok('…but PATH (and the rest of the base) does come through, so a venv python still runs', ('PATH' in ce.env) === ('PATH' in process.env));
     ok('no config env at all → the base only, never null (the boundary holds for every server)', childEnv({}).env && !('ANTHROPIC_API_KEY' in childEnv({}).env) && childEnv({}).missing.length === 0);
-    ok('mapped (envFrom) values are reported back for the redactor; literal env values are not (they are non-secrets by contract)', ce.injected.includes('hunter2') && !ce.injected.includes('lit-/opt/netclaw'));
-    // the redactor: every mapped value and every secret-shaped parent value is wiped from text
+    ok('SECRECY IS BY NAME (round 2 #1): a mapped PASSWORD/SECRET is a secret; a mapped HOST or USERNAME is NOT (evidence the operator must see)',
+      ce.injected.includes('hunter2') && !ce.injected.includes('https://sandboxdnac.cisco.com') && ce.env.STUB_HOST === 'https://sandboxdnac.cisco.com' && ce.env.STUB_USERNAME === 'admin', JSON.stringify(ce.injected));
+    ok('…the object form { from, secret:true } opts a non-secret-shaped name in', ce.env.STUB_OPTIN === 'admin' && ce.injected.filter((v) => v === 'admin').length === 1);
+    ok('a plain literal is not a secret; a literal that EXPANDED from the parent env IS (round 2 #3)', !ce.injected.includes('true') && ce.injected.includes('lit-/opt/netclaw') && ce.injected.includes('https://outlook.example/webhook/AAAA-BBBB'));
     const red = makeRedactor(ce.injected);
-    const sample = 'boot: MAPPED=hunter2 "quoted" KEY=sk-ant-test-canary-never-real-000 lit=lit-/opt/netclaw fine=hello';
+    const sample = 'boot: MAPPED=hunter2 "quoted" KEY=sk-ant-test-canary-never-real-000 HOOK=https://outlook.example/webhook/AAAA-BBBB host=https://sandboxdnac.cisco.com fine=hello adminStatus=up "admin"';
     const out = red(sample);
-    ok('the redactor wipes mapped values and the parent API key, keeps harmless text and literals', !out.includes('hunter2') && !out.includes('sk-ant-test-canary') && out.includes('lit-/opt/netclaw') && /fine=hello/.test(out) && /\[redacted\]/.test(out), out);
+    ok('the redactor wipes the password, the API key, the expanded webhook; keeps the host', !out.includes('hunter2') && !out.includes('sk-ant-test-canary') && !out.includes('AAAA-BBBB') && out.includes('https://sandboxdnac.cisco.com') && /fine=hello/.test(out), out);
+    ok('BOUNDARY-AWARE: the opted-in secret "admin" is wiped as a token ("admin") but never inside "adminStatus"', /adminStatus=up/.test(out) && /"\[redacted\]"/.test(out), out);
     ok('a value containing another is wiped whole (longest first)', !makeRedactor(['ab', 'abcdef'])('x abcdef y').includes('cdef'));
+    ok('scrub-then-redact keeps the marker intact (no "«redacted»]" mangling)', !/«redacted»\]/.test(scrubThenRedact({ redact: red }, 'PASS=hunter2 and more')) && /redacted/.test(scrubThenRedact({ redact: red }, 'PASS=hunter2 and more')));
+    process.env.HTTPS_PROXY = 'http://proxyuser:proxypass@proxy.local:3128';
+    const ceP = childEnv({});
+    ok('proxy credentials inside an allowlisted proxy URL are redacted too', ceP.injected.includes('proxyuser:proxypass'));
+    delete process.env.HTTPS_PROXY;
   }
 
   // ── 3. end to end on the no-annotation stub ────────────────────────────────
@@ -156,7 +182,7 @@ function configure(extra) {
     ok('…and never a value', !JSON.stringify(st).includes('hunter2'));
     const r = await mcp.callTool({ server: 'noannot', tool: 'lookup', args: { query: 'sw1' } });
     ok('the un-annotated tool now auto-runs as a read (real stub result, not invented)', r.ok === true && /^lookup:sw1 /.test(r.text), JSON.stringify(r));
-    ok('the child received the mapped credential (present) and the expanded literal', /mapped=present/.test(r.text) && /literal=from-\/opt\/netclaw/.test(r.text));
+    ok('the child received the mapped credential (present); the EXPANDED literal reached the child but is redacted from the result text', /mapped=present/.test(r.text) && /literal=\[redacted\]/.test(r.text), r.text);
     ok('the credential VALUE is not in the result (the stub never echoes it)', !r.text.includes('hunter2'));
     ok('LIVE BOUNDARY: the spawned child could NOT see ANTHROPIC_API_KEY, the parent var, or an unmapped canary — and still had PATH', /leaked=none/.test(r.text) && /path=yes/.test(r.text), r.text);
     ok('status shows the vetting record with its tool list and pinned:false, and the declared-write tool as unvetted', st.servers[0].vettedReadOnly.toolNames.join() === 'lookup' && st.servers[0].vettedReadOnly.pinned === false && (st.servers[0].unvettedTools || []).join() === 'wipe');
@@ -245,6 +271,7 @@ function configure(extra) {
       const dead = await mcp.callTool({ server: 'netclaw-catc', tool: 'catc_devices', args: { operation: REAL, params: {} } });
       ok('LIVE: a dead appliance → outcome unreachable, no data, "NOT AN EMPTY RESULT"', dead.ok === true && /"outcome": "unreachable"/.test(dead.text) && !/"data"/.test(dead.text) && /NOT AN EMPTY RESULT/.test(dead.text), dead.text && dead.text.slice(0, 200));
       ok('LIVE: the password never appears in the result or status', !dead.text.includes('p@ss-never-real-1') && !JSON.stringify(st2).includes('p@ss-never-real-1'));
+      ok('LIVE: the APPLIANCE stamp is the configured host, not [redacted] (round 2 #1)', /"appliance": "https:\/\/127\.0\.0\.1:9"/.test(dead.text) && /Catalyst Center at https:\/\/127\.0\.0\.1:9 could not be reached/.test(dead.text), dead.text && dead.text.slice(0, 300));
       delete process.env.DNAC_HOST; delete process.env.DNAC_USER; delete process.env.DNAC_PASS;
       mcp._reset();
     }

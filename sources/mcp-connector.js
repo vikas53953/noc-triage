@@ -75,28 +75,51 @@ function vettingOf(rec) {
   const why = String(v.why || '').trim();
   const toolNames = Array.isArray(v.toolNames) ? v.toolNames.filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim().slice(0, 120)) : [];
   if (!by || !why || !toolNames.length) return null;
-  // A record that pins a file hash is only valid while the file matches.
+  // A record that pins a file hash is only valid while the file matches
+  // (and a malformed pin is drift, not "unpinned" — review round 2 #4).
   if (rec.vettingDrift) return null;
   return {
     by: by.slice(0, 120), why: why.slice(0, 400), date: String(v.date || '').trim().slice(0, 40) || null,
     toolNames, sha256: (typeof v.sha256 === 'string' && /^[0-9a-f]{64}$/i.test(v.sha256)) ? v.sha256.toLowerCase() : null,
   };
 }
+// The bytes we hash: LF-normalised. Git for Windows' default core.autocrlf
+// rewrites a checkout's line endings, which would void a byte-exact pin on the
+// very machine this is for (review round 2 #2). The record therefore pins the
+// LF form; CRLF ↔ LF drift is not code drift.
+function pinHash(buf) {
+  return crypto.createHash('sha256').update(Buffer.from(buf.toString('utf8').replace(/\r\n/g, '\n'), 'utf8')).digest('hex');
+}
+// Which file the pin protects: args[0] when it is a regular file (the server
+// entry point), else the explicit `file`. `file` may ADD context but never
+// replaces a real args[0] — a decoy target cannot leave the entry point
+// unhashed (review round 2 #5).
+function pinTarget(rec) {
+  const v = rec.config && rec.config.vettedReadOnly;
+  const a0 = expandVars(Array.isArray(rec.config.args) && rec.config.args[0] ? String(rec.config.args[0]) : '');
+  let a0Regular = false;
+  try { a0Regular = !!a0 && fs.statSync(a0).isFile(); } catch (e) { a0Regular = false; }
+  if (a0Regular) return { file: a0, note: (v && v.file && expandVars(v.file) !== a0) ? `vettedReadOnly.file ignored — the entry point ${path.basename(a0)} is what is pinned` : null };
+  return { file: expandVars((v && v.file) || ''), note: null };
+}
 // Verify the record's file hash against the server file on disk (before every
 // connect). Sets rec.vettingDrift (an honest sentence) on mismatch / unreadable.
 function checkVettingPin(rec) {
   rec.vettingDrift = null;
+  rec.pinNote = null;
   const v = rec.config && rec.config.vettedReadOnly;
   if (!v || typeof v !== 'object') return;
+  if (v.sha256 === undefined || v.sha256 === null || v.sha256 === '') return;   // unpinned (allowed, shown as pinned:false)
   const want = (typeof v.sha256 === 'string' && /^[0-9a-f]{64}$/i.test(v.sha256)) ? v.sha256.toLowerCase() : null;
-  if (!want) return;
-  const file = expandVars(v.file || (Array.isArray(rec.config.args) && rec.config.args[0]) || '');
-  if (!file) { rec.vettingDrift = 'vettedReadOnly.sha256 is set but no file to check (set vettedReadOnly.file)'; return; }
+  if (!want) { rec.vettingDrift = 'vettedReadOnly.sha256 is malformed (expected 64 hex characters) — the record is not honoured until it is fixed'; return; }
+  const t = pinTarget(rec);
+  rec.pinNote = t.note;
+  if (!t.file) { rec.vettingDrift = 'vettedReadOnly.sha256 is set but there is no file to check (args[0] is not a file and vettedReadOnly.file is unset)'; return; }
   try {
-    const got = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-    if (got !== want) rec.vettingDrift = `vetting record does not match ${path.basename(file)} (sha256 ${got.slice(0, 12)}… ≠ vetted ${want.slice(0, 12)}…) — the vetted code changed; every tool is treated as a write until re-vetted`;
+    const got = pinHash(fs.readFileSync(t.file));
+    if (got !== want) rec.vettingDrift = `vetting record does not match ${path.basename(t.file)} (sha256 of the LF-normalised file ${got.slice(0, 12)}… ≠ vetted ${want.slice(0, 12)}…) — the vetted code changed (line endings alone cannot cause this); every tool is treated as a write until re-vetted`;
   } catch (e) {
-    rec.vettingDrift = `vetted file could not be read (${path.basename(file)}): ${e.code || e.message}`;
+    rec.vettingDrift = `vetted file could not be read (${path.basename(t.file)}): ${e.code || e.message}`;
   }
 }
 // Build the child's env: an allowlisted BASE from the parent + literal `env`
@@ -105,20 +128,39 @@ function checkVettingPin(rec) {
 function childEnv(config) {
   const env = {};
   for (const k of CHILD_ENV_BASE) if (process.env[k] !== undefined) env[k] = process.env[k];
-  // `injected` feeds the redactor: ONLY the envFrom values (credentials from the
-  // parent). Literal `env` values are operator-written non-secrets by contract
-  // (the config file must never carry a secret) — redacting them would wipe
-  // ordinary words like "true" out of every tool result.
+  // `injected` feeds the redactor — ONLY values that are secrets:
+  //   • an envFrom entry whose CHILD or PARENT name is secret-shaped (PASSWORD,
+  //     TOKEN, KEY, …) or that opts in with the object form
+  //     { from: "PARENT", secret: true }. A HOST or USERNAME mapped by name is
+  //     NOT redacted: the appliance identity and the account are evidence the
+  //     operator needs to see (review round 2 #1 — redacting them wiped the
+  //     appliance stamp out of every result and corrupted "adminStatus").
+  //   • a literal `env` value that CHANGED under ${VAR} expansion — it came from
+  //     the parent's environment, so it may be a credential (round 2 #3).
+  //   Plain literal values are operator-written non-secrets by contract.
   const injected = [];
   const lit = (config && config.env && typeof config.env === 'object') ? config.env : {};
-  for (const k of Object.keys(lit)) env[k] = expandVars(String(lit[k]));
+  for (const k of Object.keys(lit)) {
+    const raw = String(lit[k]);
+    env[k] = expandVars(raw);
+    if (env[k] !== raw) injected.push(env[k]);
+  }
   const missing = [];
   const from = (config && config.envFrom && typeof config.envFrom === 'object') ? config.envFrom : {};
   for (const child of Object.keys(from)) {
-    const parent = String(from[child] || '');
+    const spec = from[child];
+    const parent = (spec && typeof spec === 'object') ? String(spec.from || '') : String(spec || '');
+    const optIn = !!(spec && typeof spec === 'object' && spec.secret === true);
     const val = parent ? process.env[parent] : undefined;
-    if (val !== undefined && String(val).trim() !== '') { env[child] = String(val); injected.push(env[child]); }
-    else missing.push(child);
+    if (val !== undefined && String(val).trim() !== '') {
+      env[child] = String(val);
+      if (optIn || SECRETISH_NAME.test(child) || SECRETISH_NAME.test(parent)) injected.push(env[child]);
+    } else missing.push(child);
+  }
+  // proxy URLs in the allowlisted base may carry user:pass@ — those are secrets too
+  for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']) {
+    const m = /\/\/([^/@\s]+@)/.exec(String(env[k] || ''));
+    if (m) injected.push(m[1].slice(0, -1));
   }
   return { env, missing, injected };
 }
@@ -130,11 +172,22 @@ function makeRedactor(injected) {
   for (const v of injected || []) if (v && String(v).length >= 4) vals.add(String(v));
   for (const [k, v] of Object.entries(process.env)) if (SECRETISH_NAME.test(k) && v && v.length >= 8) vals.add(v);
   const list = [...vals].sort((a, b) => b.length - a.length);
+  // Boundary-aware: a secret is replaced only where it stands as its own token
+  // (after = : " ' space, before a newline / quote / space …), never inside a
+  // longer identifier — a password "admin" must not turn "adminStatus" into
+  // "[redacted]Status" and silently alter evidence (review round 2 #1).
+  const res = list.map((v) => new RegExp(`(?<![A-Za-z0-9_])${v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_])`, 'g'));
   return (text) => {
     let t = String(text == null ? '' : text);
-    for (const v of list) t = t.split(v).join('[redacted]');
+    for (const re of res) t = t.replace(re, '[redacted]');
     return t;
   };
+}
+// Scrub FIRST (the scrubber may already have replaced a KEY=value pair), then
+// redact what is left — so the marker never gets mangled into "«redacted»]".
+function scrubThenRedact(rec, text) {
+  const s = session.scrub(String(text == null ? '' : text));
+  return rec && typeof rec.redact === 'function' ? rec.redact(s) : s;
 }
 
 // One connection record per configured server.
@@ -232,6 +285,7 @@ async function connectOne(rec) {
   rec.envMissing = ce.missing;            // names only — never values
   rec.redact = makeRedactor(ce.injected);
   checkVettingPin(rec);
+  const redactForClient = (t) => scrubThenRedact(rec, t);
   const client = new McpClient({
     name: rec.name,
     transport: 'stdio',
@@ -239,7 +293,7 @@ async function connectOne(rec) {
     args: (rec.config.args || []).map(expandVars),
     env: ce.env,
     inheritEnv: false,                    // the boundary: only what childEnv built
-    redact: rec.redact,
+    redact: redactForClient,
     cwd: expandVars(rec.config.cwd) || null,
     timeoutMs: rec.config.timeoutMs || undefined,
     maxBufferBytes: rec.config.maxBufferBytes || undefined,
@@ -256,7 +310,7 @@ async function connectOne(rec) {
     rec.client = null;
     rec.connected = false;
     rec.tools = [];
-    rec.reason = session.scrub(rec.redact(err && err.message ? err.message : String(err))).slice(0, 600);
+    rec.reason = scrubThenRedact(rec, err && err.message ? err.message : String(err)).slice(0, 600);
   }
   return snapshot(rec);
 }
@@ -346,9 +400,9 @@ async function callTool({ server, tool, args, who, approved } = {}) {
     });
   } catch (err) {
     // The call ran (gate approved) but the server/tool errored — honest, not faked.
-    const msg = (rec.redact || ((t) => t))(String(err && err.message ? err.message : err));
-    audit({ server, tool, argKeys, who, result: `error: ${session.scrub(msg).slice(0, 200)}` });
-    return { ok: false, error: session.scrub(msg), tool, server };
+    const msg = scrubThenRedact(rec, err && err.message ? err.message : err);
+    audit({ server, tool, argKeys, who, result: `error: ${msg.slice(0, 200)}` });
+    return { ok: false, error: msg, tool, server };
   }
 
   if (g.denied) {
@@ -361,7 +415,7 @@ async function callTool({ server, tool, args, who, approved } = {}) {
   // says so, so a cut list is never presented as the whole list. Per-server
   // `maxTextChars` in config; default 4000.
   const cap = Math.max(200, Math.min(200000, Number(rec.config.maxTextChars) || 4000));
-  const full = session.scrub((rec.redact || ((t) => t))(String(r.text || '')));
+  const full = scrubThenRedact(rec, r.text || '');
   const text = full.length > cap
     ? `${full.slice(0, cap)}\n[truncated: showing ${cap} of ${full.length} characters — the result above is INCOMPLETE; ask with a smaller limit or a narrower query]`
     : full;
@@ -409,7 +463,9 @@ function rosterEntries() {
         connected: true,
         sees: [`external MCP tool (${kind}) — ${t.description || t.name}`],
         note: kind === 'read'
-          ? 'external read-only MCP tool — auto-callable through the permission gate'
+          ? ((t.annotations && t.annotations.readOnlyHint === true)
+            ? 'external read-only MCP tool — auto-callable through the permission gate'
+            : `external MCP tool read-only by the operator's vetting record${(vettingOf(rec) || {}).sha256 ? ' (pinned)' : ' (UNPINNED — no file hash on the record)'} — auto-callable through the permission gate`)
           : 'external MCP tool that looks like a write — proposed for approval, never auto-run',
         readOnly: kind === 'read',
       });
@@ -497,6 +553,7 @@ function snapshot(rec) {
     }
   }
   if (rec.vettingDrift) out.vettingDrift = rec.vettingDrift;
+  if (rec.pinNote) out.pinNote = rec.pinNote;
   if (Array.isArray(rec.envMissing) && rec.envMissing.length) out.envMissing = rec.envMissing.slice();
   return out;
 }
@@ -527,7 +584,7 @@ function _reset() {
 module.exports = {
   configured, connectAll, connectOne, status, anyToolsConnected,
   // CW-13 (tests): the config affordances, exposed so they can be pinned.
-  _cw13: { expandVars, vettingOf, childEnv, classifyTool, makeRedactor, checkVettingPin, CHILD_ENV_BASE },
+  _cw13: { expandVars, vettingOf, childEnv, classifyTool, makeRedactor, checkVettingPin, pinHash, pinTarget, scrubThenRedact, CHILD_ENV_BASE },
   rosterEntries, gather, callTool, classifyTool, isMcpId, parseToolId,
   _reset,
 };
