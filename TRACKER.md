@@ -823,3 +823,13 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   the REAL NetClaw catc-mcp spawned as MCP tools (10 listed, catc_find answered), streamed deltas, usage.
   Every risk the contract named is retired; stage A build launched in its own clone (builder agent),
   branch feat/cw14-runtime-a, behind JARVIS_RUNTIME=agents.
+
+## 2026-09-05 — CW-13 SHIPPED ✅ (PR #80 merged as 873cb31, 3 review rounds → APPROVE)
+- Round 2 caught two more real ones: the redactor wiped the appliance hostname/username out of results
+  (evidence corrupted, e.g. "adminStatus"); the byte-exact pin would void itself on Windows (autocrlf).
+  Class fixes: secrecy by NAME + opt-in, token-bounded redaction, LF-normalised pin on the first script in
+  args, malformed sha = drift, autocrlf-safe scripts. Round 3 APPROVE; 3 of 5 leftovers folded in pre-merge
+  (escaped secret forms, interpreter-flag pin target, wider name rule + opt-in validation + pin how-to).
+- Master: 38 suites green. Needs Vikas on the PC: scripts/netclaw-setup.ps1 + enable netclaw-catc, then
+  "what does Catalyst Center say about sw1's compliance?" with the real key.
+- In flight: CW-14 stage A (builder agent, own clone). Next pick for Vikas: CW-13b server order; CW-14 veto.

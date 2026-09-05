@@ -78,6 +78,7 @@ control plane above Claude Managed Agents (TypeScript, pnpm monorepo). A separat
 | CW-9 | Bridge conduct: ask-first on every path, pinned chat envelope, V2 split terminal, honest roster, evidence-diffed narration, write refusals | PRs #72/#73, `docs/shots/cw9-*` |
 | CW-10 | Official Anthropic SDK, prompt caching, streaming (`say_delta`), spend meter, web search on reasoning only, compaction | PRs #74/#75, `docs/shots/cw10-*` |
 | CW-11 | Reflexion: round reflection, verdict self-check (verified vs suspected), prediction follow-through, lessons memory | PRs #76/#77, `docs/shots/cw11-*` |
+| CW-13 | NetClaw's ready-made MCP servers adopted as our integration library (first: Catalyst Center, all 514 read-only operations) behind an env boundary, redaction and a pinned read-only vetting record | PR #80 (3 review rounds), `docs/copilot-cw13-netclaw-contract.md` |
 | Polish P1 | Law-1 leftovers removed (canned @mention ack, Jarvis-attributed relay, dead simulators), watcher honesty, phone-width header | PR #79 |
 | CW-12 | Live presence: "Jarvis is typing…", "Router-Expert is checking…", "waiting for your approval", receipt ticks sent → picked up → answered — driven by real events only, never persisted | PR #78 (3 review rounds), `docs/shots/cw12-*` |
 
@@ -90,7 +91,7 @@ never fabricate, permission gate + read-only guardrail, secrets never persist, s
 - The project was idle from 2026-08-20 (Vikas paused at ~90% weekly quota; no Cursor commits landed).
 - 2026-09-05: resumed in Claude Code on the web. Named, centralised (this file), and **CW-12 Live
   Presence shipped** — built, adversarially reviewed over three rounds, merged as PR #78.
-- Master is green: 37 suites (incl. the public-repo secret guard). In flight: CW-13 (PR #80, review round 2).
+- Master is green: 38 suites (incl. the public-repo secret guard). In flight: CW-14 stage A (Jarvis on the OpenAI Agents SDK behind a flag).
 - The cloud container has no `ANTHROPIC_API_KEY` and no DevNet reach, so the live-LLM parts of CW-12
   were proven with a mock endpoint; the streamed "typing" and a real device "checking" are still to be
   eyeballed on the PC.
@@ -100,12 +101,13 @@ never fabricate, permission gate + read-only guardrail, secrets never persist, s
 1. **Eyeball CW-12 on the PC** with the real key: pull master, restart `:3000`, open the desk, ask
    Jarvis something that streams. Paste `test/cw12-fixture.js` into the browser console and run
    `cw12All()` to see every state without waiting on a device.
-2. **CW-13 — NetClaw as the MCP server** (Vikas's pick, 2026-09-05: "leverage this repo behind the
-   scenes rather than building it ourselves"). Vet and wire NetClaw's read-only MCP servers
-   (github.com/automateyournetwork/netclaw) through the CW-8 connector. Starts now.
-3. **Provider abstraction, next iteration** (Vikas 2026-09-05): keep Anthropic today; plug in OpenAI
-   and cheap providers next, through a framework (law 9/10 in HANDOFF), not hand-written adapters.
-   Needs Vikas's pick of framework — recommendation in PIPELINE.md.
+2. **CW-14 — the agent runtime** (Vikas 2026-09-05: "use the agentic framework … I really don't want to
+   make that mistake again"). Stage A in flight: Jarvis on the OpenAI Agents SDK with a provider
+   adapter (Anthropic today, OpenAI/OpenRouter next) behind `JARVIS_RUNTIME=agents`. Contract:
+   `docs/copilot-cw14-runtime-contract.md`. Vikas may veto the pick in one word.
+3. **CW-13b — the next NetClaw servers** for our other agents (ACI, SD-WAN, syslog/SNMP feeds, ISE,
+   Meraki, F5, Check Point, Fortinet, NVD). Same seam, one vetting record each. Needs Vikas's order.
+   On the PC: run `scripts/netclaw-setup.ps1` and enable `netclaw-catc` to see CW-13 live.
 4. Polish backlog — probe planner sometimes asks bare `ping`/`traceroute`; lesson chip dark until a
    first real lesson; two LOW review leftovers on PRs #74/#76; short-device-error over-scrub. (Done
    2026-09-05 in Polish P1: dead Law-1 code, canned @mention lines, badge, phone-width header.)
