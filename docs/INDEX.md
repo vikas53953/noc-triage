@@ -20,7 +20,7 @@ time without stepping on each other.*
 | [`triage-contract.md`](triage-contract.md) | The agreed shape of triage: which web addresses exist and which live messages the server pushes to the browser during a bridge. | **Current** — describes the shipped triage. |
 | [`transparency-contract.md`](transparency-contract.md) | The agreed way the console shows what each agent is doing, so a watcher can follow every step. | **Historical** — the bugs it lists ("roster stuck idle", "Live Activity blank") were fixed and merged. Keep it as the shape of the live-message events, read the bug list as a past state. |
 | [`copilot-cw1-contract.md`](copilot-cw1-contract.md) … [`copilot-cw11-reflexion-contract.md`](copilot-cw11-reflexion-contract.md) | The pinned back-end / screen split for each Copilot wave (CW-1 desk shell … CW-11 reflexion). | **Historical — delivered.** Every wave through CW-11 is merged; see HANDOFF's built map. |
-| [`copilot-cw12-presence-contract.md`](copilot-cw12-presence-contract.md) | Live presence — who is typing / checking, message receipt states, driven only by real events. Vikas's words inside. | **Current — in flight** (started 2026-09-05). |
+| [`copilot-cw12-presence-contract.md`](copilot-cw12-presence-contract.md) | Live presence — who is typing / checking, message receipt states, driven only by real events. Vikas's words inside; "As built" note at the end. | **Historical — delivered** (PR #78, 2026-09-05). |
 
 ## Specs — what a piece of work had to achieve
 

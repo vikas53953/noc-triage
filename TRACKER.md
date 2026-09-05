@@ -771,3 +771,9 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - Info (not this wave): simulateStandup/SquadStatus/WeeklyReport/showJarvisHelp are dead code (Law-1
   leftovers); canned "On it — querying…" relay line can land after the answer. Both → polish backlog.
 - Merging PR #78 (merge commit, repo convention).
+
+## 2026-09-05 — CW-12 SHIPPED ✅ (PR #78 merged to master as c723f57)
+- Master: 35 suites green. HANDOFF built map + NEXT, PROJECT.md, PIPELINE, docs/INDEX updated.
+- Live verify on the PC (real key, DevNet) still owed: streamed "typing", agent "checking", ask-mode
+  "waiting for your approval". Everything else proven in the cloud (mock 401 + fixtures + suites).
+- Cloud session ends here. Nothing in flight. Next pick is Vikas's (see HANDOFF NEXT).

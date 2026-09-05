@@ -29,7 +29,7 @@ Two screens in one app:
 | Classic console | `http://localhost:3000/` | The older triage view, kept working, shares the same modules |
 
 Stack: plain Node 18+ and Express, WebSockets for live push, no build step, JSON stores, one test
-runner (`npm test`, 33 suites, ~1800 assertions, must stay green).
+runner (`npm test`, 35 suites, ~2000 assertions, must stay green).
 
 ## Where everything lives
 
@@ -74,29 +74,33 @@ private in repo settings, or keep it public and treat it that way.
 | CW-9 | Bridge conduct: ask-first on every path, pinned chat envelope, V2 split terminal, honest roster, evidence-diffed narration, write refusals | PRs #72/#73, `docs/shots/cw9-*` |
 | CW-10 | Official Anthropic SDK, prompt caching, streaming (`say_delta`), spend meter, web search on reasoning only, compaction | PRs #74/#75, `docs/shots/cw10-*` |
 | CW-11 | Reflexion: round reflection, verdict self-check (verified vs suspected), prediction follow-through, lessons memory | PRs #76/#77, `docs/shots/cw11-*` |
+| CW-12 | Live presence: "Jarvis is typing…", "Router-Expert is checking…", "waiting for your approval", receipt ticks sent → picked up → answered — driven by real events only, never persisted | PR #78 (3 review rounds), `docs/shots/cw12-*` |
 
 The **laws** (never regressed, every reviewer checks them): intent-first routing, ask-before-assume,
 never fabricate, permission gate + read-only guardrail, secrets never persist, short messages
 (280-char cap), adopt-don't-hand-write integrations, timezone honesty. Full text in `HANDOFF.md`.
 
-## Where we are (2026-09-05)
+## Where we are (2026-09-05, end of session)
 
-- Last commit on master: **2026-08-20** ("Cursor handoff"). Nothing in flight. Everything pushed.
-- Vikas paused Claude Code builds on 2026-08-20 at ~90% weekly quota and planned to continue in
-  Cursor; no Cursor commits landed. The project has been idle since.
-- 2026-09-05: quota reset; work resumes in Claude Code on the web. This container has no
-  `ANTHROPIC_API_KEY` and no DevNet reach, so live LLM/device verification still happens on the PC.
-  Deterministic suites and browser fixtures run here.
+- The project was idle from 2026-08-20 (Vikas paused at ~90% weekly quota; no Cursor commits landed).
+- 2026-09-05: resumed in Claude Code on the web. Named, centralised (this file), and **CW-12 Live
+  Presence shipped** — built, adversarially reviewed over three rounds, merged as PR #78.
+- Master is green: 35 suites. Nothing in flight.
+- The cloud container has no `ANTHROPIC_API_KEY` and no DevNet reach, so the live-LLM parts of CW-12
+  were proven with a mock endpoint; the streamed "typing" and a real device "checking" are still to be
+  eyeballed on the PC.
 
 ## What is next (in order)
 
-1. **CW-12 Live Presence** — recorded 2026-08-20 in Vikas's words, NOT built yet. Typing / "checking"
-   indicators and message receipt states, driven only by real events (`say_delta`, agent status,
-   approval waits). Contract: `docs/copilot-cw12-presence-contract.md`. **Started 2026-09-05.**
+1. **Eyeball CW-12 on the PC** with the real key: pull master, restart `:3000`, open the desk, ask
+   Jarvis something that streams. Paste `test/cw12-fixture.js` into the browser console and run
+   `cw12All()` to see every state without waiting on a device.
 2. **CW-13** — vet and wire the first real external MCP server through the CW-8 connector.
    Needs Vikas's pick and approval.
 3. Polish backlog — probe planner sometimes asks bare `ping`/`traceroute`; lesson chip dark until a
-   first real lesson; two LOW review leftovers on PRs #74/#76; short-device-error over-scrub.
+   first real lesson; two LOW review leftovers on PRs #74/#76; short-device-error over-scrub; header
+   badge still reads "COCKPIT · CW-3"; 390 px horizontal overflow; dead Law-1 leftovers and the canned
+   "On it — querying…" relay line (found by the CW-12 reviewer).
 4. Parked, need Vikas's pick — FortiGate / F5 / threat feeds, RBAC/SSO, PDF/email export, HA front.
 
 ## What only Vikas can supply (each flips a built feature live)

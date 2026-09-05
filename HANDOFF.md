@@ -4,7 +4,7 @@ Live, honest NOC/SOC triage console for Vikas. Repo **vikas53953/noc-triage** (G
 see PROJECT.md). PROJECT.md is the one-page brief; this file is the deep-dive build state.
 Run: `cd C:\Users\vikasmit\noc-triage && npm install && PORT=3000 node server.js` → open
 **http://localhost:3000/desk.html** (the real console; the root page is the older classic view).
-Tests: `npm test` (33 suites, ~1800 assertions, must stay green — chain exits non-zero on any failure).
+Tests: `npm test` (35 suites, ~2000 assertions, must stay green — chain exits non-zero on any failure).
 `.env.local` (gitignored) holds Cisco DevNet sandbox creds + `ANTHROPIC_API_KEY`.
 Jarvis default model `claude-opus-5`; ALL testing uses `JARVIS_MODEL=claude-sonnet-5` (Vikas's spend rule).
 
@@ -36,7 +36,7 @@ this?") → fix at CLASS level, re-review until "VERDICT: APPROVE" → merge BE 
 verify on the merged build → visual evidence page. NOTE: `gh pr review --approve` self-rejects (same
 account) — the approval signal is a PR comment starting "VERDICT: APPROVE".
 
-## What is BUILT + MERGED (all live-verified; state 2026-08-20 end of day)
+## What is BUILT + MERGED (all live-verified; state 2026-09-05)
 - **CW-1..CW-8 + waves 1-6 + 7 QA classes + netclaw A1-A8** (see TRACKER history): desk + capability
   honesty, change engine (apply honestly frozen — observer sandbox), tickets, Teams (needs webhook),
   SSH engine (needs creds), ServiceNow (needs creds), CW-7 investigation loop, CW-8 MCP connector
@@ -61,9 +61,21 @@ account) — the approval signal is a PR comment starting "VERDICT: APPROVE".
   /api/copilot/predictions/:id/check; failed → honest reopen); lessons memory (squad/lessons/*.md via
   scrubber, LLM similarity — no keywords, desk Lessons panel, lesson.lookFirst biases round 1 only,
   never bypasses ask-first). Reflection/lesson/prediction ride chat envelopes additively.
+- **CW-12 Live Presence** (2026-09-05, PR #78, 3 review rounds → APPROVE): `presence` WS envelope from
+  sources/presence.js, fed ONLY by real seams — claude.js setActivityListener (thinking on call start,
+  typing on first streamed chunk, end from finally), updateAgentStatus (engineer active → checking; Jarvis
+  excluded), approvals gate (pending → waiting-approval). Receipts on the operator's bubble: sent ✓ →
+  picked-up ✓✓ → answered ✓✓ — answered is a SERVER receipt from the request-end seam (settle() fails
+  closed on a non-thenable; every handler path returns a promise resolved after its last reply), never
+  inferred from a reply; "replied — asked you a question" when it ended on kind:ask; ✕ not-sent on a
+  refused send. Line hidden when empty (no idle text), socket drop clears, reload seeds only from the
+  init snapshot, nothing persisted. Shared module createPresence/receiptHtml in public/cw9-bridge.js.
+  Proven live in the cloud with a mock-401 endpoint (thinking → done(error)); streamed `typing` and agent
+  `checking` against real devices still to be eyeballed on the PC (seams unit-proven).
 
 ## Key files
-server.js (routes, WS broadcast, gate wiring — NAMED_WRITE_SURFACES lists gated non-/api/copilot surfaces)
+server.js (routes, WS broadcast, gate wiring — NAMED_WRITE_SURFACES lists gated non-/api/copilot surfaces;
+CW-12 livePresence + settle() request-end seam) · sources/presence.js (CW-12 tracker)
 · sources/conduct.js (THE conduct layer: understanding gate, envelope, caps, write screening) ·
 sources/jarvis.js (planner, delegation, synthesis+streaming, reflectionFlag) · sources/investigation.js
 (round engine) · sources/reflexion.js · sources/lessons.js · sources/claude.js (SDK wrapper) ·
@@ -72,14 +84,19 @@ sources/spend-store.js · sources/live-agents.js (per-agent reads, AGENT_SOURCES
 public/desk.html + public/cw9-bridge.js/.css (shared UI module; dev fixtures in test/) · public/index.html
 (classic view). Contracts: docs/copilot-cw9/10/11/12-*.md. Live state: TRACKER.md (append-only log).
 
-## NEXT (in order)
-1. **CW-12 Live Presence** — IN FLIGHT since 2026-09-05 (Claude Code web session). Contract: docs/copilot-cw12-presence-contract.md
-   (Vikas's words inside). Typing/working indicators + message receipt states, driven ONLY by real events.
+## NEXT (in order, nothing in flight right now)
+1. **Vikas eyeballs CW-12 on the PC** with a real key: pull master, restart :3000, ask Jarvis something
+   that streams → "Jarvis is typing…" with dots; @Router-Expert a read → "Router-Expert is checking…";
+   ask-mode approval → amber "waiting for your approval". Fixture for the look: paste test/cw12-fixture.js
+   in the console and run cw12All().
 2. **CW-13 candidate** — vet + wire the first real external MCP server through the CW-8 connector
    (Vikas saw the recommendation; not yet approved — ask him).
 3. Polish backlog: probe planner sometimes asks bare "ping"/"traceroute" (Config-Keeper honestly refuses —
    wasted rounds); lesson consult chip dark until a first real lesson exists; 2 LOW review leftovers in
-   PR #74/#76 comments; short-device-error prose over-scrub LOW.
+   PR #74/#76 comments; short-device-error prose over-scrub LOW; header badge still says "COCKPIT · CW-3";
+   390px horizontal overflow (header name tag + capabilities drawer); Law-1 leftovers found by the CW-12
+   reviewer — dead simulateStandup/SquadStatus/WeeklyReport/showJarvisHelp, and the canned "@Jarvis On it —
+   querying…" relay line that can land after the real answer.
 4. Parked features (need Vikas's pick): FortiGate/F5/threat feeds, RBAC/SSO, PDF/email export, HA front.
 
 ## Needs Vikas (each flips a BUILT feature live; all honest-if-absent today)
