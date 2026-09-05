@@ -1,7 +1,8 @@
 # Jarvis NOC Copilot (noc-triage) — HANDOFF (any tool — Claude Code, Cursor, anything — resumes from this + TRACKER.md)
 
-Live, honest NOC/SOC triage console for Vikas. Repo **vikas53953/noc-triage** (GitHub lists it PUBLIC —
-see PROJECT.md). PROJECT.md is the one-page brief; this file is the deep-dive build state.
+Live, honest NOC/SOC triage console for Vikas. Repo **vikas53953/noc-triage** — PUBLIC by decision
+(Vikas 2026-09-05): keep it public, just never let a key or credential in (see PROJECT.md; a secret-scan
+suite guards the tree). PROJECT.md is the one-page brief; this file is the deep-dive build state.
 Run: `cd C:\Users\vikasmit\noc-triage && npm install && PORT=3000 node server.js` → open
 **http://localhost:3000/desk.html** (the real console; the root page is the older classic view).
 Tests: `npm test` (35 suites, ~2000 assertions, must stay green — chain exits non-zero on any failure).
@@ -24,7 +25,16 @@ Jarvis default model `claude-opus-5`; ALL testing uses `JARVIS_MODEL=claude-sonn
    streamed preview. Raw evidence lives in collapsible cards + the terminal pane, never text walls.
 7. **Adopt, don't hand-write, integrations** (2026-08-20): new integrations = security-vetted MCP servers
    through the CW-8 connector; prefer Anthropic server-side features (web search/fetch, compaction).
-8. Timezones: bare clock times anchored in operatorTz, most-recent-past. Vikas reviews everything as a
+8. Timezones: bare clock times anchored in operatorTz, most-recent-past.
+9. **Adopt frameworks, don't hand-roll the runtime** (Vikas 2026-09-05, his words): "there is no point in
+   building the loop, tool calling and other things — those things are already built. Use those." Agent
+   runtime / orchestration / tool-calling loops come from a framework (Anthropic Agent SDK, OpenAI Agents
+   SDK, Vercel AI SDK or similar), the same way integrations come from MCP (law 7). Hand-written loops are
+   a defect to migrate, not a pattern to extend.
+10. **Provider-agnostic, cheap-first** (Vikas 2026-09-05): Anthropic stays the provider for now, but the
+   next iteration must plug in other vendors (OpenAI, OpenRouter/"OpenCode"-style cheap models). Nothing
+   new may hard-wire the Anthropic SDK deeper; new model calls go through the one seam (sources/claude.js)
+   so a provider switch is one file. Vikas reviews everything as a
    visual HTML page (feedback layer at ~/.claude/review-kit/feedback-layer.js) — never walls of text.
 
 ## How work is done (the wave process — follow it exactly)

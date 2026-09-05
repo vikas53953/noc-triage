@@ -777,3 +777,20 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - Live verify on the PC (real key, DevNet) still owed: streamed "typing", agent "checking", ask-mode
   "waiting for your approval". Everything else proven in the cloud (mock 401 + fixtures + suites).
 - Cloud session ends here. Nothing in flight. Next pick is Vikas's (see HANDOFF NEXT).
+
+## 2026-09-05 — Vikas's decisions (HIS WORDS) + product model correction
+- Product = ONE product, TWO interfaces: "mission control will be the first interface … as soon as the user
+  gets onboarded … noc triage will be the second interface … used whenever the user wants to use it".
+  PROJECT.md corrected; mission-control code deliberately NOT read this session (his ask).
+- Repo: "you can make it public only, just make sure there is no API key or anything publicly visible".
+- Provider: "fully based on the Anthropic API key … keep it as it is … for timing. In the next iteration I
+  really want you to plug in the other vendors like OpenAI and OpenCode, because there are many really
+  cheap options … I really don't want to go with many heavy, expensive models at this moment."
+- MCP: "https://github.com/automateyournetwork/netclaw — use this … leverage this repo behind the scenes
+  rather than building it ourselves." → CW-13 = NetClaw.
+- Frameworks: "leverage multiple frameworks … the Anthropic SDK, the Anthropic agent runtime framework, or
+  the OpenAI framework. There is no point in building each and every thing … agent runtime, a frontend, a
+  backend, a database layer … leverage the framework when it comes to agent runtime, orchestration or any
+  other layer." → HANDOFF laws 9 + 10; PIPELINE decisions 6–9.
+- Testing CW-12: he wants the app started so he can test — the cloud container cannot expose a port
+  (proxy does not carry WebSocket upgrades), so the live eyeball stays on his PC (commands in PROJECT.md).
