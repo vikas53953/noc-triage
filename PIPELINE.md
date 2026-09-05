@@ -51,5 +51,13 @@ since merged; the CLI routing fix and the SSH sidecar remain ahead.)
 - Config validation/deviation: against what gold standard? (baseline snapshots exist in config-store)
 - Success bar as a number (e.g. % of a sample question list answered/actioned correctly)
 
+## Decisions logged 2026-09-05 (Vikas, his words in TRACKER)
+| # | Decision | Effect |
+|---|----------|--------|
+| 6 | Repo stays PUBLIC; "just make sure there is no API key or anything publicly visible" | secret-scan suite in npm test; docs no longer say "private" |
+| 7 | "keep it as it is and go with the Anthropic API for timing"; next iteration "plug in the other vendors like OpenAI and OpenCode … many really cheap options" | law 10: provider-agnostic seam; next wave after CW-13 |
+| 8 | CW-13 MCP server = **NetClaw** (github.com/automateyournetwork/netclaw): "leverage this repo behind the scenes rather than building it ourselves" | CW-13 approved and in flight |
+| 9 | "leverage the framework when it comes to agent runtime, orchestration or any other layer … no point in building the loop, tool calling" | law 9; runtime-adoption wave to be pinned — **recommendation:** Vercel AI SDK for the provider-agnostic model/tool loop in this plain-Node app (Anthropic, OpenAI, OpenRouter, Ollama out of the box), Anthropic Agent SDK or OpenAI Agents SDK as the alternative if Vikas prefers a vendor runtime. Needs his pick. |
+
 ## Deviations
 (none yet)

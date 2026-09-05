@@ -41,10 +41,9 @@ runner (`npm test`, 35 suites, ~2000 assertions, must stay green).
 | Windows task `noc-triage-autoresume` | Every 30 min it relaunched a Claude Code session to resume from TRACKER. Disable it if it gets in the way (`schtasks /change /tn noc-triage-autoresume /disable`). |
 | Claude Code artifacts (links in PIPELINE.md / TRACKER.md) | The Gate 1–3 review pages and the per-wave evidence pages Vikas approved. |
 
-**Visibility note (found 2026-09-05):** HANDOFF and README describe the repo as private, but GitHub
-lists `vikas53953/noc-triage` as **public**. A secret scan of the tree found nothing (only sandbox
-hostnames and `.env.example` placeholders), so nothing leaked — but decide on purpose: make it
-private in repo settings, or keep it public and treat it that way.
+**Visibility (decided by Vikas 2026-09-05): the repo stays PUBLIC.** The only rule is that no API
+key, password or credential may ever be visible. Real values live only in `.env.local` (gitignored);
+a secret-scan test in `npm test` fails the build if a key-shaped string lands in the tree.
 
 ## One product, two interfaces (Vikas, 2026-09-05)
 
@@ -100,16 +99,20 @@ never fabricate, permission gate + read-only guardrail, secrets never persist, s
 1. **Eyeball CW-12 on the PC** with the real key: pull master, restart `:3000`, open the desk, ask
    Jarvis something that streams. Paste `test/cw12-fixture.js` into the browser console and run
    `cw12All()` to see every state without waiting on a device.
-2. **CW-13** — vet and wire the first real external MCP server through the CW-8 connector.
-   Needs Vikas's pick and approval.
-3. Polish backlog — probe planner sometimes asks bare `ping`/`traceroute`; lesson chip dark until a
+2. **CW-13 — NetClaw as the MCP server** (Vikas's pick, 2026-09-05: "leverage this repo behind the
+   scenes rather than building it ourselves"). Vet and wire NetClaw's read-only MCP servers
+   (github.com/automateyournetwork/netclaw) through the CW-8 connector. Starts now.
+3. **Provider abstraction, next iteration** (Vikas 2026-09-05): keep Anthropic today; plug in OpenAI
+   and cheap providers next, through a framework (law 9/10 in HANDOFF), not hand-written adapters.
+   Needs Vikas's pick of framework — recommendation in PIPELINE.md.
+4. Polish backlog — probe planner sometimes asks bare `ping`/`traceroute`; lesson chip dark until a
    first real lesson; two LOW review leftovers on PRs #74/#76; short-device-error over-scrub; header
    badge still reads "COCKPIT · CW-3"; 390 px horizontal overflow; dead Law-1 leftovers and the canned
    "On it — querying…" relay line (found by the CW-12 reviewer).
-4. **Join the two interfaces** — onboarding → Mission Control (home) → NOC Triage (on demand): one
+5. **Join the two interfaces** — onboarding → Mission Control (home) → NOC Triage (on demand): one
    operator identity, one way in, cross-links both ways. Needs Vikas's design call on what "onboarding"
    means in v1 (name tag only, as today, or a real sign-in).
-5. Parked, need Vikas's pick — FortiGate / F5 / threat feeds, RBAC/SSO, PDF/email export, HA front.
+6. Parked, need Vikas's pick — FortiGate / F5 / threat feeds, RBAC/SSO, PDF/email export, HA front.
 
 ## What only Vikas can supply (each flips a built feature live)
 
