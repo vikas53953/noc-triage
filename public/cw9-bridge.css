@@ -278,6 +278,7 @@
 .cw12-who.waiting-approval{color:var(--warn)}
 .cw12-who.waiting-approval b{color:var(--warn)}
 .cw12-who.more{color:var(--ink3);font-style:italic}
+.cw12-why{color:var(--ink3);font-family:var(--mono);font-size:.66rem}
 .cw12-sep{color:var(--ink3);padding:0 .1rem}
 .cw12-dots{display:inline-flex;gap:2px;align-items:flex-end;height:.6rem}
 .cw12-dots i{width:4px;height:4px;border-radius:50%;background:currentColor;opacity:.35;
@@ -296,3 +297,5 @@
 }
 .cw12-rcpt.picked-up{color:var(--ink2)}
 .cw12-rcpt.answered{color:var(--info)}
+.cw12-rcpt.replied{color:var(--warn)}
+.cw12-rcpt.not-sent{color:var(--bad)}

@@ -1149,7 +1149,7 @@
      Old clients ignore the type entirely (additive). */
 
   var PRESENCE_WORKING = { thinking: 1, typing: 1, checking: 1, 'waiting-approval': 1 };
-  var PRESENCE_STATES = { 'picked-up': 1, done: 1, thinking: 1, typing: 1, checking: 1, 'waiting-approval': 1 };
+  var PRESENCE_STATES = { 'picked-up': 1, answered: 1, done: 1, thinking: 1, typing: 1, checking: 1, 'waiting-approval': 1 };
   /* Plain-words phrase per state. "waiting for your approval" is deliberately
      NOT "typing" — an agent paused on a human is not writing anything. */
   var PRESENCE_VERB = {
@@ -1175,13 +1175,20 @@
   }
 
   /* RECEIPT STATES on the operator's own bubble. Each one is a fact the page
-     actually knows: 'sent' = it left the page; 'picked-up' = the server said
-     an actor started on it; 'answered' = a reply carrying the SAME requestId
-     arrived. There is no "read" — nobody reads, and we will not claim it. */
+     actually knows: 'sent' = it left the page (the server accepted it);
+     'not-sent' = the server refused it or could not be reached; 'picked-up' =
+     the server said an actor started on it; 'answered' = the server said the
+     handler for it FINISHED, and at least one reply for it has been painted;
+     'replied' = it finished but the last reply was Jarvis's narrowing question,
+     so it is the operator's turn, not an answer. NEVER inferred from a reply
+     alone — "let me think…", a roster, an agent's finding all carry the request
+     id and none of them is an answer. There is no "read" — nobody reads. */
   var RECEIPTS = {
     sent:        { ticks: '✓',  label: 'Sent' },
+    'not-sent':  { ticks: '✕',  label: 'Not sent' },
     'picked-up': { ticks: '✓✓', label: 'Picked up' },
     answered:    { ticks: '✓✓', label: 'Answered' },
+    replied:     { ticks: '✓✓', label: 'Replied — needs your answer' },
   };
   function receiptHtml(state, who) {
     var st = Object.prototype.hasOwnProperty.call(RECEIPTS, state) ? state : 'sent';
@@ -1197,7 +1204,9 @@
     var ridToCmid = Object.create(null);
     var ridOrder = [];
     var RID_MAX = 200;
-    var answered = Object.create(null);
+    var answered = Object.create(null);      /* cmid → true once ticked */
+    var replies = Object.create(null);       /* rid → kind of the LAST reply painted ('' = plain) */
+    var finished = Object.create(null);      /* rid → {who, reason} — the server's answered receipt, held until a reply is on screen */
 
     function key(actor, id) { return actor + '|' + id; }
     function remember(rid, cmid) {
@@ -1216,6 +1225,7 @@
       f.name = itemText(d.actorName || d.actor).slice(0, PRESENCE_NAME_MAX) || actor;
       f.state = d.state;
       f.label = typeof d.label === 'string' ? d.label.slice(0, 160) : '';
+      f.rid = pid(d.requestId);
       return true;
     }
     function endFlight(d) {
@@ -1225,6 +1235,17 @@
       delete flights[k];
       var i = order.indexOf(k); if (i !== -1) order.splice(i, 1);
       return true;
+    }
+    /* The answered tick for a request that has both FINISHED (server receipt)
+       and has a reply on screen. 'replied' when the last reply was a narrowing
+       question — that is the operator's turn, not an answer. Once per bubble. */
+    function finalReceipt(rid) {
+      var cm = ridToCmid[rid], fin = finished[rid];
+      if (!cm || !fin || answered[cm]) return null;
+      answered[cm] = true;
+      delete finished[rid];
+      return { kind: 'receipt', state: replies[rid] === 'ask' ? 'replied' : 'answered',
+               clientMessageId: cm, requestId: rid, who: fin.who, reason: fin.reason };
     }
 
     return {
@@ -1239,6 +1260,18 @@
           remember(rid, cm);
           return { kind: 'receipt', state: 'picked-up', clientMessageId: cm, requestId: rid,
                    who: itemText(d.actorName || d.actor).slice(0, PRESENCE_NAME_MAX) };
+        }
+        if (d.state === 'answered') {
+          /* The server says the handler finished. The tick is applied only once
+             a reply for that request is actually on screen (a legacy handler can
+             return before its delayed reply lands) — until then it is held. */
+          var cm2 = pid(d.clientMessageId), rid2 = pid(d.requestId);
+          remember(rid2, cm2);
+          var who2 = itemText(d.actorName || d.actor).slice(0, PRESENCE_NAME_MAX);
+          if (!rid2 || !cm2) return { kind: 'receipt-held' };
+          finished[rid2] = { who: who2, reason: typeof d.reason === 'string' ? d.reason : 'done' };
+          if (rid2 in replies) return finalReceipt(rid2);
+          return { kind: 'receipt-held', requestId: rid2 };
         }
         if (d.state === 'done') return { kind: 'flight', changed: endFlight(d), reason: typeof d.reason === 'string' ? d.reason : 'done' };
         return { kind: 'flight', changed: startFlight(d, now) };
@@ -1289,18 +1322,34 @@
         return cm;
       },
 
-      /* A reply. If it carries a requestId we mapped to one of our bubbles,
-         that bubble is ANSWERED — a fact, because the server stamps every
-         reply with the question it answers. Returns { clientMessageId, who }
-         the first time, '' after (one tick, not one per reply). */
+      /* A reply painted on screen. It NEVER ticks "answered" by itself — a
+         reply stamped with our requestId may be "let me think…", a narrowing
+         question, a roster or one agent's finding. It only records that a
+         reply for that request is now visible (and what kind it was), and
+         releases the server's answered receipt if that already arrived.
+         Returns the receipt to apply, or null. */
       noteReply: function (msg) {
         if (!msg || typeof msg !== 'object' || msg.type === 'outgoing') return null;
         if (isDelta(msg)) return null;
         var rid = pid(msg.requestId);
-        var cm = rid && ridToCmid[rid];
-        if (!cm || answered[cm]) return null;
-        answered[cm] = true;
-        return { clientMessageId: cm, who: itemText(msg.agentName || msg.agent || '').slice(0, PRESENCE_NAME_MAX) };
+        if (!rid) return null;
+        replies[rid] = (typeof msg.kind === 'string') ? msg.kind.trim().toLowerCase() : '';
+        return (rid in finished) ? finalReceipt(rid) : null;
+      },
+
+      /* The recorded message that settles a streamed answer (same messageId)
+         is also the moment the mirror "typing" flight for that stream ends —
+         whether or not the done:true delta ever arrived. */
+      noteSettled: function (msg) {
+        if (!msg || typeof msg !== 'object' || isDelta(msg)) return false;
+        var mid = pid(msg.messageId);
+        if (!mid) return false;
+        var changed = false;
+        for (var i = order.length - 1; i >= 0; i--) {
+          var f = flights[order[i]];
+          if (f && f.id === 'stream:' + mid) { delete flights[order[i]]; order.splice(i, 1); changed = true; }
+        }
+        return changed;
       },
 
       /* What is live now, one row per ACTOR (strongest state wins), oldest
@@ -1311,8 +1360,9 @@
           var f = flights[order[i]];
           if (!f) continue;
           var cur = byActor[f.actor];
-          if (!cur) { cur = { actor: f.actor, name: f.name, state: f.state, since: f.since, label: f.label, flights: 0 }; byActor[f.actor] = cur; out.push(cur); }
+          if (!cur) { cur = { actor: f.actor, name: f.name, state: f.state, since: f.since, label: f.label, rid: f.rid, flights: 0 }; byActor[f.actor] = cur; out.push(cur); }
           cur.flights++;
+          if (f.rid) cur.rid = f.rid;
           if ((PRESENCE_RANK[f.state] || 0) > (PRESENCE_RANK[cur.state] || 0)) { cur.state = f.state; cur.label = f.label; }
           if (f.since < cur.since) cur.since = f.since;
         }
@@ -1331,8 +1381,12 @@
           var r = rows[i];
           var verb = PRESENCE_VERB[r.state] || 'is working';
           var title = r.label ? esc(r.name + ' — ' + r.label) : esc(r.name + ' ' + verb);
+          /* Work that belongs to no question on this screen (a reflection, a
+             lesson lookup, a prediction check) is named out loud, so an
+             operator who asked nothing knows WHAT Jarvis is doing. */
+          var why = (!r.rid && r.label) ? ' <span class="cw12-why">— ' + esc(r.label) + '</span>' : '';
           parts.push('<span class="cw12-who ' + esc(r.state) + '" title="' + title + '">' +
-            '<b>' + esc(r.name) + '</b> ' + esc(verb) +
+            '<b>' + esc(r.name) + '</b> ' + esc(verb) + why +
             (r.state === 'waiting-approval' ? '' : '<span class="cw12-dots" aria-hidden="true"><i></i><i></i><i></i></span>') +
             '</span>');
         }

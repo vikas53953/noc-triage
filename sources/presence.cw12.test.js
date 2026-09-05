@@ -78,6 +78,14 @@ console.log('\nCW-12 backend — presence is a mirror of real work, never a gues
   ok('picked-up is a one-shot receipt carrying requestId + clientMessageId', sent.length === b2 + 1
     && sent[b2].data.state === 'picked-up' && sent[b2].data.requestId === 'req-2' && sent[b2].data.clientMessageId === 'm-abc');
   ok('…and it is NOT a flight (nothing to end)', P.size() === 0);
+  const b2b = sent.length;
+  P.answered({ actor: 'jarvis', actorName: 'Jarvis', requestId: 'req-2', clientMessageId: 'm-abc', reason: 'done' });
+  ok('answered is a one-shot receipt too, with the same ids and a reason', sent.length === b2b + 1
+    && sent[b2b].data.state === 'answered' && sent[b2b].data.requestId === 'req-2' && sent[b2b].data.clientMessageId === 'm-abc' && sent[b2b].data.reason === 'done');
+  P.answered({ actor: 'jarvis', requestId: 'req-3', clientMessageId: 'm-x', reason: 'error' });
+  ok('…an error outcome is carried honestly', sent[sent.length - 1].data.reason === 'error' && P.size() === 0);
+  P.answered({ actor: 'jarvis', requestId: 'req-4', clientMessageId: 'm-y', reason: 'whatever' });
+  ok('…an unknown reason degrades to done, never to an invented word', sent[sent.length - 1].data.reason === 'done');
 
   // two agents at once, keyed independently
   P.start({ actor: 'router-expert', actorName: 'Router-Expert', state: 'checking', id: 'router-expert' });
@@ -92,6 +100,22 @@ console.log('\nCW-12 backend — presence is a mirror of real work, never a gues
   const snap = P.snapshot();
   ok('a flight older than MAX_AGE is NOT in the reconnect snapshot', snap.length === 0);
   ok('…and its clients are told, with reason "expired"', sent.length === b3 + 1 && sent[b3].data.state === 'done' && sent[b3].data.reason === 'expired');
+
+  // the belt measures from the last re-state, so live long work is never cut off
+  {
+    const sentB = [];
+    let tb = 5_000_000;
+    const PB = presence.create({ broadcast: (type, data) => sentB.push(data), now: () => tb });
+    PB.start({ actor: 'netops', actorName: 'NetOps', state: 'checking', id: 'netops' });
+    tb += presence.MAX_AGE_MS - 1000;
+    PB.start({ actor: 'netops', state: 'checking', id: 'netops' });   // progress re-stated
+    tb += 5000;
+    ok('a flight re-stated within the window is NOT expired (age counts from the last re-state)', PB.expire() === 0 && PB.size() === 1);
+    tb += presence.MAX_AGE_MS + 1;
+    ok('…and a flight silent for the whole window is', PB.expire() === 1 && PB.size() === 0 && sentB[sentB.length - 1].reason === 'expired');
+    ok('the belt runs on its own timer (not only on snapshot) and can be stopped', typeof PB.stop === 'function' && presence.SWEEP_MS > 0 && presence.SWEEP_MS < presence.MAX_AGE_MS);
+    PB.stop();
+  }
 
   // ids are bounded — an actor/id from the wire cannot be unbounded
   const big = 'x'.repeat(5000);
@@ -213,7 +237,11 @@ console.log('\nCW-12 backend — presence is a mirror of real work, never a gues
     ok('approval waits are wired: pending → waiting-approval, update → end',
       /approval_new' && data\.state === 'pending'[\s\S]{0,600}state: 'waiting-approval'/.test(server) && /type === 'approval_update'[\s\S]{0,200}livePresence\.end\(/.test(server));
     ok('the receipt fires right before the handler runs (never on enqueue)',
-      /pickedUp\(agent\);\s*\n\s*simulateAgentAction\(agent, command\)/.test(server) && /pickedUp\(targetId\);\s*\n\s*simulateAgentAction\(targetId, mentionMessage\)/.test(server));
+      /pickedUp\(agent\);\s*\n\s*settle\(simulateAgentAction\(agent, command\), agent\)/.test(server) && /pickedUp\(targetId\);\s*\n\s*settle\(simulateAgentAction\(targetId, mentionMessage\), targetId\)/.test(server));
+    ok('ANSWERED is sent from the one seam that owns the request end (handler promise settled), never inferred',
+      /const settle = \(result, actorId\) => Promise\.resolve\(result\)\s*\n\s*\.then\(\(\) => answered\(actorId, 'done'\), \(\) => answered\(actorId, 'error'\)\)/.test(server)
+      && /livePresence\.answered\(/.test(server));
+    ok('the unknown-@mention refusal is itself the answer', /Unknown @mention refused[\s\S]{0,120}answered\(agent, 'done'\)/.test(server));
     ok('the outgoing echo carries the clientMessageId the page sent', /type: 'outgoing',[\s\S]{0,200}clientMessageId: cmid/.test(server));
     ok('the client id is bounded at the boundary', /clientMessageId\.trim\(\)\.slice\(0, 96\)/.test(server));
     ok('the init snapshot carries live presence (and nothing is persisted)', /presence: livePresence\.snapshot\(\)/.test(server)

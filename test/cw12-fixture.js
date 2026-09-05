@@ -9,7 +9,8 @@
  * THE WIRE SHAPE (pinned with the backend):
  *   {type:'presence', data:{ actor, actorName, state, id, since?, at,
  *                            requestId?, clientMessageId?, label?, reason? }}
- *   state ∈ picked-up | thinking | typing | checking | waiting-approval | done
+ *   state ∈ picked-up | answered | thinking | typing | checking | waiting-approval | done
+ *   (picked-up / answered are one-shot receipts for the operator's message)
  *
  * It uses the marked dev hooks: window.__cw12DevPresence(data) for one
  * envelope, window.__cw12DevSend(text) (desk) to paint a tagged operator
@@ -20,7 +21,8 @@
  *   cw12Typing()        — Jarvis thinking → typing → done (line appears, changes, clears)
  *   cw12Squad()         — three agents checking at once, then one by one done
  *   cw12Approval()      — an agent waiting for your approval (amber, no dots), then decided
- *   cw12Receipts()      — your message: sent ✓ → picked up ✓✓ → answered ✓✓ (blue)
+ *   cw12Receipts()      — your message: sent ✓ → picked up ✓✓ → (interim reply: still picked up) → answered ✓✓ (blue) on the server's receipt
+ *   cw12Replied()       — the request ended on a narrowing question: replied ✓✓ (amber), your turn
  *   cw12Abort()         — a model call that dies mid-way: the line must clear at once
  *   cw12Xss()           — hostile actor names: printed, never executed
  *   cw12Reconnect()     — a socket drop clears the line; the snapshot brings back only what is live
@@ -86,8 +88,27 @@ async function cw12Receipts(){
   console.log('picked up ✓✓');
   await cw12Wait(1200);
   window.__cw12DevChat({ type: 'incoming', agent: 'jarvis', agentName: 'Jarvis', agentIcon: '🧠', requestId: 'req-fx-1',
+    text: '🧠 Let me think…' + CW12_TAG, timestamp: cw12Now() });
+  console.log('an interim reply: STILL picked up ✓✓ — a reply is not an answer');
+  await cw12Wait(1200);
+  window.__cw12DevChat({ type: 'incoming', agent: 'jarvis', agentName: 'Jarvis', agentIcon: '🧠', requestId: 'req-fx-1',
     text: 'sw1 answered show version: IOS-XE 17.12.01. Nothing points at a fault.' + CW12_TAG, timestamp: cw12Now() });
-  console.log('answered ✓✓ (blue)');
+  /* the server's receipt: the handler for this request has FINISHED */
+  cw12P(cw12Env('jarvis', 'Jarvis', 'answered', 'answered-fx-1', { requestId: 'req-fx-1', clientMessageId: cmid, reason: 'done' }));
+  console.log('answered ✓✓ (blue) — only now, on the server\'s receipt');
+}
+
+async function cw12Replied(){
+  var cmid = window.__cw12DevSend ? window.__cw12DevSend('something is slow' + CW12_TAG) : null;
+  if (!cmid) { console.log('desk-only'); return; }
+  await cw12Wait(600);
+  window.__cw12DevChat({ type: 'outgoing', agent: 'jarvis', text: 'something is slow', requestId: 'req-fx-2', clientMessageId: cmid, timestamp: cw12Now() });
+  cw12P(cw12Env('jarvis', 'Jarvis', 'picked-up', 'pickup-fx-2', { requestId: 'req-fx-2', clientMessageId: cmid }));
+  await cw12Wait(800);
+  window.__cw12DevChat({ type: 'incoming', agent: 'jarvis', agentName: 'Jarvis', requestId: 'req-fx-2', kind: 'ask',
+    text: 'Which part of the network, and since when?' + CW12_TAG, questions: ['Which part of the network?', 'Since when?'], timestamp: cw12Now() });
+  cw12P(cw12Env('jarvis', 'Jarvis', 'answered', 'answered-fx-2', { requestId: 'req-fx-2', clientMessageId: cmid, reason: 'done' }));
+  console.log('replied ✓✓ (amber) — "needs your answer", not "answered"');
 }
 
 async function cw12Abort(){
@@ -124,7 +145,7 @@ function cw12Ghost(){
 }
 
 async function cw12All(){
-  await cw12Typing(); await cw12Squad(); await cw12Approval(); await cw12Receipts();
+  await cw12Typing(); await cw12Squad(); await cw12Approval(); await cw12Receipts(); await cw12Replied();
   await cw12Abort(); await cw12Xss(); await cw12Reconnect(); cw12Ghost();
 }
-console.log('CW-12 fixture loaded: cw12Typing() cw12Squad() cw12Approval() cw12Receipts() cw12Abort() cw12Xss() cw12Reconnect() cw12Ghost() cw12All()');
+console.log('CW-12 fixture loaded: cw12Typing() cw12Squad() cw12Approval() cw12Receipts() cw12Replied() cw12Abort() cw12Xss() cw12Reconnect() cw12Ghost() cw12All()');

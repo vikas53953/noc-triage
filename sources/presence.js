@@ -19,25 +19,30 @@
 //   { type:'presence', data:{ actor, actorName, state, id, since?, at,
 //                             requestId?, clientMessageId?, messageId?, reason? } }
 //   state ∈ 'picked-up' | 'thinking' | 'typing' | 'checking' | 'waiting-approval' | 'done'
-//   'picked-up' is a one-shot receipt for the operator's message (carries the
-//   requestId the server minted and the clientMessageId the page sent, so the
-//   page can tick the right bubble). Everything else is a flight: start with a
-//   working state, end with 'done' under the SAME actor + id.
+//   'picked-up' and 'answered' are one-shot RECEIPTS for the operator's message
+//   (they carry the requestId the server minted and the clientMessageId the page
+//   sent, so the page can tick the right bubble). 'answered' is sent by the
+//   server when the handler for that request has actually FINISHED — the page
+//   never infers it from a reply, because interim replies ("let me think…",
+//   narrowing questions, a roster) are not answers. Everything else is a
+//   flight: start with a working state, end with 'done' under the SAME actor + id.
 //
 // One tracker instance per server. `broadcast(type, data)` is the server's own
 // WS fan-out; `now()` is injectable so the tests are deterministic.
 
-const STATES = ['picked-up', 'thinking', 'typing', 'checking', 'waiting-approval', 'done'];
+const STATES = ['picked-up', 'answered', 'thinking', 'typing', 'checking', 'waiting-approval', 'done'];
 const WORKING = ['thinking', 'typing', 'checking', 'waiting-approval'];
 
-// A flight that has been "in flight" this long without its end is not a live
-// fact any more — it is a leak somewhere upstream. It is dropped from the
-// snapshot a reconnecting client receives (never shown as live), and an honest
-// 'done' with reason 'expired' is broadcast so any client still showing it
-// clears. Model calls time out at CLAUDE_TIMEOUT_MS (default 60s, with a few
-// retries) and agent reads have their own timeouts, so ten minutes is far past
-// any real duration.
-const MAX_AGE_MS = 10 * 60 * 1000;
+// A flight that has been "in flight" this long without its end OR a re-state
+// is not a live fact any more — it is a leak somewhere upstream. A sweep runs
+// on a timer (and before every snapshot): the flight is dropped and an honest
+// 'done' with reason 'expired' is broadcast so every connected client clears
+// it. Model calls time out at CLAUDE_TIMEOUT_MS (default 60s, a few retries)
+// and agent reads have their own timeouts, so fifteen minutes is far past any
+// real duration; the age is measured from the last re-state (`touched`), so a
+// long-running flight that keeps reporting progress is never cut off.
+const MAX_AGE_MS = 15 * 60 * 1000;
+const SWEEP_MS = 30 * 1000;
 const ID_MAX = 96;
 
 function str(v, max) {
@@ -50,8 +55,12 @@ function create({ broadcast, now } = {}) {
   // Presence is telemetry about work; it must never be able to break the work.
   const emit = (type, data) => { try { fanout(type, data); } catch (e) { /* a dead socket is not a reasoning failure */ } };
   const clock = typeof now === 'function' ? now : () => Date.now();
-  const flights = new Map();   // key actor|id → { actor, actorName, state, id, since, requestId, messageId, label }
+  const flights = new Map();   // key actor|id → { actor, actorName, state, id, since, touched, requestId, messageId, label }
   let seq = 0;
+  // The belt runs on its own: a leaked flight is swept for CONNECTED clients too,
+  // not only on the next reconnect. unref'd, so it never keeps the process alive.
+  const sweeper = setInterval(() => { try { expire(); } catch (e) { /* never */ } }, SWEEP_MS);
+  if (sweeper && typeof sweeper.unref === 'function') sweeper.unref();
 
   const keyOf = (actor, id) => `${actor}|${id}`;
 
@@ -86,6 +95,7 @@ function create({ broadcast, now } = {}) {
       actor, id,
       since: new Date(clock()).toISOString(),
     };
+    f.touched = clock();
     f.actorName = str(s.actorName, 120) || f.actorName || actor;
     f.state = state;
     if (s.requestId) f.requestId = str(s.requestId, ID_MAX);
@@ -115,27 +125,36 @@ function create({ broadcast, now } = {}) {
     return true;
   }
 
-  // The one-shot receipt: the operator's message has been handed to an actor
-  // that has started on it. Not a flight — nothing to end.
-  function pickedUp(spec) {
+  // The one-shot receipts. Not flights — nothing to end.
+  //   picked-up — the operator's message has been handed to an actor that has
+  //               started on it.
+  //   answered  — the handler for that request has FINISHED (its promise
+  //               settled). Sent from the one seam that owns the request
+  //               lifecycle; the page ticks "answered" on this and on nothing
+  //               else. `reason` is 'done' or 'error' (the honest failure line
+  //               is still a reply the operator got).
+  function receipt(state, spec) {
     const s = spec || {};
     const actor = str(s.actor, ID_MAX) || 'jarvis';
     const f = {
-      actor, id: `pickup-${(++seq).toString(36)}`,
+      actor, id: `${state}-${(++seq).toString(36)}`,
       actorName: str(s.actorName, 120) || actor,
       requestId: str(s.requestId, ID_MAX),
       clientMessageId: str(s.clientMessageId, ID_MAX),
     };
-    emit('presence', envelope(f, 'picked-up'));
+    const reason = state === 'answered' ? { reason: s.reason === 'error' ? 'error' : 'done' } : null;
+    emit('presence', envelope(f, state, reason));
     return true;
   }
+  function pickedUp(spec) { return receipt('picked-up', spec); }
+  function answered(spec) { return receipt('answered', spec); }
 
   // Drop every flight older than MAX_AGE_MS, telling clients honestly why.
   function expire() {
     const cutoff = clock() - MAX_AGE_MS;
     let n = 0;
     for (const [k, f] of flights) {
-      if (Date.parse(f.since) < cutoff) {
+      if ((f.touched != null ? f.touched : Date.parse(f.since)) < cutoff) {
         flights.delete(k);
         emit('presence', envelope(f, 'done', { reason: 'expired' }));
         n++;
@@ -153,8 +172,9 @@ function create({ broadcast, now } = {}) {
   }
 
   function size() { return flights.size; }
+  function stop() { clearInterval(sweeper); }
 
-  return { start, end, pickedUp, snapshot, expire, size, STATES, WORKING, MAX_AGE_MS };
+  return { start, end, pickedUp, answered, snapshot, expire, size, stop, STATES, WORKING, MAX_AGE_MS, SWEEP_MS };
 }
 
-module.exports = { create, STATES, WORKING, MAX_AGE_MS };
+module.exports = { create, STATES, WORKING, MAX_AGE_MS, SWEEP_MS };

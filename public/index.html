@@ -3271,10 +3271,11 @@ function sayClassicBubble(st, html){
 }
 function onSayDeltaClassic(d){
   if(!SAYC) return false;
+  /* CW-12: a chunk of the answer IS "typing"; done/aborted clears it — noted
+     BEFORE the stream store judges the piece. */
+  try{ if(PRES && PRES.noteDelta(d)) presenceRender(); }catch(e){}
   var r; try{ r = SAYC.accept(d); }catch(e){ return false; }
   if(!r) return false;
-  /* CW-12: a chunk of the answer IS "typing"; done/aborted clears it. */
-  try{ if(PRES && PRES.noteDelta(d)) presenceRender(); }catch(e){}
   try{
     if(r.first){
       var node = sayClassicBubble(SAYC.get(r.id), r.html);
@@ -3366,7 +3367,15 @@ setInterval(function(){
    ============================================================ */
 var PRES = (window.CW9B && CW9B.createPresence) ? CW9B.createPresence() : null;
 var cw12Seq = 0;
-function cw12NewId(){ return 'm-' + Date.now().toString(36) + '-' + (++cw12Seq).toString(36) + '-' + Math.random().toString(36).slice(2, 8); }
+/* Only ids THIS page minted get ticks. Another operator's echo (every socket
+   receives it) or a replayed history bubble carries an id we never made — it
+   gets no receipt, because a receipt is a claim about OUR message. */
+var CW12_MINTED = Object.create(null);
+function cw12NewId(){
+  var id = 'm-' + Date.now().toString(36) + '-' + (++cw12Seq).toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  CW12_MINTED[id] = true;
+  return id;
+}
 function presenceRender(){
   var el = $('presenceLine'); if(!el || !PRES) return;
   var h = PRES.lineHtml();          /* module output — every value escaped there */
@@ -3381,8 +3390,8 @@ function receiptMark(cmid, state, who){
   if(!n) return false;
   var cur = n.querySelector('.cw12-rcpt');
   var curState = cur ? cur.getAttribute('data-rcpt') : '';
-  var rank = { sent:1, 'picked-up':2, answered:3 };
-  if((rank[curState] || 0) >= (rank[state] || 0)) return false;
+  var rank = { sent:1, 'not-sent':1, 'picked-up':2, answered:3, replied:3 };
+  if(!(state === 'not-sent' && curState === 'sent') && (rank[curState] || 0) >= (rank[state] || 0)) return false;
   var html = CW9B.receiptHtml(state, who);
   if(cur) cur.outerHTML = html;
   else { var t = n.querySelector('.msg-time'); if(t) t.insertAdjacentHTML('beforeend', html); }
@@ -3392,16 +3401,20 @@ function onPresence(d){
   if(!PRES) return false;
   var r; try{ r = PRES.accept(d); }catch(e){ return false; }
   if(!r) return false;
-  if(r.kind === 'receipt'){ receiptMark(r.clientMessageId, 'picked-up', r.who); return true; }
+  if(r.kind === 'receipt'){ receiptMark(r.clientMessageId, r.state, r.who); return true; }
+  if(r.kind === 'receipt-held') return true;   /* answered, but no reply on screen yet */
   if(r.changed) presenceRender();
   return true;
 }
+/* A reply never ticks "answered" by itself — only the server's answered
+   receipt does (see the shared module). */
 function cw12NoteChat(d){
   if(!PRES || !d) return;
   try{
+    if(PRES.noteSettled(d)) presenceRender();
     if(d.type === 'outgoing'){ PRES.noteOutgoing(d); return; }
     var a = PRES.noteReply(d);
-    if(a) receiptMark(a.clientMessageId, 'answered', a.who);
+    if(a) receiptMark(a.clientMessageId, a.state, a.who);
   }catch(e){}
 }
 function cw12Seed(list){ if(!PRES) return; try{ PRES.seed(list); }catch(e){} presenceRender(); }
@@ -3437,6 +3450,7 @@ function renderChat(d){
        been SENT. If the echo carries our id, tag the bubble so "picked up" and
        "answered" can tick it. */
     var cmid = (window.CW9B && typeof d.clientMessageId === 'string') ? d.clientMessageId.slice(0, 96) : '';
+    if(cmid && !CW12_MINTED[cmid]) cmid = '';   /* not ours → no tick */
     if(cmid) el.setAttribute('data-cmid', cmid);
     el.innerHTML =
       '<div class="msg-main">'+

@@ -728,3 +728,21 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
 - Not proven live here (needs Vikas's PC: real key + DevNet creds): streamed `typing` and agent
   `checking` — seams unit-proven, page path fixture-proven.
 - Adversarial reviewer (different agent) launched against :3123 (no key) and :3124 (mock 401).
+
+## 2026-09-05 — CW-12 review round 1: FIX-FIRST (1 HIGH, 3 MED, 3 LOW) → all fixed at class level
+- HIGH "Answered ticks before anything is answered" (tick was inferred from ANY reply stamped with the
+  requestId — "let me think…", narrowing questions, rosters, the @mention relay). FIX (class): the server
+  now sends a one-shot `answered` receipt from the ONE seam that owns the request end (handler promise
+  settled, server.js `settle`), the page ticks ONLY on that receipt, and holds it until a reply is on
+  screen; a request that ended on kind:ask ticks REPLIED "needs your answer", never "Answered".
+- MED "Sent ✓ survives a failed send" → NOT SENT ✕ on HTTP-refused / unreachable (desk).
+- MED "mirror typing flight can strand" → noteDelta runs before the stream store can reject a piece,
+  and the recorded message (same messageId) settles the mirror flight (both pages).
+- MED "10-minute belt only on snapshot" → sweep on an unref'd 30s timer; age counts from the last
+  re-state (`touched`) so long live work is never cut off; window 15 min.
+- LOW multi-operator → classic ticks only ids THIS page minted (history / other operators: no tick).
+- LOW background calls → flights with no requestId name their purpose ("Jarvis is thinking — lessons").
+- LOW mobile shot → replaced with the Jarvis-tab shot at 390px.
+- Verified: 35 suites green (presence.cw12 59, desk.cw12.ui 116); browser 34/34 on :3123 incl. the
+  reviewer's repros (interim reply → still picked-up; ask → replied; stranded stream settles on the
+  recorded message); live 18/18 on :3124 (mock 401). Re-review requested.

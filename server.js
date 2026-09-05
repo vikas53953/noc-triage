@@ -1604,10 +1604,24 @@ function handleCommandInner(data) {
   });
   // CW-12: the receipt "picked up" fires when an actor actually STARTS on the
   // message — right before the handler runs, never before, never on a queue.
+  // The receipt "answered" fires when that handler has FINISHED (its promise
+  // settled) — the ONE seam that owns the request's end. The page ticks
+  // "answered" on this receipt and on nothing else: a reply stamped with the
+  // requestId is NOT an answer (it may be "let me think…", a narrowing
+  // question, a roster), so it is never inferred client-side.
+  const rid = (currentRequest() || {}).requestId;
   const pickedUp = (actorId) => livePresence.pickedUp({
     actor: actorId, actorName: agents[actorId]?.name || actorId,
-    requestId: (currentRequest() || {}).requestId, clientMessageId: cmid || undefined,
+    requestId: rid, clientMessageId: cmid || undefined,
   });
+  const answered = (actorId, reason) => livePresence.answered({
+    actor: actorId, actorName: agents[actorId]?.name || actorId,
+    requestId: rid, clientMessageId: cmid || undefined, reason,
+  });
+  // simulateAgentAction already reports a failure to the operator (honest line
+  // in chat); here only the receipt's colour follows the outcome.
+  const settle = (result, actorId) => Promise.resolve(result)
+    .then(() => answered(actorId, 'done'), () => answered(actorId, 'error'));
 
   // An @mention nobody answers to is a typo, not a task. Say so and stop —
   // creating live work against real kit for a name that does not exist is the
@@ -1627,6 +1641,7 @@ function handleCommandInner(data) {
       timestamp,
     });
     appendToActivityLog(`[${timestamp}] [Dashboard] Unknown @mention refused: @${unknown[0]}\n`);
+    answered(agent, 'done');   // the refusal above IS the answer
     return;
   }
 
@@ -1653,7 +1668,7 @@ function handleCommandInner(data) {
       // Also have the target agent process the command
       setTimeout(() => {
         pickedUp(targetId);
-        simulateAgentAction(targetId, mentionMessage);
+        settle(simulateAgentAction(targetId, mentionMessage), targetId);
       }, 1500);
       return;
     }
@@ -1686,7 +1701,7 @@ function handleCommandInner(data) {
   // sent, and the agent's real answer follows. Hand straight to the read.
   setTimeout(() => {
     pickedUp(agent);
-    simulateAgentAction(agent, command);
+    settle(simulateAgentAction(agent, command), agent);
   }, 500);
 }
 

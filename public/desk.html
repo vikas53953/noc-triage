@@ -1326,9 +1326,10 @@ function receiptMark(cmid, state, who){
   if(!n) return false;
   var cur = n.querySelector('.cw12-rcpt');
   var curState = cur ? cur.getAttribute('data-rcpt') : '';
-  /* ticks only move forward: answered never drops back to picked-up */
-  var rank = { sent:1, 'picked-up':2, answered:3 };
-  if((rank[curState] || 0) >= (rank[state] || 0)) return false;
+  /* ticks only move forward: answered never drops back to picked-up. The one
+     exception is NOT-SENT, which replaces a SENT tick the server then refused. */
+  var rank = { sent:1, 'not-sent':1, 'picked-up':2, answered:3, replied:3 };
+  if(!(state === 'not-sent' && curState === 'sent') && (rank[curState] || 0) >= (rank[state] || 0)) return false;
   var html = window.CW9B.receiptHtml(state, who);
   if(cur) cur.outerHTML = html;
   else { var b = n.querySelector('.bubble'); if(b) b.insertAdjacentHTML('beforeend', html); }
@@ -1339,19 +1340,23 @@ function onPresence(d){
   if(!PRES) return false;
   var r; try{ r = PRES.accept(d); }catch(e){ return false; }
   if(!r) return false;
-  if(r.kind === 'receipt'){ receiptMark(r.clientMessageId, 'picked-up', r.who); return true; }
+  if(r.kind === 'receipt'){ receiptMark(r.clientMessageId, r.state, r.who); return true; }
+  if(r.kind === 'receipt-held') return true;   /* answered, but no reply on screen yet — applied when one lands */
   if(r.changed) presenceRender();
   return true;
 }
 /* Every chat message passes here BEFORE it is painted: the echo of our own ask
-   teaches the module which server requestId is ours; a reply carrying that
-   requestId is the ANSWERED tick — a fact the server stamped, not a guess. */
+   teaches the module which server requestId is ours; a reply records that the
+   request now has something on screen (and settles any mirror typing flight).
+   The ANSWERED tick comes ONLY from the server's answered receipt — a reply is
+   never treated as an answer by itself. */
 function cw12NoteChat(d){
   if(!PRES || !d) return;
   try{
+    if(PRES.noteSettled(d)) presenceRender();
     if(d.type === 'outgoing'){ PRES.noteOutgoing(d); return; }
     var a = PRES.noteReply(d);
-    if(a) receiptMark(a.clientMessageId, 'answered', a.who);
+    if(a) receiptMark(a.clientMessageId, a.state, a.who);
   }catch(e){}
 }
 function cw12Seed(list){ if(!PRES) return; try{ PRES.seed(list); }catch(e){} presenceRender(); }
@@ -1570,11 +1575,13 @@ function sayNodeFor(id){
 /* One piece arrived. First piece paints the bubble; the rest update it. */
 function onSayDelta(d){
   if(!SAY) return false;
+  /* CW-12: a chunk of the answer IS "typing"; done/aborted clears it. Noted
+     BEFORE the stream store judges the piece, so a rejected or duplicate piece
+     can never leave the line out of step with the stream. */
+  try{ if(PRES && PRES.noteDelta(d)) presenceRender(); }catch(e){}
   var r;
   try{ r = SAY.accept(d); }catch(e){ return false; }
   if(!r) return false;
-  /* CW-12: a chunk of the answer IS "typing"; done/aborted clears it. */
-  try{ if(PRES && PRES.noteDelta(d)) presenceRender(); }catch(e){}
   try{
     if(r.first){
       var st = SAY.get(r.id);
@@ -2011,10 +2018,12 @@ function sendAsk(){
   api('/api/command', { method:'POST', body: JSON.stringify({ agent:'jarvis', command:t, clientMessageId: cmid || undefined }) })
     .then(function(r){
       if(!r.ok) return r.json().catch(function(){ return {}; }).then(function(b){
+        receiptMark(cmid, 'not-sent');   /* the SENT tick must not outlive a refusal */
         sysMsg('Jarvis did not accept that — ' + esc((b && b.error) || ('HTTP ' + r.status)) + '. Nothing was run.');
       });
     })
     .catch(function(err){
+      receiptMark(cmid, 'not-sent');
       sysMsg('Could not reach the server: ' + esc(err.message || err) + '. Nothing was run.');
     });
 }

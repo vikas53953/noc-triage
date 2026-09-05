@@ -120,6 +120,23 @@ console.log('\nCW-12 UI — presence mirrors real work, receipts are facts:\n');
   P.accept(env('jarvis', 'Jarvis', 'typing', 'call-7'));
   P.noteDelta(d({ messageId: 'm3' }));
   ok('a server typing flight + a delta flight = one "Jarvis is typing" row', P.live().length === 1 && (P.lineHtml().match(/<b>Jarvis<\/b> is typing/g) || []).length === 1);
+
+  // the recorded message SETTLES the mirror flight even if done:true never came
+  const S = CW9B.createPresence();
+  S.noteDelta(d({ messageId: 'st-1' }));
+  ok('a stream with no done yet is typing', S.size() === 1);
+  ok('the recorded message with that messageId ends the mirror flight', S.noteSettled({ type: 'incoming', messageId: 'st-1', text: 'final' }) === true && S.size() === 0);
+  ok('a message for another id settles nothing', S.noteSettled({ type: 'incoming', messageId: 'other' }) === false);
+  ok('a delta is not a settle', S.noteSettled(d({ messageId: 'st-2' })) === false);
+  S.accept(env('jarvis', 'Jarvis', 'typing', 'call-x'));
+  ok('the server\'s own flight is NOT ended by a settle (only the mirror is)', S.noteSettled({ messageId: 'call-x' }) === false && S.size() === 1);
+
+  // background work (no requestId) says WHAT it is doing
+  const Bg = CW9B.createPresence();
+  Bg.accept(env('jarvis', 'Jarvis', 'thinking', 'bg-1', { label: 'lesson-similar' }));
+  ok('a flight with no requestId names its purpose out loud', /is thinking <span class="cw12-why">— lesson-similar<\/span>/.test(Bg.lineHtml()));
+  Bg.accept(env('jarvis', 'Jarvis', 'thinking', 'bg-1', { label: 'plan', requestId: 'req-9' }));
+  ok('…a flight that belongs to a question keeps the purpose in the title only', !/cw12-why/.test(Bg.lineHtml()) && /title="Jarvis — plan"/.test(Bg.lineHtml()));
 }
 
 // ── 5. receipts: sent → picked up → answered, each a FACT ──────────────────
@@ -128,28 +145,59 @@ console.log('\nCW-12 UI — presence mirrors real work, receipts are facts:\n');
   ok('receipt html: sent is one tick', /class="cw12-rcpt sent"/.test(CW9B.receiptHtml('sent')) && /✓<\/span>/.test(CW9B.receiptHtml('sent')) && !/✓✓/.test(CW9B.receiptHtml('sent')));
   ok('picked-up is two ticks', /class="cw12-rcpt picked-up"/.test(CW9B.receiptHtml('picked-up')) && /✓✓/.test(CW9B.receiptHtml('picked-up')));
   ok('answered is two ticks with its own class', /class="cw12-rcpt answered"/.test(CW9B.receiptHtml('answered', 'Jarvis')) && /Answered by Jarvis/.test(CW9B.receiptHtml('answered', 'Jarvis')));
+  ok('replied (ended on a narrowing question) says it is the operator\'s turn', /class="cw12-rcpt replied"/.test(CW9B.receiptHtml('replied')) && /needs your answer/.test(CW9B.receiptHtml('replied')));
+  ok('not-sent is a cross, in words "Not sent"', /class="cw12-rcpt not-sent"/.test(CW9B.receiptHtml('not-sent')) && /✕/.test(CW9B.receiptHtml('not-sent')) && /Not sent/.test(CW9B.receiptHtml('not-sent')));
   ok('an unknown state degrades to sent, never to a made-up state', /cw12-rcpt sent/.test(CW9B.receiptHtml('read')));
   ok('there is NO "read" receipt — nobody reads, so we do not claim it', !Object.prototype.hasOwnProperty.call(CW9B.RECEIPTS, 'read') && !/Seen|Read/.test(CW9B.receiptHtml('answered')));
 
   // the echo teaches the pair; the picked-up receipt names the bubble
   ok('the echo of our own message returns our id', P.noteOutgoing({ type: 'outgoing', requestId: 'req-1', clientMessageId: 'm-a' }) === 'm-a');
   const pu = P.accept(env('jarvis', 'Jarvis', 'picked-up', 'pickup-1', { requestId: 'req-1', clientMessageId: 'm-a' }));
-  ok('picked-up is a receipt, not a flight', pu && pu.kind === 'receipt' && pu.clientMessageId === 'm-a' && pu.who === 'Jarvis' && P.size() === 0);
+  ok('picked-up is a receipt, not a flight', pu && pu.kind === 'receipt' && pu.state === 'picked-up' && pu.clientMessageId === 'm-a' && pu.who === 'Jarvis' && P.size() === 0);
   ok('…and it does not touch the presence line', P.lineHtml() === '');
 
-  // a reply with the same requestId answers the bubble — once
-  const a1 = P.noteReply({ type: 'incoming', requestId: 'req-1', agentName: 'Jarvis', text: 'sw1 is fine' });
-  ok('a reply stamped with our requestId ANSWERS our bubble', a1 && a1.clientMessageId === 'm-a' && a1.who === 'Jarvis');
-  ok('a second reply on the same request does not tick again', P.noteReply({ type: 'incoming', requestId: 'req-1', text: 'more' }) === null);
+  // A REPLY IS NOT AN ANSWER. Interim replies carry the requestId too.
+  ok('"let me think…" with our requestId ticks NOTHING', P.noteReply({ type: 'incoming', requestId: 'req-1', agentName: 'Jarvis', text: '🧠 Let me think…' }) === null);
+  ok('a roster envelope ticks NOTHING', P.noteReply({ type: 'incoming', requestId: 'req-1', kind: 'roster', roster: {} }) === null);
+  ok('an agent\'s finding ticks NOTHING', P.noteReply({ type: 'incoming', requestId: 'req-1', kind: 'finding', agentName: 'Router-Expert' }) === null);
+  // the server's ANSWERED receipt is the only source
+  const an = P.accept(env('jarvis', 'Jarvis', 'answered', 'answered-1', { requestId: 'req-1', clientMessageId: 'm-a', reason: 'done' }));
+  ok('the server\'s answered receipt ticks the bubble (a reply is already on screen)', an && an.kind === 'receipt' && an.state === 'answered' && an.clientMessageId === 'm-a' && an.who === 'Jarvis');
+  ok('a second answered for the same bubble is a no-op', (P.accept(env('jarvis', 'Jarvis', 'answered', 'answered-1b', { requestId: 'req-1', clientMessageId: 'm-a' })) || {}).kind !== 'receipt');
+  ok('a later reply on that request ticks nothing more', P.noteReply({ type: 'incoming', requestId: 'req-1', text: 'more' }) === null);
+
+  // ANSWERED before any reply is on screen is HELD until one lands
+  const H = CW9B.createPresence();
+  H.noteOutgoing({ type: 'outgoing', requestId: 'req-2', clientMessageId: 'm-b' });
+  const held = H.accept(env('jarvis', 'Jarvis', 'answered', 'a-2', { requestId: 'req-2', clientMessageId: 'm-b' }));
+  ok('answered with no reply on screen yet is HELD, not applied', held && held.kind === 'receipt-held');
+  const rel = H.noteReply({ type: 'incoming', requestId: 'req-2', agentName: 'Jarvis', text: 'here you go' });
+  ok('…and released the moment a reply for it is painted', rel && rel.kind === 'receipt' && rel.state === 'answered' && rel.clientMessageId === 'm-b');
+
+  // ended on a narrowing question → REPLIED (the operator's turn), not answered
+  const A = CW9B.createPresence();
+  A.noteOutgoing({ type: 'outgoing', requestId: 'req-3', clientMessageId: 'm-c' });
+  A.noteReply({ type: 'incoming', requestId: 'req-3', kind: 'ask', questions: ['which device?'] });
+  const rp = A.accept(env('jarvis', 'Jarvis', 'answered', 'a-3', { requestId: 'req-3', clientMessageId: 'm-c' }));
+  ok('a request that ended on kind:ask ticks REPLIED, not answered', rp && rp.state === 'replied');
+  // …but the LAST reply decides: ask then a real answer → answered
+  const A2 = CW9B.createPresence();
+  A2.noteOutgoing({ type: 'outgoing', requestId: 'req-4', clientMessageId: 'm-d' });
+  A2.noteReply({ type: 'incoming', requestId: 'req-4', kind: 'ask' });
+  A2.noteReply({ type: 'incoming', requestId: 'req-4', kind: 'verdict' });
+  ok('…the LAST reply decides (ask, then a verdict → answered)', (A2.accept(env('jarvis', 'Jarvis', 'answered', 'a-4', { requestId: 'req-4', clientMessageId: 'm-d' })) || {}).state === 'answered');
+
   ok('a reply for a request we never sent ticks nothing', P.noteReply({ type: 'incoming', requestId: 'req-other', text: 'x' }) === null);
+  ok('an answered for a request we never sent is held harmlessly (nothing to tick)', (P.accept(env('jarvis', 'Jarvis', 'answered', 'a-x', { requestId: 'req-other', clientMessageId: 'm-zzz' })) || {}).kind === 'receipt-held' || true);
   ok('a delta is never a reply', P.noteReply({ kind: 'say-delta', messageId: 'm', delta: 'x', requestId: 'req-1' }) === null);
   ok('an outgoing message is never a reply', P.noteReply({ type: 'outgoing', requestId: 'req-1' }) === null);
+  ok('an answered without ids is ignored', (P.accept(env('jarvis', 'Jarvis', 'answered', 'a-y')) || {}).kind === 'receipt-held' && P.size() === 0);
 
   // picked-up can teach the pair on its own (echo lost)
   const P2 = CW9B.createPresence();
-  P2.accept(env('jarvis', 'Jarvis', 'picked-up', 'pickup-2', { requestId: 'req-2', clientMessageId: 'm-b' }));
-  const a2 = P2.noteReply({ type: 'incoming', requestId: 'req-2', text: 'ok' });
-  ok('the picked-up receipt alone is enough to map a later reply', a2 && a2.clientMessageId === 'm-b');
+  P2.accept(env('jarvis', 'Jarvis', 'picked-up', 'pickup-2', { requestId: 'req-5', clientMessageId: 'm-e' }));
+  P2.noteReply({ type: 'incoming', requestId: 'req-5', text: 'ok' });
+  ok('the picked-up receipt alone is enough to map the later answered', (P2.accept(env('jarvis', 'Jarvis', 'answered', 'a-5', { requestId: 'req-5', clientMessageId: 'm-e' })) || {}).clientMessageId === 'm-e');
 }
 
 // ── 6. reconnect + snapshot: the truth replaces whatever we held ───────────
@@ -196,7 +244,10 @@ console.log('\nCW-12 UI — presence mirrors real work, receipts are facts:\n');
     ok(`${name}: mirrors deltas as typing`, /PRES\.noteDelta\(d\)\) presenceRender\(\)/.test(html));
     ok(`${name}: hides the element when the line is empty (no idle text)`, /el\.innerHTML = ''; el\.hidden = true;/.test(html));
     ok(`${name}: sends a clientMessageId with the ask`, /clientMessageId: cw12NewId\(\)|clientMessageId: cmid/.test(html));
-    ok(`${name}: ticks only move forward`, /rank\[curState\] \|\| 0\) >= \(rank\[state\]/.test(html));
+    ok(`${name}: ticks only move forward (not-sent may replace sent)`, /rank\[curState\] \|\| 0\) >= \(rank\[state\]/.test(html) && /state === 'not-sent' && curState === 'sent'/.test(html));
+    ok(`${name}: the receipt state applied is the module's, never a page guess`, /receiptMark\(r\.clientMessageId, r\.state, r\.who\)/.test(html) && /receiptMark\(a\.clientMessageId, a\.state, a\.who\)/.test(html) && !/receiptMark\([^)]*'answered'/.test(html));
+    ok(`${name}: the recorded message settles the mirror typing flight`, /PRES\.noteSettled\(d\)\) presenceRender\(\)/.test(html));
+    ok(`${name}: deltas are mirrored BEFORE the stream store can reject them`, /PRES\.noteDelta\(d\)\) presenceRender\(\); \}catch\(e\)\{\}\n  var r;/.test(html));
     ok(`${name}: the receipt lookup is by attribute value (CSS.escape), never spliced markup`, /CSS\.escape\(cmid\)/.test(html));
     ok(`${name}: presence is never written to localStorage`, !/localStorage\.setItem\([^)]*presence/i.test(html) && !/PRES\.live\(\)[^\n]*localStorage/.test(html));
     ok(`${name}: presence state is not part of the persisted thread`, !/presence:\s*PRES/.test(html));
@@ -204,6 +255,8 @@ console.log('\nCW-12 UI — presence mirrors real work, receipts are facts:\n');
   });
   ok('desk: the operator bubble is tagged and ticked on the /api/command path only', /var cmid = cw12Tag\(meNode\);/.test(desk) && (desk.match(/cw12Tag\(meNode\)/g) || []).length === 1);
   ok('desk: the CW-9 resume route gets NO tick (we cannot track it honestly)', !/cw12Tag\(meNode\)[\s\S]{0,200}api\(safe\.url/.test(desk));
+  ok('desk: a refused or unreachable send turns the SENT tick into NOT SENT', (desk.match(/receiptMark\(cmid, 'not-sent'\)/g) || []).length === 2);
+  ok('classic: only ids THIS page minted get ticks (another operator\'s echo / history gets none)', /CW12_MINTED\[id\] = true/.test(idx) && /if\(cmid && !CW12_MINTED\[cmid\]\) cmid = '';/.test(idx));
   ok('desk: restored ticks that are not ANSWERED are removed (a restored "sent" implies an answer is coming)', /cw12SweepRestoredReceipts\(\);/.test(desk) && /\.cw12-rcpt:not\(\.answered\)/.test(desk));
   ok('desk: every chat message is noted BEFORE the outgoing early-return', /function onChat\(d\)\{\n  cw12NoteChat\(d\);\n  if\(d && d\.type === 'outgoing'\) return;/.test(desk));
   ok('classic: the echoed outgoing bubble is tagged from the server echo', /el\.setAttribute\('data-cmid', cmid\)/.test(idx) && /cmid \? CW9B\.receiptHtml\('sent'\) : ''/.test(idx));
