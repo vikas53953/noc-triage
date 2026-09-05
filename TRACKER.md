@@ -710,3 +710,21 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   DevNet reach in the container, so live-LLM/device verification stays on the PC; fixtures + suites +
   headless browser run here.
 - NEXT: CW-12 Live Presence (contract docs/copilot-cw12-presence-contract.md) — building now.
+
+## 2026-09-05 — CW-12 Live Presence BUILT (branch feat/cw12-presence → PR), review in flight
+- One agent built both halves sequentially (cloud container, no parallel clones needed). Backend:
+  sources/presence.js tracker + claude.js setActivityListener (start/stream/end of every model call, end
+  from finally) + server.js wiring (thinking/typing, agent checking, approval waiting, picked-up receipt,
+  clientMessageId echo, init snapshot). Frontend: createPresence/receiptHtml in the shared module; presence
+  line + ticks on desk and classic; hidden when empty; socket drop clears; reload seeds from snapshot only.
+- Tests: 35 suites green (new: presence.cw12 51 assertions incl. real SDK path on mock transport;
+  desk.cw12.ui 89). Browser (headless Chromium, real server): no-key flow → picked-up + answered tick;
+  fake-key + mock 401 (400ms hold) → "Jarvis is thinking…" visible in flight, done(error), line hidden,
+  key never in a WS frame; fixtures, XSS, reload-ghost, socket-drop all held. Shots docs/shots/cw12-*.png.
+- Bug caught by the browser pass, fixed before PR: desk.html's own hoisted `var CW9B` shadowed the
+  module at the CW-12 block's position → use window.CW9B there (class: any block above that line must).
+- Known/pre-existing, not this wave: 390px horizontal overflow (header name tag + capabilities drawer),
+  identical with the line hidden or shown. Header badge still reads "COCKPIT · CW-3" (cosmetic, backlog).
+- Not proven live here (needs Vikas's PC: real key + DevNet creds): streamed `typing` and agent
+  `checking` — seams unit-proven, page path fixture-proven.
+- Adversarial reviewer (different agent) launched against :3123 (no key) and :3124 (mock 401).

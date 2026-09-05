@@ -1,4 +1,4 @@
-# CW-12 — Live Presence ("who is typing") — CONTRACT (recorded 2026-08-20, NOT YET BUILT)
+# CW-12 — Live Presence ("who is typing") — CONTRACT (recorded 2026-08-20; BUILT 2026-09-05, see the "As built" note at the end)
 
 Vikas's ask, HIS WORDS (2026-08-20 ~23:45 IST): "when i send some questions to jarvis... down in the chat
 it should be showing who is typing, like when we type in whatsapp or in ms chat. it should be showing that
@@ -30,3 +30,15 @@ Contract → BE/FE split, own clones/branches, PRs, DIFFERENT-agent adversarial 
 pass: does it FEEL alive without ever lying about activity?), merge BE first, restart :3000, live verify,
 visual evidence page. Tests: presence appears only during real in-flight work; clears on done/abort/error;
 never survives a reload as a ghost.
+
+## As built (2026-09-05, Claude Code web session)
+- Wire shape shipped exactly as suggested in 4, plus `thinking` (a model call in flight that is not yet
+  streaming), `since`, `label` (the real status/purpose string, title-only) and `reason` on `done`
+  (done | error | aborted | denied | expired). Pinned in `sources/presence.js`.
+- Signals: claude.js `setActivityListener` (start/stream/end of EVERY model call, end from `finally`);
+  `updateAgentStatus` for engineer agents (Jarvis excluded — its active spans include waiting on others);
+  the approvals gate broadcast for waits. Receipts: `picked-up` fires right before the handler runs;
+  `answered` is derived on the page from the server's `requestId` stamp on the reply. No "read" state.
+- Truth belts: the init snapshot carries only live flights (10-minute expiry, honest `expired` reason);
+  a socket drop clears the line; nothing is persisted; restored ticks that are not `answered` are swept.
+- Tests: sources/presence.cw12.test.js, sources/desk.cw12.ui.test.js. Fixture: test/cw12-fixture.js.
