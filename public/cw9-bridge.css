@@ -260,3 +260,39 @@
 .ls-note{font-size:.75rem;line-height:1.5;color:var(--ink2)}
 .ls-fine{font-size:.63rem;color:var(--ink3);line-height:1.45;margin-top:.3rem}
 .ls-err{font-size:.66rem;color:var(--bad);line-height:1.45;margin-top:.3rem}
+
+/* ---------- CW-12: live presence line + message receipts ---------- */
+/* The line sits under the chat, above the ask bar. It is HIDDEN (the page
+   sets [hidden]) whenever nothing is in flight — there is no idle text. The
+   dots animate only while the element exists, i.e. only while the server
+   says someone is really working. */
+.cw12-presence{
+  display:flex;flex-wrap:wrap;align-items:center;gap:.35rem .5rem;
+  padding:.3rem .85rem;font-size:.72rem;line-height:1.4;color:var(--ink2);
+  border-top:1px solid var(--line-soft);min-height:1.6rem
+}
+.cw12-presence[hidden]{display:none}
+.cw12-who{display:inline-flex;align-items:center;gap:.3rem;white-space:nowrap}
+.cw12-who b{color:var(--ink);font-weight:700}
+.cw12-who.typing b{color:var(--info)}
+.cw12-who.waiting-approval{color:var(--warn)}
+.cw12-who.waiting-approval b{color:var(--warn)}
+.cw12-who.more{color:var(--ink3);font-style:italic}
+.cw12-sep{color:var(--ink3);padding:0 .1rem}
+.cw12-dots{display:inline-flex;gap:2px;align-items:flex-end;height:.6rem}
+.cw12-dots i{width:4px;height:4px;border-radius:50%;background:currentColor;opacity:.35;
+  animation:cw12blink 1.2s infinite ease-in-out}
+.cw12-dots i:nth-child(2){animation-delay:.2s}
+.cw12-dots i:nth-child(3){animation-delay:.4s}
+@keyframes cw12blink{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}
+@media (prefers-reduced-motion: reduce){.cw12-dots i{animation:none;opacity:.7}}
+
+/* Receipt ticks on the operator's own bubble: one tick = sent, two = picked
+   up, two in colour = answered. Small, at the end of the bubble, never a
+   sentence — the title carries the words. */
+.cw12-rcpt{
+  display:inline-block;margin-left:.45rem;font-family:var(--mono);font-size:.66rem;
+  letter-spacing:-.08em;color:var(--ink3);vertical-align:baseline;user-select:none
+}
+.cw12-rcpt.picked-up{color:var(--ink2)}
+.cw12-rcpt.answered{color:var(--info)}

@@ -362,6 +362,20 @@ async function send(body, { compact, onDelta, emitted }) {
  *   onDelta   — stream: called with each text chunk as it arrives. The buffered
  *               result is identical to the non-streamed one.
  */
+// ── CW-12 Live Presence: the ONE seam every model call passes through ────────
+// The host may register one listener; it is told when a call STARTS, when it
+// begins STREAMING text to the operator, and when it ENDS — success, error or
+// abort alike, from a `finally`, so an end can never be missed. The listener
+// receives ids and labels the app already holds (purpose, conversationId), never
+// prompt text. A listener error can never break a real call.
+let activityListener = null;
+let callSeq = 0;
+function setActivityListener(fn) { activityListener = typeof fn === 'function' ? fn : null; }
+function notifyActivity(ev) {
+  if (!activityListener) return;
+  try { activityListener(ev); } catch (e) { /* presence is telemetry — never breaks reasoning */ }
+}
+
 async function reason({
   system, messages, maxTokens = 3000, effort = 'high', format = null,
   model: modelOverride = null,
@@ -372,13 +386,33 @@ async function reason({
   // Shared across BOTH attempts of this call, so a re-run never re-streams text
   // the operator has already seen.
   const emitted = { any: false };
+  // CW-12: one id per call, so start / stream / end pair up exactly even when
+  // several calls overlap (an investigation round fans out).
+  const callId = `call-${Date.now().toString(36)}-${(++callSeq).toString(36)}`;
+  notifyActivity({ phase: 'start', callId, purpose: purpose || null, conversationId: conversationId || null, streaming: typeof onDelta === 'function' });
+  let streamedOnce = false;
+  const onDeltaWrapped = (typeof onDelta === 'function') ? (chunk) => {
+    if (!streamedOnce) { streamedOnce = true; notifyActivity({ phase: 'stream', callId, purpose: purpose || null, conversationId: conversationId || null }); }
+    onDelta(chunk);
+  } : null;
+  let outcome = 'done';
+  try {
+    return await reasonInner();
+  } catch (err) {
+    outcome = (err && (err.name === 'AbortError' || /aborted|timed out/i.test(err.message || ''))) ? 'aborted' : 'error';
+    throw err;
+  } finally {
+    notifyActivity({ phase: 'end', callId, purpose: purpose || null, conversationId: conversationId || null, reason: outcome });
+  }
+
+  async function reasonInner() {
   // Web research is attempted unless the account has already refused it.
   const useWeb = Boolean(web) && webResearchAvailable !== false;
   let resp;
   try {
     resp = await send(
       buildBody({ system, messages, maxTokens, effort, format, model: modelOverride, web: useWeb, tools: useWeb ? WEB_TOOLS : null }),
-      { compact, onDelta, emitted },
+      { compact, onDelta: onDeltaWrapped, emitted },
     );
     if (useWeb) { webResearchAvailable = true; webResearchWhy = 'server-side web search + fetch accepted by this account'; }
   } catch (err) {
@@ -391,7 +425,7 @@ async function reason({
       try {
         resp = await send(
           buildBody({ system, messages, maxTokens, effort, format, model: modelOverride, web: false, tools: null }),
-          { compact, onDelta, emitted },
+          { compact, onDelta: onDeltaWrapped, emitted },
         );
       } catch (err2) {
         throw mapError(err2);
@@ -418,10 +452,13 @@ async function reason({
     content: resp.content || [],
     webSources: webSourcesOf(resp),
   };
+  }
 }
 
 module.exports = {
   hasKey, model, reason,
+  // CW-12: the presence seam (start / stream / end of every model call).
+  setActivityListener,
   // CW-10 additive surface (capability honesty + tests). Nothing here changes
   // how an existing caller behaves.
   webResearch, compaction,
