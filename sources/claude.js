@@ -375,6 +375,15 @@ function notifyActivity(ev) {
   if (!activityListener) return;
   try { activityListener(ev); } catch (e) { /* presence is telemetry — never breaks reasoning */ }
 }
+// CW-14: the agent runtime (sources/runtime/) makes its model calls through the
+// framework's own loop, not through reason() — so it reports them into the SAME
+// listener here, with the same {phase, callId, purpose, conversationId, reason}
+// shape, and the host's presence wiring never learns that a second caller
+// exists. Additive: nothing that already calls reason() changes.
+function activity(ev) {
+  if (!ev || typeof ev !== 'object' || !ev.callId || !ev.phase) return;
+  notifyActivity(ev);
+}
 
 async function reason({
   system, messages, maxTokens = 3000, effort = 'high', format = null,
@@ -459,6 +468,8 @@ module.exports = {
   hasKey, model, reason,
   // CW-12: the presence seam (start / stream / end of every model call).
   setActivityListener,
+  // CW-14: the runtime reports its framework-driven model calls through it.
+  activity,
   // CW-10 additive surface (capability honesty + tests). Nothing here changes
   // how an existing caller behaves.
   webResearch, compaction,
