@@ -62,7 +62,7 @@ const CHILD_ENV_BASE = [
   'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
   'SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'NODE_EXTRA_CA_CERTS', 'CURL_CA_BUNDLE',
 ];
-const SECRETISH_NAME = /(pass|secret|token|key|auth|cred|pwd)/i;
+const SECRETISH_NAME = /(pass|secret|token|key|auth|cred|pwd|webhook|hook|private|cert|sas|sig|otp|dsn)/i;
 
 function expandVars(v) {
   if (typeof v !== 'string') return v;
@@ -96,10 +96,12 @@ function pinHash(buf) {
 // unhashed (review round 2 #5).
 function pinTarget(rec) {
   const v = rec.config && rec.config.vettedReadOnly;
-  const a0 = expandVars(Array.isArray(rec.config.args) && rec.config.args[0] ? String(rec.config.args[0]) : '');
-  let a0Regular = false;
-  try { a0Regular = !!a0 && fs.statSync(a0).isFile(); } catch (e) { a0Regular = false; }
-  if (a0Regular) return { file: a0, note: (v && v.file && expandVars(v.file) !== a0) ? `vettedReadOnly.file ignored — the entry point ${path.basename(a0)} is what is pinned` : null };
+  // The FIRST args entry that is a regular file (so `python -u server.py`
+  // still pins server.py — review round 3 #2).
+  const args = Array.isArray(rec.config.args) ? rec.config.args.map((a) => expandVars(String(a))) : [];
+  let entry = '';
+  for (const a of args) { try { if (a && fs.statSync(a).isFile()) { entry = a; break; } } catch (e) { /* not a file */ } }
+  if (entry) return { file: entry, note: (v && v.file && expandVars(v.file) !== entry) ? `vettedReadOnly.file ignored — the entry point ${path.basename(entry)} is what is pinned` : null };
   return { file: expandVars((v && v.file) || ''), note: null };
 }
 // Verify the record's file hash against the server file on disk (before every
@@ -139,6 +141,7 @@ function childEnv(config) {
   //     the parent's environment, so it may be a credential (round 2 #3).
   //   Plain literal values are operator-written non-secrets by contract.
   const injected = [];
+  const warnings = [];
   const lit = (config && config.env && typeof config.env === 'object') ? config.env : {};
   for (const k of Object.keys(lit)) {
     const raw = String(lit[k]);
@@ -151,10 +154,14 @@ function childEnv(config) {
     const spec = from[child];
     const parent = (spec && typeof spec === 'object') ? String(spec.from || '') : String(spec || '');
     const optIn = !!(spec && typeof spec === 'object' && spec.secret === true);
+    // `secret: "true"` (a string) is NOT an opt-in and must not pass silently
+    // (review round 3 #3): it is treated as a secret anyway AND reported.
+    const badOptIn = !!(spec && typeof spec === 'object' && spec.secret !== undefined && typeof spec.secret !== 'boolean');
+    if (badOptIn) warnings.push(`envFrom.${child}.secret must be true/false (got ${JSON.stringify(spec.secret)}) — treated as secret`);
     const val = parent ? process.env[parent] : undefined;
     if (val !== undefined && String(val).trim() !== '') {
       env[child] = String(val);
-      if (optIn || SECRETISH_NAME.test(child) || SECRETISH_NAME.test(parent)) injected.push(env[child]);
+      if (optIn || badOptIn || SECRETISH_NAME.test(child) || SECRETISH_NAME.test(parent)) injected.push(env[child]);
     } else missing.push(child);
   }
   // proxy URLs in the allowlisted base may carry user:pass@ — those are secrets too
@@ -162,7 +169,7 @@ function childEnv(config) {
     const m = /\/\/([^/@\s]+@)/.exec(String(env[k] || ''));
     if (m) injected.push(m[1].slice(0, -1));
   }
-  return { env, missing, injected };
+  return { env, missing, injected, warnings };
 }
 // The redactor for anything a child says that can reach an error / status /
 // chat: every value we injected, plus every secret-shaped parent value. Longer
@@ -171,7 +178,16 @@ function makeRedactor(injected) {
   const vals = new Set();
   for (const v of injected || []) if (v && String(v).length >= 4) vals.add(String(v));
   for (const [k, v] of Object.entries(process.env)) if (SECRETISH_NAME.test(k) && v && v.length >= 8) vals.add(v);
-  const list = [...vals].sort((a, b) => b.length - a.length);
+  // Escaped forms too (round 3 #1): a JSON-encoded or \uXXXX-escaped copy of
+  // the secret (a JSON body, a Python repr/json.dumps in a traceback) is the
+  // same secret. Both variants are added when they differ from the raw value.
+  for (const v of [...vals]) {
+    const js = JSON.stringify(v).slice(1, -1);
+    if (js !== v) vals.add(js);
+    const uesc = v.replace(/[^\x20-\x7e]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+    if (uesc !== v) { vals.add(uesc); const both = JSON.stringify(uesc).slice(1, -1); if (both !== uesc) vals.add(both); }
+  }
+  const list = [...vals].filter((v) => v.length >= 4).sort((a, b) => b.length - a.length);
   // Boundary-aware: a secret is replaced only where it stands as its own token
   // (after = : " ' space, before a newline / quote / space …), never inside a
   // longer identifier — a password "admin" must not turn "adminStatus" into
@@ -283,6 +299,7 @@ async function connectOne(rec) {
   if (rec.client) { try { rec.client.close(); } catch (e) { /* ignore */ } rec.client = null; }
   const ce = childEnv(rec.config);
   rec.envMissing = ce.missing;            // names only — never values
+  rec.configWarnings = ce.warnings;       // shapes only — never values
   rec.redact = makeRedactor(ce.injected);
   checkVettingPin(rec);
   const redactForClient = (t) => scrubThenRedact(rec, t);
@@ -554,6 +571,7 @@ function snapshot(rec) {
   }
   if (rec.vettingDrift) out.vettingDrift = rec.vettingDrift;
   if (rec.pinNote) out.pinNote = rec.pinNote;
+  if (Array.isArray(rec.configWarnings) && rec.configWarnings.length) out.configWarnings = rec.configWarnings.slice();
   if (Array.isArray(rec.envMissing) && rec.envMissing.length) out.envMissing = rec.envMissing.slice();
   return out;
 }

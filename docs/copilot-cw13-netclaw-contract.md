@@ -73,6 +73,20 @@ Pinned by `sources/mcp.cw13.test.js` on a no-annotation stub (`test/mcp-noannot-
 NetClaw checkout + Python are present, LIVE on the real `catc-mcp` (10 tools, a real local catalogue
 search, an honest `not_configured`/`refused` with no appliance). The CW-8 suite is unchanged and green.
 
+## Computing a pin for a new server (when vetting the next NetClaw server)
+
+The pin is the sha256 of the **LF-normalised** entry point. One line, any platform with Node:
+
+```bash
+node -e "const fs=require('fs'),c=require('crypto');console.log(c.createHash('sha256').update(Buffer.from(fs.readFileSync(process.argv[1]).toString('utf8').replace(/\r\n/g,'\n'),'utf8')).digest('hex'))" path/to/server.py
+```
+
+(A file with a UTF-8 BOM or lone-CR endings hashes differently from its plain-LF form — that is drift by
+design; normalise the file first.) Mapping a credential whose NAME is not secret-shaped (e.g. a webhook
+URL under `HOOK_URL`) → use the object form `{ "from": "PARENT", "secret": true }`, as the example does
+for the password; the name list covers pass/secret/token/key/auth/cred/pwd/webhook/hook/private/cert/
+sas/sig/otp/dsn.
+
 ## Setting it up on Vikas's PC (Windows)
 
 ```powershell

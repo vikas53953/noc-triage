@@ -109,7 +109,11 @@ function configure(extra) {
     ok('with a real args[0], `file` is ignored (noted) and the ENTRY POINT is what is hashed → a decoy record drifts', /does not match/.test(dec.vettingDrift || '') && /ignored/.test(dec.pinNote || ''), dec.vettingDrift);
     const dec2 = { config: { command: 'python', args: ['-m', 'somemodule'], vettedReadOnly: Object.assign({}, V, { file: tmp, sha256: pinHash(fs.readFileSync(tmp)) }) } };
     checkVettingPin(dec2);
-    ok('…while `file` IS the target when args[0] is not a file (python -m module)', !dec2.vettingDrift && pinTarget(dec2).file === tmp);
+    ok('…while `file` IS the target when no args entry is a file (python -m module)', !dec2.vettingDrift && pinTarget(dec2).file === tmp);
+    const dec3 = { config: { command: 'python', args: ['-u', tmp], vettedReadOnly: Object.assign({}, V, { file: decoy, sha256: pinHash(fs.readFileSync(decoy)) }) } };
+    fs.writeFileSync(decoy, 'static decoy\n'); checkVettingPin(dec3);
+    ok('an interpreter flag before the script does not reopen the decoy (first args entry that is a file is pinned) — round 3 #2', /does not match/.test(dec3.vettingDrift || '') && pinTarget(dec3).file === tmp);
+    try { fs.unlinkSync(decoy); } catch (e) {}
     try { fs.unlinkSync(decoy); } catch (e) {}
     ok('a record with no sha256 is unpinned (allowed, shown as pinned:false)', (() => { const r = { config: { vettedReadOnly: V } }; checkVettingPin(r); return !r.vettingDrift && vettingOf(r).sha256 === null; })());
     try { fs.unlinkSync(tmp); } catch (e) {}
@@ -151,6 +155,15 @@ function configure(extra) {
     const ceP = childEnv({});
     ok('proxy credentials inside an allowlisted proxy URL are redacted too', ceP.injected.includes('proxyuser:proxypass'));
     delete process.env.HTTPS_PROXY;
+    // round 3 #1: escaped forms of a secret are the same secret
+    const redE = makeRedactor(['pa"ss\\w', 'pässwörd']);
+    ok('a JSON-escaped copy of the secret is redacted', !redE('{"q":"pa\\"ss\\\\w"}').includes('ss\\\\w'), redE('{"q":"pa\\"ss\\\\w"}'));
+    ok('a \\uXXXX-escaped copy of the secret is redacted', !redE('"p\\u00e4ssw\\u00f6rd"').includes('u00e4'), redE('"p\\u00e4ssw\\u00f6rd"'));
+    // round 3 #3: a string "true" opt-in is not silent
+    process.env.CW13_HOOKV = 'https://h.example/AAAA';
+    const ceW = childEnv({ envFrom: { HOOK_URL: { from: 'CW13_HOOKV', secret: 'true' } } });
+    ok('secret:"true" (a string) is reported as a config warning AND treated as secret', ceW.warnings.length === 1 && /must be true\/false/.test(ceW.warnings[0]) && ceW.injected.includes('https://h.example/AAAA'));
+    ok('a WEBHOOK-shaped name is secret by name now', childEnv({ envFrom: { TEAMS_WEBHOOK: 'CW13_HOOKV' } }).injected.includes('https://h.example/AAAA'));
   }
 
   // ── 3. end to end on the no-annotation stub ────────────────────────────────
@@ -236,8 +249,8 @@ function configure(extra) {
       const catc = example.find((e) => e.name === 'netclaw-catc');
       ok('the committed example config carries the netclaw-catc entry (disabled by default)', catc && catc.enabled === false && catc.vettedReadOnly && catc.vettedReadOnly.by);
       ok('…with credentials mapped by NAME from DNAC_* (every envFrom value is a VAR NAME; no secret-shaped key under env)',
-        catc && catc.envFrom && catc.envFrom.CATALYST_CENTER_PASSWORD === 'DNAC_PASS'
-        && Object.values(catc.envFrom).every((v) => /^[A-Z_][A-Z0-9_]*$/.test(v))
+        catc && catc.envFrom && catc.envFrom.CATALYST_CENTER_PASSWORD && catc.envFrom.CATALYST_CENTER_PASSWORD.from === 'DNAC_PASS' && catc.envFrom.CATALYST_CENTER_PASSWORD.secret === true
+        && Object.values(catc.envFrom).every((v) => /^[A-Z_][A-Z0-9_]*$/.test(typeof v === 'object' ? v.from : v))
         && !Object.keys(catc.env || {}).some((k) => /pass|secret|token|key/i.test(k)));
       process.env.MCP_SERVERS = JSON.stringify([Object.assign({}, catc, { enabled: true })]);
       delete process.env.MCP_SERVERS_FILE;

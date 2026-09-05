@@ -9,7 +9,10 @@
     "envFrom": {
       "CATALYST_CENTER_HOST": "DNAC_HOST",
       "CATALYST_CENTER_USERNAME": "DNAC_USER",
-      "CATALYST_CENTER_PASSWORD": "DNAC_PASS"
+      "CATALYST_CENTER_PASSWORD": {
+        "from": "DNAC_PASS",
+        "secret": true
+      }
     },
     "env": {
       "CATALYST_CENTER_VERIFY_SSL": "true"
