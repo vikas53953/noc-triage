@@ -5,7 +5,7 @@ Live, honest NOC/SOC triage console for Vikas. Repo **vikas53953/noc-triage** �
 suite guards the tree). PROJECT.md is the one-page brief; this file is the deep-dive build state.
 Run: `cd C:\Users\vikasmit\noc-triage && npm install && PORT=3000 node server.js` → open
 **http://localhost:3000/desk.html** (the real console; the root page is the older classic view).
-Tests: `npm test` (37 suites incl. the public-repo secret guard, ~2200 assertions, must stay green — chain exits non-zero on any failure).
+Tests: `npm test` (38 suites incl. the public-repo secret guard, ~2300 assertions, must stay green — chain exits non-zero on any failure).
 `.env.local` (gitignored) holds Cisco DevNet sandbox creds + `ANTHROPIC_API_KEY`.
 Jarvis default model `claude-opus-5`; ALL testing uses `JARVIS_MODEL=claude-sonnet-5` (Vikas's spend rule).
 
@@ -90,6 +90,18 @@ account) — the approval signal is a PR comment starting "VERDICT: APPROVE".
   header: controls never clip, brand gives way, proven at 320/360/390/480/600/601/760 both themes.
 - **Public-repo guard** (2026-09-05): sources/secrets.public.test.js fails npm test if a credential-shaped
   string is tracked (repo is PUBLIC by Vikas's decision).
+- **CW-13 — NetClaw's MCP server library, first server catc-mcp** (2026-09-05, PR #80, 3 review rounds →
+  APPROVE): Vikas's clarification — NetClaw is the reference LIBRARY of ready-made networking integrations,
+  never build those ourselves. Connector (sources/mcp-connector.js + mcp-client.js) gains: an ENV BOUNDARY
+  (child sees allowlisted base + literal env + envFrom only — never ANTHROPIC_API_KEY or another
+  integration's creds); redaction of secrets (by NAME or `{from, secret:true}` opt-in; token-bounded;
+  escaped forms; expanded literals; proxy creds) applied after the scrubber to errors, status and results;
+  `vettedReadOnly {by, date, why, toolNames, sha256}` pinned to the LF-normalised hash of the script in args
+  (drift/malformed → record VOID, shown in status); strict annotations; `[truncated …]` marker under
+  `maxTextChars`; `${VAR}` paths. NetClaw pinned to c703a8f (scripts/netclaw-setup.{ps1,sh}). Vetting record
+  + PC setup: docs/copilot-cw13-netclaw-contract.md. Proven LIVE in the cloud on the real server (10 tools,
+  local catc_find, honest not_configured / unreachable, appliance stamp intact, password nowhere). A real
+  appliance read + the planner picking the tool with a live model: PC.
 
 ## Key files
 server.js (routes, WS broadcast, gate wiring — NAMED_WRITE_SURFACES lists gated non-/api/copilot surfaces;
@@ -107,11 +119,14 @@ public/desk.html + public/cw9-bridge.js/.css (shared UI module; dev fixtures in 
    that streams → "Jarvis is typing…" with dots; @Router-Expert a read → "Router-Expert is checking…";
    ask-mode approval → amber "waiting for your approval". Fixture for the look: paste test/cw12-fixture.js
    in the console and run cw12All().
-2. **CW-13 — adopt NetClaw's MCP server library (first: catc-mcp)** — IN FLIGHT: PR #80, review round 2
-   (Vikas's pick 2026-09-05; contract docs/copilot-cw13-netclaw-contract.md).
-2b. **CW-14 — adopt an agent runtime, stop hand-rolling the loop** — CONTRACT PINNED, NOT BUILT
-   (docs/copilot-cw14-runtime-contract.md): OpenAI Agents SDK (JS) + `aisdk` adapter → Anthropic today,
-   other providers next (laws 9/10). Stage A spike behind `JARVIS_RUNTIME=agents`. Vikas may veto the pick.
+2. **CW-14 — adopt an agent runtime, stop hand-rolling the loop** — IN FLIGHT: stage A build (builder
+   agent, branch feat/cw14-runtime-a) after a 12/12 offline spike (docs/copilot-cw14-runtime-contract.md):
+   OpenAI Agents SDK (JS) + `aisdk` adapter → Anthropic today, other providers next (laws 9/10). Behind
+   `JARVIS_RUNTIME=agents`, default legacy. Vikas may veto the pick in one word.
+2b. **CW-13b — the next NetClaw servers** (each = its own vetting record + config entry, seam unchanged):
+   candidates by value for our agents — ACI_MCP (Sentinel/fabric), cisco-sdwan-mcp (WAN), syslog-mcp /
+   snmptrap-mcp / ipfix-mcp (feeds, no creds), ISE_MCP, meraki, f5-mcp-server, checkpoint, fortinet-mcp
+   (Vikas's stack), mcp-nvd (CVEs). Needs Vikas's order of preference.
 3. Polish backlog: probe planner sometimes asks bare "ping"/"traceroute" (Config-Keeper honestly refuses —
    wasted rounds); lesson consult chip dark until a first real lesson exists; 2 LOW review leftovers in
    PR #74/#76 comments (the CW-10 preview "shrink" reflow is a known cosmetic, not a bug); short-device-error
@@ -121,7 +136,8 @@ public/desk.html + public/cw9-bridge.js/.css (shared UI module; dev fixtures in 
 4. Parked features (need Vikas's pick): FortiGate/F5/threat feeds, RBAC/SSO, PDF/email export, HA front.
 
 ## Needs Vikas (each flips a BUILT feature live; all honest-if-absent today)
-TEAMS_WEBHOOK · SNOW_INSTANCE/SNOW_USER/SNOW_PASS · DevNet always-on IOS-XE sandbox SSH creds
+NETCLAW_DIR + NETCLAW_PYTHON on the PC (run scripts/netclaw-setup.ps1, enable netclaw-catc in
+config/mcp-servers.json) · TEAMS_WEBHOOK · SNOW_INSTANCE/SNOW_USER/SNOW_PASS · DevNet always-on IOS-XE sandbox SSH creds
 (SSH_IOSXE_USER/PASS) · real devices pointing syslog/traps here (*_BIND=0.0.0.0) · write-capable sandbox
 creds (change-apply + prediction follow-through live proof) · a vetted external MCP server.
 

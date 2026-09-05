@@ -41,6 +41,14 @@ class McpClient {
     this.command = opts.command || null;
     this.args = Array.isArray(opts.args) ? opts.args : [];
     this.env = opts.env || null;
+    // CW-13: inheritEnv:false → the child sees EXACTLY `env` (a boundary), not
+    // the parent's whole environment merged underneath it. Default true keeps
+    // the pre-CW-13 behaviour for any direct user of this client.
+    this.inheritEnv = opts.inheritEnv !== false;
+    // CW-13: a redactor the owner supplies (values it injected, secret-shaped
+    // parent values) — applied to anything from the child that can reach an
+    // error message, which can reach a status route or a chat card.
+    this.redact = typeof opts.redact === 'function' ? opts.redact : (t) => t;
     this.cwd = opts.cwd || null;
     this.timeoutMs = opts.timeoutMs || DEFAULT_TIMEOUT_MS;
     this.maxBufferBytes = opts.maxBufferBytes && opts.maxBufferBytes > 0
@@ -70,7 +78,7 @@ class McpClient {
       try {
         this.proc = spawn(this.command, this.args, {
           stdio: ['pipe', 'pipe', 'pipe'],
-          env: this.env ? { ...process.env, ...this.env } : process.env,
+          env: this.inheritEnv ? (this.env ? { ...process.env, ...this.env } : process.env) : (this.env || {}),
           cwd: this.cwd || undefined,
         });
       } catch (err) {
@@ -86,7 +94,10 @@ class McpClient {
 
       // A process that exits before/without answering is a dead server, not a
       // silent success. Fail every in-flight request with the exit detail.
-      this.proc.once('exit', (code, signal) => {
+      // 'close' (not 'exit'): it fires after stdio has drained, so whatever the
+      // child printed to stderr on its way out is already captured — and can
+      // be redacted, logged and reported — instead of racing the exit event.
+      this.proc.once('close', (code, signal) => {
         // Keep the honest overflow reason if we killed the process for that.
         if (!this._overflowed) this._closedReason = `server process exited (code ${code}${signal ? `, signal ${signal}` : ''})`;
         this.connected = false;
@@ -121,9 +132,14 @@ class McpClient {
         clientInfo: { name: 'noc-triage', version: '1.0.0' },
       });
     } catch (err) {
-      const detail = this._stderr ? ` (server stderr: ${this._stderr.trim().slice(0, 300)})` : '';
+      // The child's stderr is a third-party program's log: it can echo its
+      // environment or a traceback carrying a credential. The FULL text goes to
+      // the server console only; what rides in the error (→ status route, chat
+      // card) is redacted by the owner and bounded.
+      if (this._stderr) console.error(`[MCP ${this.name}] stderr on connect:\n${this._stderr.trim().slice(0, 2000)}`);
+      const detail = this._stderr ? ` (server stderr: ${this.redact(this._stderr.trim()).slice(0, 300)})` : '';
       try { this.close(); } catch (e) { /* ignore */ }
-      throw new Error(`MCP initialize failed for "${this.name}": ${err.message}${detail}`);
+      throw new Error(`MCP initialize failed for "${this.name}": ${this.redact(String(err.message || err))}${detail}`);
     }
     this.serverInfo = (init && init.serverInfo) || null;
     // Tell the server we are ready (fire-and-forget notification, per spec).

@@ -96,7 +96,7 @@ const envExample = fs.readFileSync(path.join(ROOT, '.env.example'), 'utf8');
 ok('.env.example has no value on ANTHROPIC_API_KEY / DNAC_PASS / ACI_PASS / SDWAN_PASS',
   /^ANTHROPIC_API_KEY=\s*$/m.test(envExample) && /^DNAC_PASS=\s*$/m.test(envExample) && /^ACI_PASS=\s*$/m.test(envExample) && /^SDWAN_PASS=\s*$/m.test(envExample));
 const mcpExample = JSON.parse(fs.readFileSync(path.join(ROOT, 'config', 'mcp-servers.example.json'), 'utf8'));
-ok('config/mcp-servers.example.json maps credentials by NAME only', mcpExample.every((s) => Object.values(s.envFrom || {}).every((v) => /^[A-Z_][A-Z0-9_]*$/.test(v))
+ok('config/mcp-servers.example.json maps credentials by NAME only', mcpExample.every((s) => Object.values(s.envFrom || {}).every((v) => /^[A-Z_][A-Z0-9_]*$/.test(typeof v === 'object' && v ? v.from : v))
   && Object.entries(s.env || {}).every(([k, v]) => !/pass|secret|token|key/i.test(k) || FAKE.test(String(v)))));
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

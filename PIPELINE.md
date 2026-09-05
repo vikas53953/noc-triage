@@ -56,7 +56,7 @@ since merged; the CLI routing fix and the SSH sidecar remain ahead.)
 |---|----------|--------|
 | 6 | Repo stays PUBLIC; "just make sure there is no API key or anything publicly visible" | secret-scan suite in npm test; docs no longer say "private" |
 | 7 | "keep it as it is and go with the Anthropic API for timing"; next iteration "plug in the other vendors like OpenAI and OpenCode … many really cheap options" | law 10: provider-agnostic seam; next wave after CW-13 |
-| 8 | CW-13 MCP server = **NetClaw** (github.com/automateyournetwork/netclaw): "leverage this repo behind the scenes rather than building it ourselves" | CW-13 approved and in flight |
+| 8 | NetClaw (github.com/automateyournetwork/netclaw) = the reference LIBRARY of ready-made networking integrations: "leverage this repo behind the scenes rather than building it ourselves" | CW-13 MERGED 2026-09-05 (PR #80, 3 rounds); CW-13b = the next servers, needs Vikas's order |
 | 9 | "leverage the framework when it comes to agent runtime, orchestration or any other layer … no point in building the loop, tool calling"; later: "use the agentic framework … rather than building it from scratch. I really don't want to make that mistake again." | law 9; **CW-14 contract pinned** (docs/copilot-cw14-runtime-contract.md): runtime = OpenAI Agents SDK (JS) with the `aisdk` adapter so the model is a Vercel AI SDK provider (Anthropic today, OpenAI/OpenRouter next). Vikas can veto in one word; stage A spike starts after CW-13 merges. |
 
 ## Deviations

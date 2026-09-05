@@ -103,6 +103,20 @@ list and HANDOFF ever disagree, HANDOFF wins.
 - Artifacts: leadership and engineer write-ups, plus a structured ServiceNow
   export.
 
+## Optional: NetClaw tools for Jarvis (CW-13)
+
+[NetClaw](https://github.com/automateyournetwork/netclaw) is an open-source project that ships
+dozens of read-only network tools as MCP servers. Jarvis can use them as delegation targets through
+the same permission gate and audit as any device read. The first one wired is **catc-mcp**
+(Catalyst Center: all 514 read-only operations behind 10 tools) — vetting record and set-up in
+[`docs/copilot-cw13-netclaw-contract.md`](docs/copilot-cw13-netclaw-contract.md).
+
+```powershell
+.\scripts\netclaw-setup.ps1        # Linux/macOS: ./scripts/netclaw-setup.sh
+# add the two NETCLAW_* lines it prints to .env.local
+copy config\mcp-servers.example.json config\mcp-servers.json   # set netclaw-catc "enabled": true
+```
+
 ## The safety rules (never relaxed)
 
 - **Real data or an honest "not connected".** Never a fabricated number.
