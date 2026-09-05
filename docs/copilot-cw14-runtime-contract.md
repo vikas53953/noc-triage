@@ -1,4 +1,4 @@
-# CW-14 — adopt an agent runtime; stop hand-rolling the loop — CONTRACT (pinned 2026-09-05, NOT YET BUILT)
+# CW-14 — adopt an agent runtime; stop hand-rolling the loop — CONTRACT (pinned 2026-09-05; stage A built, PR #81)
 
 Vikas's ask, HIS WORDS (2026-09-05): "leverage multiple frameworks … the Anthropic SDK, the Anthropic
 agent runtime framework, or the OpenAI framework. There is no point in building each and every thing. At
@@ -91,3 +91,33 @@ Mock Anthropic transport (JSON + SSE) under `@ai-sdk/anthropic` → `aisdk()` �
 ## Needs Vikas
 - Veto/confirm the pick (one word). If "Vercel only" or "Anthropic only", the table above says what changes.
 - For stage D: an OpenAI or OpenRouter key in `.env.local` on the PC (never in the repo).
+
+## Stage A — as built (PR #81, branch `feat/cw14-runtime-a`)
+
+`sources/runtime/` behind `JARVIS_RUNTIME=agents` (default stays `legacy`); `server.js` hands the runtime
+the IDENTICAL `jarvisCtx` object `jarvis.init` gets, so the wire is the same seam.
+
+| File | What it is |
+|---|---|
+| `sources/runtime/index.js` | the front door `ask()`: conduct gate FIRST (same ask / refusal envelopes as `jarvis.js`), capability screen, then `run()` on the SDK with `stream:true`, `maxTurns`, an outer abort bound; streamed deltas through the same 280-cap discipline; presence via `claude.activity`; approval pauses rejected and said; the honest failure line on any error; **tracing disabled before the first run** |
+| `sources/runtime/squad.js` | the roster as Agents: Jarvis (tools = `delegate_read` + one `mcp__<server>__<tool>` per connected MCP roster entry, handoffs to every engineer); each engineer (one tool, `read_as_<id>`, bound to itself). Every execute is one of OUR gate-wrapped reads (`ctx.gather` → live-agents, or `mcp.gather` with `approved:false`); a write-classified MCP tool is built with `needsApproval:true` so the run pauses — stage A always rejects. Every tool has an `errorFunction` in the app's honest words. Model settings: `maxTokens 3000`, top-level `cache_control` (prompt caching) |
+| `sources/runtime/model.js` | the provider seam (law 10): `MODEL_PROVIDER` → Vercel AI SDK provider → `aisdk()`; stall timeout on the provider fetch; usage → spend store in claude.js's record shape (each response once); a test transport seam |
+| `sources/runtime.cw14.test.js` | 89 deterministic checks, offline: the 4 flagship behaviours, MCP pause/reject, error paths, spend, provider seam, the flag, and §10 = every round-1 review finding |
+
+Review round 1 (adversarial, different agent — it hit its quota before a verdict; findings taken from its
+transcript) found, and 22f3634 fixed at class level: the SDK's tracing exporter posting spans to OpenAI when
+`OPENAI_API_KEY` is set; no timeout on a hung model call; spend double-counted on a pause/resume; the
+"@Name — question" line and status flip firing before argument validation (with SDK boilerplate reaching
+the model); an engineer able to read as another engineer and its answer posted as Jarvis; `max_tokens`
+128000 + no caching; the raw key in a cache signature. Round 2 reviewed the fixes.
+
+Known, accepted for stage A (stage B items): the server-side presence span during a handed-off engineer's
+model call is attributed to Jarvis while the deltas are the engineer's (the FE shows both); the model does
+not get the legacy planner's strict-JSON plan step (the runtime plans by calling tools); no `thinking`
+block on runtime calls yet; the legacy path's "🧠 Let me think…" bubble has no runtime equivalent (the
+runtime streams the model's own narration instead).
+
+Needs the PC (real key): one ask with `JARVIS_RUNTIME=agents` in `.env.local` — expect the same desk
+behaviour as legacy, plus `[Jarvis] Runtime → tool …` lines in the activity log; confirm the provider
+accepts the top-level `cache_control` on the configured model (if it 400s, unset it in
+`squad.js modelSettingsFor` and say so in TRACKER).

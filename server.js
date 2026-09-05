@@ -13,6 +13,10 @@ const { AsyncLocalStorage } = require('async_hooks');
 
 const live = require('./sources/live-agents');
 const jarvis = require('./sources/jarvis');
+// CW-14 stage A: the ADOPTED agent runtime (OpenAI Agents SDK + provider seam),
+// behind JARVIS_RUNTIME=agents. Default stays 'legacy' (jarvis.js). Both are
+// init-ed with the IDENTICAL ctx object, so the wire cannot differ by loop.
+const runtime = require('./sources/runtime');
 const triage = require('./sources/triage');
 const catalyst = require('./sources/catalyst-center');
 const aci = require('./sources/aci');
@@ -1285,7 +1289,7 @@ function buildJarvisRoster() {
   return squad.concat(mcp.rosterEntries());
 }
 
-jarvis.init({
+const jarvisCtx = {
   say: jarvisSay,
   // CW-10 item 3 (BE half): incremental text for Jarvis's COMPOSED answer only.
   // Its own WS message type, so a client that has never heard of deltas ignores
@@ -1342,7 +1346,11 @@ jarvis.init({
       reason: String(reason || 'Fix proposed on the bridge'), who: 'jarvis',
     });
   },
-});
+};
+jarvis.init(jarvisCtx);
+// CW-14: the same object, not a copy — the runtime speaks through exactly the
+// seams the legacy loop does (say / sayDelta / status / gather / screen …).
+runtime.init(jarvisCtx);
 
 // CW-9 — the ONE conduct gate, shared by EVERY operator entry point. The chat
 // path (jarvis.ask) and the triage intake (triage.js → ctx.understand) now come
@@ -2029,6 +2037,12 @@ function simulateJarvisAction(agentId, command) {
   // narrowing questions can never be swallowed by a change-proposal bubble and
   // the thread can never be orphaned in awaiting-info. One gate, first, always.
   const req = currentRequest() || {};
+  // CW-14 stage A: JARVIS_RUNTIME=agents routes the SAME ask to the adopted
+  // agent runtime (sources/runtime/) — same gate first, same envelope on the
+  // wire. Unset or anything else = the legacy loop, byte for byte.
+  if ((process.env.JARVIS_RUNTIME || 'legacy') === 'agents') {
+    return runtime.ask(command, { conversationId: req.conversationId || 'default', operatorTz: req.operatorTz || null });
+  }
   return jarvis.ask(command, { conversationId: req.conversationId || 'default', operatorTz: req.operatorTz || null });
 }
 
