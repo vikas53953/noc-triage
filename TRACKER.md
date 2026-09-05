@@ -710,3 +710,64 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   DevNet reach in the container, so live-LLM/device verification stays on the PC; fixtures + suites +
   headless browser run here.
 - NEXT: CW-12 Live Presence (contract docs/copilot-cw12-presence-contract.md) — building now.
+
+## 2026-09-05 — CW-12 Live Presence BUILT (branch feat/cw12-presence → PR), review in flight
+- One agent built both halves sequentially (cloud container, no parallel clones needed). Backend:
+  sources/presence.js tracker + claude.js setActivityListener (start/stream/end of every model call, end
+  from finally) + server.js wiring (thinking/typing, agent checking, approval waiting, picked-up receipt,
+  clientMessageId echo, init snapshot). Frontend: createPresence/receiptHtml in the shared module; presence
+  line + ticks on desk and classic; hidden when empty; socket drop clears; reload seeds from snapshot only.
+- Tests: 35 suites green (new: presence.cw12 51 assertions incl. real SDK path on mock transport;
+  desk.cw12.ui 89). Browser (headless Chromium, real server): no-key flow → picked-up + answered tick;
+  fake-key + mock 401 (400ms hold) → "Jarvis is thinking…" visible in flight, done(error), line hidden,
+  key never in a WS frame; fixtures, XSS, reload-ghost, socket-drop all held. Shots docs/shots/cw12-*.png.
+- Bug caught by the browser pass, fixed before PR: desk.html's own hoisted `var CW9B` shadowed the
+  module at the CW-12 block's position → use window.CW9B there (class: any block above that line must).
+- Known/pre-existing, not this wave: 390px horizontal overflow (header name tag + capabilities drawer),
+  identical with the line hidden or shown. Header badge still reads "COCKPIT · CW-3" (cosmetic, backlog).
+- Not proven live here (needs Vikas's PC: real key + DevNet creds): streamed `typing` and agent
+  `checking` — seams unit-proven, page path fixture-proven.
+- Adversarial reviewer (different agent) launched against :3123 (no key) and :3124 (mock 401).
+
+## 2026-09-05 — CW-12 review round 1: FIX-FIRST (1 HIGH, 3 MED, 3 LOW) → all fixed at class level
+- HIGH "Answered ticks before anything is answered" (tick was inferred from ANY reply stamped with the
+  requestId — "let me think…", narrowing questions, rosters, the @mention relay). FIX (class): the server
+  now sends a one-shot `answered` receipt from the ONE seam that owns the request end (handler promise
+  settled, server.js `settle`), the page ticks ONLY on that receipt, and holds it until a reply is on
+  screen; a request that ended on kind:ask ticks REPLIED "needs your answer", never "Answered".
+- MED "Sent ✓ survives a failed send" → NOT SENT ✕ on HTTP-refused / unreachable (desk).
+- MED "mirror typing flight can strand" → noteDelta runs before the stream store can reject a piece,
+  and the recorded message (same messageId) settles the mirror flight (both pages).
+- MED "10-minute belt only on snapshot" → sweep on an unref'd 30s timer; age counts from the last
+  re-state (`touched`) so long live work is never cut off; window 15 min.
+- LOW multi-operator → classic ticks only ids THIS page minted (history / other operators: no tick).
+- LOW background calls → flights with no requestId name their purpose ("Jarvis is thinking — lessons").
+- LOW mobile shot → replaced with the Jarvis-tab shot at 390px.
+- Verified: 35 suites green (presence.cw12 59, desk.cw12.ui 116); browser 34/34 on :3123 incl. the
+  reviewer's repros (interim reply → still picked-up; ask → replied; stranded stream settles on the
+  recorded message); live 18/18 on :3124 (mock 401). Re-review requested.
+
+## 2026-09-05 — CW-12 review round 2: FIX-FIRST (1 HIGH residual, 3 LOW) → fixed
+- HIGH residual: `settle()` trusted any handler return; ping / help (reply on a timer) and the
+  clarification-resume path (fire-and-forget read) returned nothing, so "answered" fired ~480ms early.
+  FIX (class): settle FAILS CLOSED (non-thenable → no receipt, never 'done'); the rule "every handler path
+  returns a promise that resolves after its last reply" applied — ping/help return a Promise resolved
+  inside their timer, resumeClarification/pickCandidate return the read's own promise (say-only branches
+  return a resolved promise), maybeForget and write refusals wrapped at the call site, live.handle wraps
+  its sync not-connected/cannot-answer lines. Pinned in presence.cw12.test (66) + browser ping timeline
+  (answered never before the Pong, on screen and on the wire).
+- LOW: "Replied — asked you a question" (a fact, not an instruction; the resume route is separate).
+- LOW: NOT SENT / REPLIED survive a reload (facts); SENT / PICKED-UP still swept.
+- Info: dev hooks guard null. Pre-existing canned "On it — querying…" line noted for a Law-1 cleanup.
+- Verified: 35 suites exit 0; browser 37/37 (:3123) + 18/18 (:3124). Round-3 re-review requested.
+
+## 2026-09-05 — CW-12 review round 3: VERDICT: APPROVE ✅ (1 LOW honest gap fixed pre-merge)
+- Reviewer re-ran wire ordering on 8 paths (ping, help, Config-Keeper read, write refusal, unknown
+  @mention, no-key decline, mock-401 failure) — answered always after the last reply and the flight's
+  done; early-resolve audit of every handler path found nothing. Browser: Sent 82ms → Picked up 1569ms →
+  still Picked up while "On it" shows → Answered only in the same sample as the Pong.
+- LOW fixed: the "never mind" cancel branch of resumeClarification returned a bare `true` (fail-closed →
+  bubble stuck at Picked up); now Promise.resolve(true) like its siblings, pinned in the test.
+- Info (not this wave): simulateStandup/SquadStatus/WeeklyReport/showJarvisHelp are dead code (Law-1
+  leftovers); canned "On it — querying…" relay line can land after the answer. Both → polish backlog.
+- Merging PR #78 (merge commit, repo convention).

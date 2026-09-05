@@ -20,6 +20,8 @@ const sdwan = require('./sources/sdwan');
 const session = require('./sources/session-log');
 const chatStore = require('./sources/chat-store');
 const approvals = require('./sources/approvals');
+const presence = require('./sources/presence');
+const claude = require('./sources/claude');
 const artifacts = require('./sources/artifacts');
 const notifier = require('./sources/notifier');
 const capabilities = require('./sources/capabilities');
@@ -1090,6 +1092,21 @@ ticketStore.setBroadcast((type, data) => broadcast(type, data));
 // approval surface updates live: approval_new, approval_update, approval_mode.
 approvals.setBroadcast((type, data) => {
   broadcast(type, data);
+  // CW-12: a read PAUSED on the operator is honest presence — "waiting for your
+  // approval", never "typing". It starts when the record is genuinely pending
+  // and ends on the decision update (approve / deny / timeout), whichever comes.
+  if (data && data.id) {
+    if (type === 'approval_new' && data.state === 'pending') {
+      livePresence.start({
+        actor: data.agentId || 'gate', actorName: data.agentName || data.agentId || 'an agent',
+        state: 'waiting-approval', id: `apr:${data.id}`,
+        requestId: (currentRequest() || {}).requestId || undefined,
+        label: data.command || undefined,
+      });
+    } else if (type === 'approval_update') {
+      livePresence.end({ actor: data.agentId || 'gate', id: `apr:${data.id}`, reason: data.state === 'denied' ? 'denied' : 'done' });
+    }
+  }
   // On-call notifier (Wave 3): a read that needs an operator decision (ask mode)
   // pages on-call. Only a genuinely-PENDING new request — never an auto-approved
   // read or a decision update. Fire-and-forget; the notifier is an honest no-op
@@ -1108,6 +1125,28 @@ approvals.setBroadcast((type, data) => {
       if (p && typeof p.catch === 'function') p.catch(() => {});
     } catch (e) { /* telemetry must never break the approval flow */ }
   }
+});
+
+// ── CW-12 Live Presence ──────────────────────────────────────────────────────
+// ONE tracker, fed ONLY by real start/end pairs (the law of the wave — see
+// sources/presence.js): every model call (claude.js seam), every agent read
+// (updateAgentStatus active → idle), every approval wait (gate pending →
+// decided). It broadcasts additive `presence` envelopes an old client ignores,
+// and is never persisted — the init snapshot below carries what is in flight
+// at connect time and nothing else, so a reload cannot show a ghost.
+const livePresence = presence.create({ broadcast });
+
+// Jarvis's model calls: 'thinking' from the moment a call leaves until it
+// returns; 'typing' from the first streamed chunk of a composed answer. The end
+// fires from claude.reason's `finally`, so an error, a timeout, an abort or a
+// refusal all clear the line the moment they happen.
+claude.setActivityListener((ev) => {
+  if (!ev || !ev.callId) return;
+  const req = currentRequest() || {};
+  const base = { actor: 'jarvis', actorName: agents.jarvis?.name || 'Jarvis', id: ev.callId, requestId: req.requestId || undefined };
+  if (ev.phase === 'start') livePresence.start({ ...base, state: 'thinking', label: ev.purpose || undefined });
+  else if (ev.phase === 'stream') livePresence.start({ ...base, state: 'typing', label: ev.purpose || undefined });
+  else if (ev.phase === 'end') livePresence.end({ actor: 'jarvis', id: ev.callId, reason: ev.reason === 'aborted' ? 'aborted' : ev.reason === 'error' ? 'error' : 'done' });
 });
 
 // Surface a problem on the dashboard instead of dying quietly (or loudly).
@@ -1429,7 +1468,11 @@ wss.on('connection', (ws, req) => {
       // may keep it and send it back on every command so ONE operator holds ONE
       // thread across a reload; if it sends nothing, this same id is used anyway.
       // It is an opaque routing key — it carries no identity and no secret.
-      sessionId: socketSessionId
+      sessionId: socketSessionId,
+      // CW-12: what is genuinely in flight at this moment (model calls, agent
+      // reads, approval waits). Never persisted — a reload after the work is
+      // over gets an empty list, so no indicator can come back as a ghost.
+      presence: livePresence.snapshot()
     },
     timestamp: new Date().toISOString()
   }));
@@ -1520,6 +1563,10 @@ function handleCommand(data, fallbackSessionId) {
     requestId: newRequestId(),
     question,
     agent: (data && data.agent) || null,
+    // CW-12: the page's own id for the bubble it painted, echoed back on the
+    // outgoing message and on the picked-up receipt so the right bubble ticks.
+    // Opaque, bounded, never used for routing.
+    clientMessageId: (data && typeof data.clientMessageId === 'string' && data.clientMessageId.trim().slice(0, 96)) || null,
     askedAt: new Date().toISOString(),
     // The operator's own timezone, when the surface sends it — the conduct gate
     // reasons about "since 2pm" in the operator's zone, never the server's.
@@ -1547,12 +1594,43 @@ function handleCommandInner(data) {
   commandQueue.push({ agent, command, timestamp, status: 'pending' });
 
   // Broadcast command sent (shows in chat as outgoing)
+  const cmid = (currentRequest() || {}).clientMessageId || null;
   broadcast('chat_message', {
     type: 'outgoing',
     agent,
     text: command,
-    timestamp
+    timestamp,
+    ...(cmid ? { clientMessageId: cmid } : {}),
   });
+  // CW-12: the receipt "picked up" fires when an actor actually STARTS on the
+  // message — right before the handler runs, never before, never on a queue.
+  // The receipt "answered" fires when that handler has FINISHED (its promise
+  // settled) — the ONE seam that owns the request's end. The page ticks
+  // "answered" on this receipt and on nothing else: a reply stamped with the
+  // requestId is NOT an answer (it may be "let me think…", a narrowing
+  // question, a roster), so it is never inferred client-side.
+  const rid = (currentRequest() || {}).requestId;
+  const pickedUp = (actorId) => livePresence.pickedUp({
+    actor: actorId, actorName: agents[actorId]?.name || actorId,
+    requestId: rid, clientMessageId: cmid || undefined,
+  });
+  const answered = (actorId, reason) => livePresence.answered({
+    actor: actorId, actorName: agents[actorId]?.name || actorId,
+    requestId: rid, clientMessageId: cmid || undefined, reason,
+  });
+  // simulateAgentAction already reports a failure to the operator (honest line
+  // in chat); here only the receipt's colour follows the outcome.
+  // FAIL CLOSED (review round 2): only a THENABLE is trusted to mean "finished
+  // when it settles". A handler that returns nothing while its reply is still
+  // on a timer would otherwise get an "answered" receipt before the answer
+  // exists — so a non-thenable emits NO receipt at all, never 'done'. The rule
+  // for every handler path is therefore: return a promise that resolves after
+  // its LAST reply is broadcast (see simulatePing / showAgentHelp / live.handle
+  // / resumeClarification).
+  const settle = (result, actorId) => {
+    if (!result || typeof result.then !== 'function') return;
+    result.then(() => answered(actorId, 'done'), () => answered(actorId, 'error'));
+  };
 
   // An @mention nobody answers to is a typo, not a task. Say so and stop —
   // creating live work against real kit for a name that does not exist is the
@@ -1572,6 +1650,7 @@ function handleCommandInner(data) {
       timestamp,
     });
     appendToActivityLog(`[${timestamp}] [Dashboard] Unknown @mention refused: @${unknown[0]}\n`);
+    answered(agent, 'done');   // the refusal above IS the answer
     return;
   }
 
@@ -1597,7 +1676,8 @@ function handleCommandInner(data) {
 
       // Also have the target agent process the command
       setTimeout(() => {
-        simulateAgentAction(targetId, mentionMessage);
+        pickedUp(targetId);
+        settle(simulateAgentAction(targetId, mentionMessage), targetId);
       }, 1500);
       return;
     }
@@ -1629,7 +1709,8 @@ function handleCommandInner(data) {
   // No "Command received" echo: the user's own bubble already shows what they
   // sent, and the agent's real answer follows. Hand straight to the read.
   setTimeout(() => {
-    simulateAgentAction(agent, command);
+    pickedUp(agent);
+    settle(simulateAgentAction(agent, command), agent);
   }, 500);
 }
 
@@ -1841,8 +1922,12 @@ function runAgentAction(agentId, command) {
   // the command they already typed. Checked here, before every other route, so
   // BOTH surfaces inherit it: Jarvis and a direct @mention. It returns false for
   // anything that is not an answer, and that message routes normally as before.
-  if (live.maybeForget(agentId, command)) return;
-  if (live.resumeClarification(agentId, command)) return;
+  // CW-12: each of these replies synchronously (maybeForget) or returns the
+  // read's own promise (resumeClarification) — so the answered receipt fires
+  // after the reply, never before. A plain `true` here would fail closed.
+  if (live.maybeForget(agentId, command)) return Promise.resolve(true);
+  const resumed = live.resumeClarification(agentId, command);
+  if (resumed) return resumed;
 
   updateAgentStatus(agentId, 'active', `Processing: ${command}`);
 
@@ -1889,7 +1974,7 @@ function runAgentAction(agentId, command) {
     // sink every refused write passes through. Logging it here as well would
     // double-count this branch while the other refusal paths still logged
     // nothing, which is exactly the hole this move closes.
-    return live.refuseWrite(agentId, command, writeIntent);
+    return Promise.resolve(live.refuseWrite(agentId, command, writeIntent));   // the refusal IS the reply (sync)
   }
 
   // Jarvis keeps its squad-coordination intents (standup, roll call, triage);
@@ -1900,7 +1985,7 @@ function runAgentAction(agentId, command) {
 
   switch (intent) {
     // Read-only is enforced before anything reaches a device.
-    case 'configure_device': return live.refuseWrite(agentId, command);
+    case 'configure_device': return Promise.resolve(live.refuseWrite(agentId, command));
     case 'ping':             return simulatePing(agentId);
     case 'help':             return showAgentHelp(agentId);
     default:                 return live.handle(agentId, command);
@@ -1917,7 +2002,9 @@ function simulatePing(agentId) {
 
   addTaskToBoard('inProgress', { title: taskTitle, agent: agent.name });
 
-  setTimeout(() => {
+  // CW-12: resolves AFTER the reply is broadcast, so the answered receipt can
+  // never precede the Pong.
+  return new Promise((resolve) => setTimeout(() => {
     broadcast('chat_message', {
       type: 'incoming',
       agent: agentId,
@@ -1928,7 +2015,8 @@ function simulatePing(agentId) {
     });
     updateAgentStatus(agentId, 'idle', 'Ping responded');
     moveTaskOnBoard(taskTitle, 'inProgress', 'done');
-  }, 500);
+    resolve(true);
+  }, 500));
 }
 
 // Show agent help.
@@ -1952,7 +2040,8 @@ function showAgentHelp(agentId) {
         `Read-only is enforced in code (sources/guardrails.js), not by convention.`
       : `I have no live data source mapped, so I will report "not connected" rather than guess.`;
 
-  setTimeout(() => {
+  // CW-12: resolves AFTER the reply is broadcast (see simulatePing).
+  return new Promise((resolve) => setTimeout(() => {
     broadcast('chat_message', {
       type: 'incoming',
       agent: agentId,
@@ -1962,7 +2051,8 @@ function showAgentHelp(agentId) {
       timestamp: new Date().toISOString()
     });
     updateAgentStatus(agentId, 'idle', 'Help displayed');
-  }, 500);
+    resolve(true);
+  }, 500));
 }
 
 // Main Jarvis entry point.
@@ -2250,6 +2340,18 @@ function updateAgentStatus(agentId, status, lastAction) {
     // (with id/name/icon/lastAction) is still carried so a client can render either
     // a status-light delta or a full-roster refresh from the same event.
     broadcast('agent_status', { ...agents[agentId], agentId, status, note: lastAction || null });
+    // CW-12: an engineer agent that is 'active' is checking something real
+    // (every active is paired with an idle in live-agents / triage). Jarvis is
+    // NOT tracked here — its truth is the model-call seam above, and its
+    // 'active' spans include waiting on other agents, which would over-claim.
+    if (agentId !== 'jarvis') {
+      if (status === 'active') {
+        livePresence.start({ actor: agentId, actorName: agents[agentId].name || agentId, state: 'checking', id: agentId,
+          requestId: (currentRequest() || {}).requestId || undefined, label: lastAction || undefined });
+      } else {
+        livePresence.end({ actor: agentId, id: agentId, reason: 'done' });
+      }
+    }
   }
 }
 
@@ -3371,7 +3473,11 @@ app.post('/api/command', (req, res) => {
   // CW-9 (reviewer finding #12): operatorTz was read by handleCommand but never
   // destructured here, so the HTTP surface silently dropped the operator's
   // timezone while the websocket kept it. Both carry it now.
-  handleCommand({ agent, command, conversationId, operatorTz: typeof operatorTz === 'string' ? operatorTz : undefined });
+  handleCommand({
+    agent, command, conversationId,
+    operatorTz: typeof operatorTz === 'string' ? operatorTz : undefined,
+    clientMessageId: typeof body.clientMessageId === 'string' ? body.clientMessageId : undefined,
+  });
   res.json({ success: true, message: 'Command queued' });
 });
 

@@ -1122,6 +1122,282 @@
       '<div class="ls-fine">There may or may not be lessons recorded; this panel will not guess either way. The server\'s files are the truth — this is a display problem, and it is worth reporting.</div></div>';
   }
 
+
+  /* ============================================================
+     CW-12 — LIVE PRESENCE ("who is typing") + message receipts
+     ============================================================
+     The console should feel alive: "Jarvis is typing…", "Router-Expert is
+     checking…", "NetOps is waiting for your approval", and the operator's
+     own message shows it was picked up (WhatsApp ticks).
+
+     THE LAW OF THIS WAVE (docs/copilot-cw12-presence-contract.md): presence
+     is a mirror of REAL work. The server sends a flight START when a model
+     call / agent read / approval wait actually begins and a 'done' the
+     moment it ends — success, error, abort or denial alike. This module
+     holds ONLY what the server said is in flight right now; it never
+     invents a state, never keeps one on a timer, and is never persisted —
+     a reload starts empty and is seeded only from the server's live
+     snapshot. A "typing" line on a dead request is a fabrication, the
+     same class as an invented number.
+
+     THE WIRE SHAPE (PINNED with the backend, sources/presence.js):
+       { actor, actorName, state, id, since?, at, requestId?,
+         clientMessageId?, messageId?, label?, reason? }
+       state ∈ picked-up | thinking | typing | checking | waiting-approval | done
+     'picked-up' is a one-shot receipt for the operator's message; everything
+     else is a flight keyed by actor+id, closed by 'done' under the same key.
+     Old clients ignore the type entirely (additive). */
+
+  var PRESENCE_WORKING = { thinking: 1, typing: 1, checking: 1, 'waiting-approval': 1 };
+  var PRESENCE_STATES = { 'picked-up': 1, answered: 1, done: 1, thinking: 1, typing: 1, checking: 1, 'waiting-approval': 1 };
+  /* Plain-words phrase per state. "waiting for your approval" is deliberately
+     NOT "typing" — an agent paused on a human is not writing anything. */
+  var PRESENCE_VERB = {
+    typing: 'is typing',
+    thinking: 'is thinking',
+    checking: 'is checking',
+    'waiting-approval': 'is waiting for your approval',
+  };
+  /* Which state to show when one actor has several flights at once (an
+     investigation round fans out). The one that needs the operator wins,
+     then the one closest to an answer. */
+  var PRESENCE_RANK = { 'waiting-approval': 4, typing: 3, thinking: 2, checking: 1 };
+  var PRESENCE_MAX_NAMED = 3;
+  var PRESENCE_NAME_MAX = 60;
+  var PRESENCE_ID_MAX = 96;
+
+  function pid(v) {
+    return (typeof v === 'string' || typeof v === 'number') ? String(v).slice(0, PRESENCE_ID_MAX) : '';
+  }
+  function isPresence(d) {
+    return !!(d && typeof d === 'object' && typeof d.state === 'string'
+      && Object.prototype.hasOwnProperty.call(PRESENCE_STATES, d.state) && pid(d.actor));
+  }
+
+  /* RECEIPT STATES on the operator's own bubble. Each one is a fact the page
+     actually knows: 'sent' = it left the page (the server accepted it);
+     'not-sent' = the server refused it or could not be reached; 'picked-up' =
+     the server said an actor started on it; 'answered' = the server said the
+     handler for it FINISHED, and at least one reply for it has been painted;
+     'replied' = it finished but the last reply was Jarvis's narrowing question
+     — a question back, not an answer (the operator's reply goes down its own
+     route, so this tick is final and worded as a fact, not an instruction). NEVER inferred from a reply
+     alone — "let me think…", a roster, an agent's finding all carry the request
+     id and none of them is an answer. There is no "read" — nobody reads. */
+  var RECEIPTS = {
+    sent:        { ticks: '✓',  label: 'Sent' },
+    'not-sent':  { ticks: '✕',  label: 'Not sent' },
+    'picked-up': { ticks: '✓✓', label: 'Picked up' },
+    answered:    { ticks: '✓✓', label: 'Answered' },
+    replied:     { ticks: '✓✓', label: 'Replied — asked you a question' },
+  };
+  function receiptHtml(state, who) {
+    var st = Object.prototype.hasOwnProperty.call(RECEIPTS, state) ? state : 'sent';
+    var m = RECEIPTS[st];
+    var lbl = m.label + (who && st !== 'sent' ? ' by ' + itemText(who).slice(0, PRESENCE_NAME_MAX) : '');
+    return '<span class="cw12-rcpt ' + st + '" data-rcpt="' + st + '" title="' + esc(lbl) + '" aria-label="' + esc(lbl) + '">' + m.ticks + '</span>';
+  }
+
+  function createPresence() {
+    var flights = Object.create(null);   /* actor|id → { actor, name, state, since, label } */
+    var order = [];
+    /* receipts: the server's requestId ↔ the page's clientMessageId */
+    var ridToCmid = Object.create(null);
+    var ridOrder = [];
+    var RID_MAX = 200;
+    var answered = Object.create(null);      /* cmid → true once ticked */
+    var replies = Object.create(null);       /* rid → kind of the LAST reply painted ('' = plain) */
+    var finished = Object.create(null);      /* rid → {who, reason} — the server's answered receipt, held until a reply is on screen */
+
+    function key(actor, id) { return actor + '|' + id; }
+    function remember(rid, cmid) {
+      if (!rid || !cmid || ridToCmid[rid]) return;
+      ridToCmid[rid] = cmid; ridOrder.push(rid);
+      while (ridOrder.length > RID_MAX) delete ridToCmid[ridOrder.shift()];
+    }
+    function startFlight(d, now) {
+      var actor = pid(d.actor), id = pid(d.id) || actor;
+      var k = key(actor, id);
+      var f = flights[k];
+      if (!f) {
+        f = { actor: actor, id: id, since: (typeof d.since === 'string' && d.since) || new Date(now || Date.now()).toISOString() };
+        flights[k] = f; order.push(k);
+      }
+      f.name = itemText(d.actorName || d.actor).slice(0, PRESENCE_NAME_MAX) || actor;
+      f.state = d.state;
+      f.label = typeof d.label === 'string' ? d.label.slice(0, 160) : '';
+      f.rid = pid(d.requestId);
+      return true;
+    }
+    function endFlight(d) {
+      var actor = pid(d.actor), id = pid(d.id) || actor;
+      var k = key(actor, id);
+      if (!flights[k]) return false;
+      delete flights[k];
+      var i = order.indexOf(k); if (i !== -1) order.splice(i, 1);
+      return true;
+    }
+    /* The answered tick for a request that has both FINISHED (server receipt)
+       and has a reply on screen. 'replied' when the last reply was a narrowing
+       question — that is the operator's turn, not an answer. Once per bubble. */
+    function finalReceipt(rid) {
+      var cm = ridToCmid[rid], fin = finished[rid];
+      if (!cm || !fin || answered[cm]) return null;
+      answered[cm] = true;
+      delete finished[rid];
+      return { kind: 'receipt', state: replies[rid] === 'ask' ? 'replied' : 'answered',
+               clientMessageId: cm, requestId: rid, who: fin.who, reason: fin.reason };
+    }
+
+    return {
+      /* One presence envelope from the socket. Returns null when it is not
+         one we can read; { kind:'flight', changed } for a start/done; or
+         { kind:'receipt', state:'picked-up', clientMessageId, requestId, who }
+         for the one-shot receipt. */
+      accept: function (d, now) {
+        if (!isPresence(d)) return null;
+        if (d.state === 'picked-up') {
+          var cm = pid(d.clientMessageId), rid = pid(d.requestId);
+          remember(rid, cm);
+          return { kind: 'receipt', state: 'picked-up', clientMessageId: cm, requestId: rid,
+                   who: itemText(d.actorName || d.actor).slice(0, PRESENCE_NAME_MAX) };
+        }
+        if (d.state === 'answered') {
+          /* The server says the handler finished. The tick is applied only once
+             a reply for that request is actually on screen (a legacy handler can
+             return before its delayed reply lands) — until then it is held. */
+          var cm2 = pid(d.clientMessageId), rid2 = pid(d.requestId);
+          remember(rid2, cm2);
+          var who2 = itemText(d.actorName || d.actor).slice(0, PRESENCE_NAME_MAX);
+          if (!rid2 || !cm2) return { kind: 'receipt-held' };
+          finished[rid2] = { who: who2, reason: typeof d.reason === 'string' ? d.reason : 'done' };
+          if (rid2 in replies) return finalReceipt(rid2);
+          return { kind: 'receipt-held', requestId: rid2 };
+        }
+        if (d.state === 'done') return { kind: 'flight', changed: endFlight(d), reason: typeof d.reason === 'string' ? d.reason : 'done' };
+        return { kind: 'flight', changed: startFlight(d, now) };
+      },
+
+      /* The server's init snapshot: what is live at connect time. Everything
+         the page held before is dropped first — the snapshot IS the truth. */
+      seed: function (list) {
+        this.clear();
+        var n = 0;
+        if (!Array.isArray(list)) return 0;
+        for (var i = 0; i < list.length; i++) {
+          var d = list[i];
+          if (isPresence(d) && PRESENCE_WORKING[d.state]) { startFlight(d); n++; }
+        }
+        return n;
+      },
+
+      /* The connection dropped: we no longer know what is in flight, so we
+         show nothing. Returns whether anything WAS showing. */
+      clear: function () {
+        var had = order.length > 0;
+        flights = Object.create(null); order = [];
+        return had;
+      },
+
+      /* CW-10 deltas are the truest "typing" signal there is — a chunk of
+         the answer just arrived. Mirror them as a flight so a page that
+         receives deltas but (somehow) no presence start still shows the
+         truth, and clears the moment the stream is done/aborted. Keyed
+         under its own id so it never collides with the server's flight for
+         the same call; lineHtml de-duplicates per actor. */
+      noteDelta: function (d) {
+        if (!isDelta(d)) return false;
+        var id = 'stream:' + streamId(d);
+        var actor = pid(d.agent) || 'jarvis';
+        if (d.done === true) return endFlight({ actor: actor, id: id });
+        return startFlight({ actor: actor, id: id, actorName: d.agentName || d.agent || 'Jarvis', state: 'typing' });
+      },
+
+      /* The server's echo of the operator's own message — carries the page's
+         clientMessageId and the requestId the server minted. Learn the pair.
+         Returns the clientMessageId (so the page can find its bubble) or ''. */
+      noteOutgoing: function (msg) {
+        if (!msg || typeof msg !== 'object' || msg.type !== 'outgoing') return '';
+        var cm = pid(msg.clientMessageId), rid = pid(msg.requestId);
+        remember(rid, cm);
+        return cm;
+      },
+
+      /* A reply painted on screen. It NEVER ticks "answered" by itself — a
+         reply stamped with our requestId may be "let me think…", a narrowing
+         question, a roster or one agent's finding. It only records that a
+         reply for that request is now visible (and what kind it was), and
+         releases the server's answered receipt if that already arrived.
+         Returns the receipt to apply, or null. */
+      noteReply: function (msg) {
+        if (!msg || typeof msg !== 'object' || msg.type === 'outgoing') return null;
+        if (isDelta(msg)) return null;
+        var rid = pid(msg.requestId);
+        if (!rid) return null;
+        replies[rid] = (typeof msg.kind === 'string') ? msg.kind.trim().toLowerCase() : '';
+        return (rid in finished) ? finalReceipt(rid) : null;
+      },
+
+      /* The recorded message that settles a streamed answer (same messageId)
+         is also the moment the mirror "typing" flight for that stream ends —
+         whether or not the done:true delta ever arrived. */
+      noteSettled: function (msg) {
+        if (!msg || typeof msg !== 'object' || isDelta(msg)) return false;
+        var mid = pid(msg.messageId);
+        if (!mid) return false;
+        var changed = false;
+        for (var i = order.length - 1; i >= 0; i--) {
+          var f = flights[order[i]];
+          if (f && f.id === 'stream:' + mid) { delete flights[order[i]]; order.splice(i, 1); changed = true; }
+        }
+        return changed;
+      },
+
+      /* What is live now, one row per ACTOR (strongest state wins), oldest
+         first, for the page or a test. */
+      live: function () {
+        var byActor = Object.create(null), out = [];
+        for (var i = 0; i < order.length; i++) {
+          var f = flights[order[i]];
+          if (!f) continue;
+          var cur = byActor[f.actor];
+          if (!cur) { cur = { actor: f.actor, name: f.name, state: f.state, since: f.since, label: f.label, rid: f.rid, flights: 0 }; byActor[f.actor] = cur; out.push(cur); }
+          cur.flights++;
+          if (f.rid) cur.rid = f.rid;
+          if ((PRESENCE_RANK[f.state] || 0) > (PRESENCE_RANK[cur.state] || 0)) { cur.state = f.state; cur.label = f.label; }
+          if (f.since < cur.since) cur.since = f.since;
+        }
+        return out;
+      },
+      size: function () { return order.length; },
+
+      /* The presence line. EMPTY STRING when nothing is in flight — the page
+         hides the element; there is no idle text, because an idle line that
+         says something would be saying something about nothing. */
+      lineHtml: function () {
+        var rows = this.live();
+        if (!rows.length) return '';
+        var parts = [];
+        for (var i = 0; i < rows.length && i < PRESENCE_MAX_NAMED; i++) {
+          var r = rows[i];
+          var verb = PRESENCE_VERB[r.state] || 'is working';
+          var title = r.label ? esc(r.name + ' — ' + r.label) : esc(r.name + ' ' + verb);
+          /* Work that belongs to no question on this screen (a reflection, a
+             lesson lookup, a prediction check) is named out loud, so an
+             operator who asked nothing knows WHAT Jarvis is doing. */
+          var why = (!r.rid && r.label) ? ' <span class="cw12-why">— ' + esc(r.label) + '</span>' : '';
+          parts.push('<span class="cw12-who ' + esc(r.state) + '" title="' + title + '">' +
+            '<b>' + esc(r.name) + '</b> ' + esc(verb) + why +
+            (r.state === 'waiting-approval' ? '' : '<span class="cw12-dots" aria-hidden="true"><i></i><i></i><i></i></span>') +
+            '</span>');
+        }
+        var more = rows.length - PRESENCE_MAX_NAMED;
+        if (more > 0) parts.push('<span class="cw12-who more">and ' + more + ' more</span>');
+        return parts.join('<span class="cw12-sep" aria-hidden="true">·</span>');
+      },
+    };
+  }
+
   return {
     MAX_LINES: MAX_LINES, MAX_CHARS: MAX_CHARS, MAX_STREAM_CHARS: MAX_STREAM_CHARS, KINDS: KINDS,
     CLAIM_MAX: CLAIM_MAX, LESSON_MAX: LESSON_MAX,
@@ -1132,6 +1408,8 @@
     lessonsUnreadableHtml: lessonsUnreadableHtml,
     itemText: itemText, textList: textList,
     isDelta: isDelta, streamId: streamId, createStream: createStream,
+    isPresence: isPresence, createPresence: createPresence, receiptHtml: receiptHtml,
+    PRESENCE_VERB: PRESENCE_VERB, RECEIPTS: RECEIPTS,
     streamPreviewHtml: streamPreviewHtml, streamSettledHtml: streamSettledHtml,
     normalizeSpend: normalizeSpend, spendHtml: spendHtml, spendNoteHtml: spendNoteHtml,
     spendUnreadableHtml: spendUnreadableHtml,

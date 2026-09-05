@@ -1068,7 +1068,7 @@ function resumeClarification(agentId, message) {
     pendingChoice.delete(conversationId());
     say(p.agentId, `👍 Dropped it — "${p.command}" was never sent to any device.`);
     ctx.updateAgentStatus(p.agentId, 'idle', 'Operator cancelled — ran nothing');
-    return true;
+    return Promise.resolve(true);   // the line above IS the reply (sync) — CW-12
   }
 
   // A FRESH COMMAND SUPERSEDES THE PARKED ONE. This test has to run BEFORE the
@@ -1094,8 +1094,9 @@ function resumeClarification(agentId, message) {
   // "all" → run it on every reachable box, each output labelled.
   if (wantsAllDevices(t)) {
     pendingChoice.delete(conversationId());
-    configKeeper(p.agentId, p.request, { allDevices: true });
-    return true;
+    // CW-12: the read's own promise is returned (truthy), so the caller's
+    // "answered" receipt waits for the read's last reply, not for this line.
+    return configKeeper(p.agentId, p.request, { allDevices: true });
   }
 
   // A name or a management IP from the list we just showed.
@@ -1117,7 +1118,7 @@ function resumeClarification(agentId, message) {
     say(p.agentId,
       `🤔 There is no option ${idx} — I listed ${cands.length}. I ran nothing.\n${RULE}\n` +
       `${cands.map(candidateLine).join('\n')}\n\nReply with a name, a number 1–${cands.length}, or "all".`);
-    return true;
+    return Promise.resolve(true);   // the line above IS the reply (sync) — CW-12
   }
 
   // Not an answer, but a whole new request (a full sentence — the command shape
@@ -1134,15 +1135,15 @@ function resumeClarification(agentId, message) {
     `${cands.map(candidateLine).join('\n')}\n\n` +
     `Reply with a name ("${cands[0] ? cands[0].hostname : 'sw1'}"), a number 1–${cands.length}, or "all". ` +
     `"${p.command}" is still waiting.`);
-  return true;
+  return Promise.resolve(true);   // the line above IS the reply (sync) — CW-12
 }
 
 function pickCandidate(p, c) {
   pendingChoice.delete(conversationId());
   rememberDevice(c.hostname);
   say(p.agentId, `👍 ${c.hostname} it is — running "${p.command}" there now. I will keep using ${c.hostname} for follow-ups until you name another.`);
-  configKeeper(p.agentId, p.request, { device: c.hostname });
-  return true;
+  // CW-12: return the read's promise so "answered" waits for its output.
+  return configKeeper(p.agentId, p.request, { device: c.hostname });
 }
 
 function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
@@ -2219,13 +2220,16 @@ function handle(agentId, command) {
   // still runs the destructive-intent check and the read-only guardrail inside,
   // so this opens no write path.
   if (isDeviceCliRequest(command)) return runDeviceCli(agentId, command);
-  if (NO_BACKEND[agentId]) return notConnected(agentId);
+  // CW-12: the honest not-connected / cannot-answer lines are synchronous
+  // replies — wrapped so the caller's answered receipt follows them (a bare
+  // undefined would fail closed and the operator's bubble would never tick).
+  if (NO_BACKEND[agentId]) return Promise.resolve(notConnected(agentId));
   const fn = HANDLERS[agentId];
-  if (!fn) return notConnected(agentId);
+  if (!fn) return Promise.resolve(notConnected(agentId));
   // Config-Keeper gates itself: it must find a real read command in the text.
   if (agentId !== 'config-keeper') {
     const verdict = canAnswer(agentId, command);
-    if (!verdict.ok) return cannotAnswer(agentId, command, verdict);
+    if (!verdict.ok) return Promise.resolve(cannotAnswer(agentId, command, verdict));
   }
   return fn(agentId, command);
 }

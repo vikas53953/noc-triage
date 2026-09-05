@@ -896,6 +896,10 @@ pre.term{
       </aside>
     </div>
 
+    <!-- CW-12: who is typing / checking / waiting — HIDDEN unless the server says
+         someone is really in flight. No idle text, ever. -->
+    <div class="cw12-presence" id="presenceLine" aria-live="polite" hidden></div>
+
     <div class="capbar" id="capBar"></div>
     <div class="suggest" id="suggest"></div>
 
@@ -1283,6 +1287,99 @@ $('chat').addEventListener('click', function(e){
 });
 
 /* ============================================================
+   CW-12 — LIVE PRESENCE + RECEIPTS (desk half)
+   Shared logic lives in public/cw9-bridge.js (createPresence / receiptHtml);
+   this page only owns the two DOM sinks: the presence line under the chat,
+   and the tick on the operator's own bubble. Presence is NEVER persisted —
+   PRES starts empty on every load and is seeded only by the server's live
+   snapshot (init.presence). See docs/copilot-cw12-presence-contract.md.
+   ============================================================ */
+/* NOTE: this block sits ABOVE the page's own `var CW9B = window.CW9B` (hoisted,
+   so the local name is still undefined here) — use the window global. */
+var PRES = (window.CW9B && window.CW9B.createPresence) ? window.CW9B.createPresence() : null;
+var cw12Seq = 0;
+function cw12NewId(){ return 'm-' + Date.now().toString(36) + '-' + (++cw12Seq).toString(36) + '-' + Math.random().toString(36).slice(2, 8); }
+/* Tag the operator's own bubble with the id we will send, and give it its
+   first honest tick: SENT. Only the /api/command path is tagged — a reply to
+   Jarvis's narrowing questions goes down a route the server does not stamp,
+   so it gets no tick rather than a tick we could never update. */
+function cw12Tag(node, cmid){
+  if(!node || !window.CW9B) return '';
+  cmid = cmid || cw12NewId();
+  node.setAttribute('data-cmid', cmid);
+  var b = node.querySelector('.bubble');
+  if(b) b.insertAdjacentHTML('beforeend', window.CW9B.receiptHtml('sent'));
+  return cmid;
+}
+function presenceRender(){
+  var el = $('presenceLine'); if(!el || !PRES) return;
+  var h = PRES.lineHtml();          /* module output — every value escaped there */
+  if(h){ el.innerHTML = h; el.hidden = false; }
+  else { el.innerHTML = ''; el.hidden = true; }
+}
+/* cmid is an id THIS page minted (or the server's echo of it); it is looked up
+   by attribute value, never spliced into markup. */
+function receiptMark(cmid, state, who){
+  if(!cmid || !window.CW9B) return false;
+  var n = null;
+  try{ n = $('chat').querySelector('[data-cmid="' + (window.CSS && CSS.escape ? CSS.escape(cmid) : cmid.replace(/["\\]/g, '')) + '"]'); }catch(e){ n = null; }
+  if(!n) return false;
+  var cur = n.querySelector('.cw12-rcpt');
+  var curState = cur ? cur.getAttribute('data-rcpt') : '';
+  /* ticks only move forward: answered never drops back to picked-up. The one
+     exception is NOT-SENT, which replaces a SENT tick the server then refused. */
+  var rank = { sent:1, 'not-sent':1, 'picked-up':2, answered:3, replied:3 };
+  if(!(state === 'not-sent' && curState === 'sent') && (rank[curState] || 0) >= (rank[state] || 0)) return false;
+  var html = window.CW9B.receiptHtml(state, who);
+  if(cur) cur.outerHTML = html;
+  else { var b = n.querySelector('.bubble'); if(b) b.insertAdjacentHTML('beforeend', html); }
+  persistWork();
+  return true;
+}
+function onPresence(d){
+  if(!PRES) return false;
+  var r; try{ r = PRES.accept(d); }catch(e){ return false; }
+  if(!r) return false;
+  if(r.kind === 'receipt'){ receiptMark(r.clientMessageId, r.state, r.who); return true; }
+  if(r.kind === 'receipt-held') return true;   /* answered, but no reply on screen yet — applied when one lands */
+  if(r.changed) presenceRender();
+  return true;
+}
+/* Every chat message passes here BEFORE it is painted: the echo of our own ask
+   teaches the module which server requestId is ours; a reply records that the
+   request now has something on screen (and settles any mirror typing flight).
+   The ANSWERED tick comes ONLY from the server's answered receipt — a reply is
+   never treated as an answer by itself. */
+function cw12NoteChat(d){
+  if(!PRES || !d) return;
+  try{
+    if(PRES.noteSettled(d)) presenceRender();
+    if(d.type === 'outgoing'){ PRES.noteOutgoing(d); return; }
+    var a = PRES.noteReply(d);
+    if(a) receiptMark(a.clientMessageId, a.state, a.who);
+  }catch(e){}
+}
+function cw12Seed(list){ if(!PRES) return; try{ PRES.seed(list); }catch(e){} presenceRender(); }
+/* The socket dropped: we no longer know what is in flight, so we show nothing
+   — the reconnect's init snapshot brings back whatever is still real. */
+function cw12Drop(){ if(!PRES) return; try{ if(PRES.clear()) presenceRender(); }catch(e){} }
+/* A restored transcript may carry ticks from before the reload. ANSWERED,
+   REPLIED and NOT SENT are facts that stay true; SENT / PICKED-UP are claims
+   about an answer we can no longer track from this page, so they are removed
+   rather than left implying something is still coming. */
+function cw12SweepRestoredReceipts(){
+  var host = $('chat'); if(!host) return;
+  var stale = host.querySelectorAll('.cw12-rcpt:not(.answered):not(.replied):not(.not-sent)');
+  for(var i = 0; i < stale.length; i++) stale[i].parentNode.removeChild(stale[i]);
+}
+/* DEV/TEST ONLY — nothing in the app calls these. Fixture: test/cw12-fixture.js */
+window.__cw12DevPresence = function(d){ return onPresence(d); };
+window.__cw12DevSend = function(text){ var n = meMsg(text); return cw12Tag(n); };
+window.__cw12DevChat = function(msg){ return msg ? onChat(msg) : false; };
+window.__cw12DevDrop = function(){ return cw12Drop(); };
+window.__cw12DevSeed = function(list){ return cw12Seed(list); };
+
+/* ============================================================
    CW-9 — BRIDGE CONDUCT (V2 split terminal)
    Renders the PINNED message envelope (docs/copilot-cw9-bridge-contract.md):
      kind 'ask'     → blue-edge bubble + the narrowing questions
@@ -1478,6 +1575,10 @@ function sayNodeFor(id){
 /* One piece arrived. First piece paints the bubble; the rest update it. */
 function onSayDelta(d){
   if(!SAY) return false;
+  /* CW-12: a chunk of the answer IS "typing"; done/aborted clears it. Noted
+     BEFORE the stream store judges the piece, so a rejected or duplicate piece
+     can never leave the line out of step with the stream. */
+  try{ if(PRES && PRES.noteDelta(d)) presenceRender(); }catch(e){}
   var r;
   try{ r = SAY.accept(d); }catch(e){ return false; }
   if(!r) return false;
@@ -1870,7 +1971,7 @@ function sendAsk(){
   if(!t) return;
   if(!OP){ $('whoTag').click(); return; }
   box.value = '';
-  meMsg(t);
+  var meNode = meMsg(t);
   /* CW-9: the thread is paused on Jarvis's narrowing questions — this reply IS
      the answer, so it goes to the resume route the envelope named (same-origin
      only) instead of opening a fresh ask. If the envelope named no route, the
@@ -1911,13 +2012,18 @@ function sendAsk(){
      above goes to Jarvis untouched. Explicit operator actions (the "New ticket"
      button and "Raise ticket" on an incident) still open a blank/prefilled draft —
      that is a deliberate press, not pattern-matching a sentence. */
-  api('/api/command', { method:'POST', body: JSON.stringify({ agent:'jarvis', command:t }) })
+  /* CW-12: tag our bubble and send its id, so the server's "picked up" and
+     the reply can tick THIS bubble and no other. */
+  var cmid = cw12Tag(meNode);
+  api('/api/command', { method:'POST', body: JSON.stringify({ agent:'jarvis', command:t, clientMessageId: cmid || undefined }) })
     .then(function(r){
       if(!r.ok) return r.json().catch(function(){ return {}; }).then(function(b){
+        receiptMark(cmid, 'not-sent');   /* the SENT tick must not outlive a refusal */
         sysMsg('Jarvis did not accept that — ' + esc((b && b.error) || ('HTTP ' + r.status)) + '. Nothing was run.');
       });
     })
     .catch(function(err){
+      receiptMark(cmid, 'not-sent');
       sysMsg('Could not reach the server: ' + esc(err.message || err) + '. Nothing was run.');
     });
 }
@@ -4420,7 +4526,7 @@ function connectWS(){
   try{ ws = new WebSocket(proto + '//' + location.host); }
   catch(e){ setConn('down'); return scheduleReconnect(); }
   ws.onopen = function(){ wsRetry = 0; setConn('up'); };
-  ws.onclose = function(){ setConn('down'); scheduleReconnect(); };
+  ws.onclose = function(){ setConn('down'); cw12Drop(); scheduleReconnect(); };
   ws.onerror = function(){ /* onclose retries */ };
   ws.onmessage = function(ev){
     var m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
@@ -4430,7 +4536,9 @@ function connectWS(){
        it so a reload (or a fresh machine) still shows the call and its session
        pane. Plain old messages are left out on purpose — they are restored by
        the local working context, and replaying them would double the thread. */
-    if(m.type === 'init' && m.data){ cw9Hydrate(m.data); return; }
+    if(m.type === 'init' && m.data){ cw12Seed(m.data.presence); cw9Hydrate(m.data); return; }
+    /* CW-12: who is typing / checking / waiting, and the picked-up receipt. */
+    if(m.type === 'presence' && m.data){ onPresence(m.data); return; }
     /* CW-10: a piece of an answer still being written. It may travel as its own
        WS type or inside a chat_message carrying kind:'say-delta' — both are
        accepted, because a preview is not worth a coupling argument with the
@@ -4493,6 +4601,7 @@ function scheduleReconnect(){ wsRetry = Math.min(wsRetry + 1, 6); setTimeout(con
    recorded message is painted into the slot the preview held. One bubble, in
    the place the operator was already reading, in a single browser paint. */
 function onChat(d){
+  cw12NoteChat(d);
   if(d && d.type === 'outgoing') return;
   var slot = saySettle(d);
   /* An empty recorded copy is already reported on the preview itself — there is
@@ -4723,6 +4832,7 @@ function restoreWork(){
     /* CW-10: a half-written answer may have been saved mid-stream. It is not a
        record — mark it honestly instead of restoring a blinking caret. */
     cw10SweepRestoredPreviews();
+    cw12SweepRestoredReceipts();
     $('chat').scrollTop = $('chat').scrollHeight;
     did = true;
   }

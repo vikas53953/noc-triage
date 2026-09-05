@@ -1364,6 +1364,8 @@ pre.cli{
             </div>
           </div>
         </div>
+        <!-- CW-12: who is typing / checking / waiting — hidden unless real work is in flight -->
+        <div class="cw12-presence" id="presenceLine" aria-live="polite" hidden></div>
         <div class="jarvis-banner" id="jarvisBanner" hidden></div>
         <div class="cmdbar">
           <span class="cmd-target" id="cmdTarget">To: Jarvis</span>
@@ -3269,6 +3271,9 @@ function sayClassicBubble(st, html){
 }
 function onSayDeltaClassic(d){
   if(!SAYC) return false;
+  /* CW-12: a chunk of the answer IS "typing"; done/aborted clears it — noted
+     BEFORE the stream store judges the piece. */
+  try{ if(PRES && PRES.noteDelta(d)) presenceRender(); }catch(e){}
   var r; try{ r = SAYC.accept(d); }catch(e){ return false; }
   if(!r) return false;
   try{
@@ -3354,11 +3359,78 @@ setInterval(function(){
 /* DEV/TEST ONLY — nothing in the app calls these. They feed the pieces, and the
    recorded message that replaces them, without waiting on the backend branch.
    Fixtures: test/cw10-say-delta-fixture.js */
+/* ============================================================
+   CW-12 — LIVE PRESENCE + RECEIPTS (classic half)
+   Same shared module as the desk (public/cw9-bridge.js); this page owns only
+   the presence line under the direct-message stream and the tick on the
+   operator's echoed bubble. Never persisted; seeded only from init.presence.
+   ============================================================ */
+var PRES = (window.CW9B && CW9B.createPresence) ? CW9B.createPresence() : null;
+var cw12Seq = 0;
+/* Only ids THIS page minted get ticks. Another operator's echo (every socket
+   receives it) or a replayed history bubble carries an id we never made — it
+   gets no receipt, because a receipt is a claim about OUR message. */
+var CW12_MINTED = Object.create(null);
+function cw12NewId(){
+  var id = 'm-' + Date.now().toString(36) + '-' + (++cw12Seq).toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  CW12_MINTED[id] = true;
+  return id;
+}
+function presenceRender(){
+  var el = $('presenceLine'); if(!el || !PRES) return;
+  var h = PRES.lineHtml();          /* module output — every value escaped there */
+  if(h){ el.innerHTML = h; el.hidden = false; }
+  else { el.innerHTML = ''; el.hidden = true; }
+}
+function receiptMark(cmid, state, who){
+  if(!cmid || !window.CW9B) return false;
+  var host = $('chatStream'); if(!host) return false;
+  var n = null;
+  try{ n = host.querySelector('[data-cmid="' + (window.CSS && CSS.escape ? CSS.escape(cmid) : cmid.replace(/["\\]/g, '')) + '"]'); }catch(e){ n = null; }
+  if(!n) return false;
+  var cur = n.querySelector('.cw12-rcpt');
+  var curState = cur ? cur.getAttribute('data-rcpt') : '';
+  var rank = { sent:1, 'not-sent':1, 'picked-up':2, answered:3, replied:3 };
+  if(!(state === 'not-sent' && curState === 'sent') && (rank[curState] || 0) >= (rank[state] || 0)) return false;
+  var html = CW9B.receiptHtml(state, who);
+  if(cur) cur.outerHTML = html;
+  else { var t = n.querySelector('.msg-time'); if(t) t.insertAdjacentHTML('beforeend', html); }
+  return true;
+}
+function onPresence(d){
+  if(!PRES) return false;
+  var r; try{ r = PRES.accept(d); }catch(e){ return false; }
+  if(!r) return false;
+  if(r.kind === 'receipt'){ receiptMark(r.clientMessageId, r.state, r.who); return true; }
+  if(r.kind === 'receipt-held') return true;   /* answered, but no reply on screen yet */
+  if(r.changed) presenceRender();
+  return true;
+}
+/* A reply never ticks "answered" by itself — only the server's answered
+   receipt does (see the shared module). */
+function cw12NoteChat(d){
+  if(!PRES || !d) return;
+  try{
+    if(PRES.noteSettled(d)) presenceRender();
+    if(d.type === 'outgoing'){ PRES.noteOutgoing(d); return; }
+    var a = PRES.noteReply(d);
+    if(a) receiptMark(a.clientMessageId, a.state, a.who);
+  }catch(e){}
+}
+function cw12Seed(list){ if(!PRES) return; try{ PRES.seed(list); }catch(e){} presenceRender(); }
+function cw12Drop(){ if(!PRES) return; try{ if(PRES.clear()) presenceRender(); }catch(e){} }
+/* DEV/TEST ONLY — nothing in the app calls these. Fixture: test/cw12-fixture.js */
+window.__cw12DevPresence = function(d){ return onPresence(d); };
+window.__cw12DevChat = function(msg){ return msg ? renderChat(msg) : false; };
+window.__cw12DevDrop = function(){ return cw12Drop(); };
+window.__cw12DevSeed = function(list){ return cw12Seed(list); };
+
 window.__cw10DevDelta = function(msg){ return onSayDeltaClassic(msg); };
 window.__cw10DevSay = function(msg){ return renderChat(msg); };
 
 function renderChat(d){
   var host = $('chatStream'); if(!host) return;
+  cw12NoteChat(d);
   /* CW-10: the recorded version of an answer we were previewing clears that
      preview first — one answer, one bubble, whatever the network did. */
   var sayslot = (d && d.type !== 'outgoing') ? saySettleClassic(d) : null;
@@ -3374,10 +3446,16 @@ function renderChat(d){
     // small timestamp. No "You", no "→", no recipient — the bubble side already
     // says it's theirs, and the agent's reply follows on the left.
     el.className = 'msg msg-you msg-right';
+    /* CW-12: this bubble is painted from the server's echo, so it has at least
+       been SENT. If the echo carries our id, tag the bubble so "picked up" and
+       "answered" can tick it. */
+    var cmid = (window.CW9B && typeof d.clientMessageId === 'string') ? d.clientMessageId.slice(0, 96) : '';
+    if(cmid && !CW12_MINTED[cmid]) cmid = '';   /* not ours → no tick */
+    if(cmid) el.setAttribute('data-cmid', cmid);
     el.innerHTML =
       '<div class="msg-main">'+
       '<div class="msg-text">'+mdToHtml(d.text)+'</div>'+
-      '<div class="msg-time">'+escapeHtml(tsClock(d.timestamp))+'</div></div>';
+      '<div class="msg-time">'+escapeHtml(tsClock(d.timestamp))+(cmid ? CW9B.receiptHtml('sent') : '')+'</div></div>';
   } else {
     // The agent's reply stays LEFT with icon + name + tier badge + timestamp.
     var who = d.agentName || agentName(id) || 'Agent';
@@ -3466,7 +3544,9 @@ function sendAgentMessage(){
   inp.value=''; syncSendDisabled();
   fetch('/api/command', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ agent: selectedAgent, command: text, conversationId: CONVERSATION_ID || undefined })
+    /* CW-12: an id for the bubble the server will echo back, so its receipt
+       ticks can find it. */
+    body: JSON.stringify({ agent: selectedAgent, command: text, conversationId: CONVERSATION_ID || undefined, clientMessageId: cw12NewId() })
   }).catch(function(err){
     renderChat({type:'incoming', agent:'system', agentName:'NOC Triage', agentIcon:'⚠️',
       text:'Could not reach the server: ' + err.message, timestamp:new Date().toISOString()});
@@ -4393,14 +4473,16 @@ function connectWS(){
   try{ ws = new WebSocket(proto + '//' + location.host); }
   catch(e){ setConn('down'); scheduleReconnect(); return; }
   ws.onopen = function(){ wsRetry = 0; setConn('up'); };
-  ws.onclose = function(){ setConn('down'); scheduleReconnect(); };
+  ws.onclose = function(){ setConn('down'); cw12Drop(); scheduleReconnect(); };
   ws.onerror = function(){ /* onclose handles retry */ };
   ws.onmessage = function(ev){
     var m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
     if(!m || !m.type) return;
     // Snapshot restore on connect — bring back the direct chat + Live Activity so
     // a page refresh no longer wipes the conversation (B4).
-    if(m.type === 'init'){ handleInit(m.data); return; }
+    if(m.type === 'init'){ cw12Seed(m.data && m.data.presence); handleInit(m.data); return; }
+    /* CW-12: who is typing / checking / waiting, and the picked-up receipt. */
+    if(m.type === 'presence' && m.data){ onPresence(m.data); return; }
     if(m.type === 'session_record' && m.data){
       if(ingestRecord(m.data) && $('sessDrawer').classList.contains('on') && recMatches(m.data)){
         var body = $('sessBody');
