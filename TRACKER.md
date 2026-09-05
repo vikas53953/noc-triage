@@ -794,3 +794,13 @@ return. Never fabricate. Fix the class. Update TRACKER + push every step. Master
   other layer." → HANDOFF laws 9 + 10; PIPELINE decisions 6–9.
 - Testing CW-12: he wants the app started so he can test — the cloud container cannot expose a port
   (proxy does not carry WebSocket upgrades), so the live eyeball stays on his PC (commands in PROJECT.md).
+
+## 2026-09-05 — Polish P1 SHIPPED ✅ (PR #79 merged as 15b0727, 2 review rounds → APPROVE)
+- Round 1 FIX-FIRST caught a real one: the ≤480px header rules sat BEFORE the .capbtn base rule (dead in
+  the cascade; second gear stacked; avatar clipped off-screen at 320–390). Class fix: cascade order + real
+  markup + unshrinkable controls + a written 320px budget, proven headless at 7 widths × 2 themes. Also:
+  Jarvis-attributed "📨" relay bubble removed; bare @mention asks (law 2); watcher self-write skip +
+  status validation. Round 2 APPROVE (1 LOW: the 3s self-write window is time-based).
+- Public-repo guard (secrets.public.test.js) wired into npm test → 37 suites.
+- Vikas (mid-session, quota reset): keep building whether he is there or not; park anything needing him;
+  where to test = his PC at http://localhost:3000/desk.html after git pull.
