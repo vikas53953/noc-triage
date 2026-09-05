@@ -1654,27 +1654,36 @@ function handleCommandInner(data) {
     return;
   }
 
-  // Check if command is an @mention (e.g., "@NetOps run prechecks")
-  const mentionMatch = command.match(/^@([A-Za-z][\w-]*)\s+(.*)/);
+  // Check if command is an @mention (e.g., "@NetOps run prechecks"). A bare
+  // "@NetOps" (nothing after the name) is a mention too (review P1 #6).
+  const mentionMatch = command.match(/^@([A-Za-z][\w-]*)\s*([\s\S]*)$/);
   if (mentionMatch) {
     const targetName = mentionMatch[1];
-    const mentionMessage = mentionMatch[2];
+    const mentionMessage = mentionMatch[2].trim();
     const targetId = nameToId[targetName.toLowerCase()];
 
     if (targetId) {
-      // Route as a mention from current agent to target
-      broadcast('chat_message', {
-        type: 'incoming',
-        agent,
-        agentName,
-        agentIcon,
-        text: `📨 @${agents[targetId].name} ${mentionMessage}`,
-        timestamp
-      });
-
+      // Polish P1 (review #3): the "📨 @Name …" relay bubble that used to be
+      // posted here AS JARVIS is gone — scripted text attributed to an agent
+      // that never said it, doubling every @mention on screen. The operator's
+      // own bubble already shows the ask, and the CW-12 receipt shows who
+      // picked it up. The mention is still recorded (event, counts, log).
       handleMention(agent, targetId, mentionMessage);
 
-      // Also have the target agent process the command
+      // AMBIGUITY → ASK (law 2): a mention with nothing after the name runs
+      // nothing; the target asks what is wanted. That ask IS the reply.
+      if (!mentionMessage) {
+        const t = agents[targetId];
+        broadcast('chat_message', {
+          type: 'incoming', agent: targetId, agentName: t.name, agentIcon: t.icon,
+          text: `❓ What do you need from ${t.name}? Say it after the name — for example "@${t.name} show version on sw1". I ran nothing.`,
+          timestamp,
+        });
+        answered(targetId, 'done');
+        return;
+      }
+
+      // The target agent processes the command — its real read is the reply.
       setTimeout(() => {
         pickedUp(targetId);
         settle(simulateAgentAction(targetId, mentionMessage), targetId);
@@ -2084,6 +2093,10 @@ function jarvisCapabilityScreen(command) {
 // answering code, the exact class Law 1 forbids. Standup / roll-call / report
 // come back, if ever, as planner-invoked functions built on real reads.
 
+// agentId → when this process last wrote that agent's STATUS.json (see the watcher)
+const selfStatusWrites = new Map();
+const SELF_WRITE_WINDOW_MS = 3000;
+
 // Update agent status and broadcast
 function updateAgentStatus(agentId, status, lastAction) {
   if (agents[agentId]) {
@@ -2096,9 +2109,11 @@ function updateAgentStatus(agentId, status, lastAction) {
       agents[agentId].currentTask = null;
     }
 
-    // Save to STATUS.json
+    // Save to STATUS.json — and remember that WE wrote it, so the file watcher
+    // does not re-broadcast our own write as a second, identical event ~300 ms
+    // later (review P1 #4).
     const statusPath = getAgentStatusPath(agentId);
-    if (statusPath) safeWrite(statusPath, JSON.stringify(agents[agentId], null, 2), `${agentId} status`);
+    if (statusPath) { safeWrite(statusPath, JSON.stringify(agents[agentId], null, 2), `${agentId} status`); selfStatusWrites.set(agentId, Date.now()); }
 
     // Transparency contract shape: {agentId, status, note?}. The full agent object
     // (with id/name/icon/lastAction) is still carried so a client can render either
@@ -2290,24 +2305,33 @@ function getRecentActivity() {
 }
 
 // Load agent status from file
+// Returns true only when a valid STATUS.json was read and applied — the watcher
+// broadcasts on that and on nothing else (review P1 #5: an unparsable or
+// off-vocabulary file used to be re-broadcast as if the state had changed).
+const AGENT_STATUS_VALUES = new Set(['active', 'idle', 'offline']);
 function loadAgentStatus(agentId) {
   const statusPath = getAgentStatusPath(agentId);
-  if (!statusPath) return;
+  if (!statusPath || !agents[agentId]) return false;
   try {
-    if (fs.existsSync(statusPath)) {
-      const data = JSON.parse(fs.readFileSync(statusPath, 'utf-8'));
-      if (agents[agentId]) {
-        agents[agentId] = {
-          ...agents[agentId],
-          status: data.status || 'idle',
-          currentTask: data.currentTask || null,
-          lastUpdated: data.lastUpdated || new Date().toISOString(),
-          lastAction: data.lastAction || 'No recent activity'
-        };
-      }
+    if (!fs.existsSync(statusPath)) return false;
+    const data = JSON.parse(fs.readFileSync(statusPath, 'utf-8'));
+    if (!data || typeof data !== 'object') return false;
+    const status = data.status === undefined ? 'idle' : data.status;
+    if (!AGENT_STATUS_VALUES.has(status)) {
+      console.error(`[Status] Ignored ${agentId} STATUS.json: status "${String(status).slice(0, 40)}" is not one of active/idle/offline`);
+      return false;
     }
+    agents[agentId] = {
+      ...agents[agentId],
+      status,
+      currentTask: data.currentTask || null,
+      lastUpdated: data.lastUpdated || new Date().toISOString(),
+      lastAction: data.lastAction || 'No recent activity'
+    };
+    return true;
   } catch (e) {
     console.error(`[Status] Error loading ${agentId} status:`, e.message);
+    return false;
   }
 }
 
@@ -3431,10 +3455,15 @@ function setupFileWatcher() {
       // Determine which agent's status changed by checking directory
       const agentId = AGENT_IDS.find(id => filePath.includes(path.sep + id + path.sep) || filePath.includes('/' + id + '/'));
       if (agentId && agents[agentId]) {
-        loadAgentStatus(agentId);
-        // Same shape as updateAgentStatus (transparency contract): a client
-        // reading `agentId` / `status` / `note` used to get undefined here.
-        broadcast('agent_status', { ...agents[agentId], agentId, status: agents[agentId].status, note: agents[agentId].lastAction || null });
+        // Our own write → in-memory state is already the truth and was already
+        // broadcast by updateAgentStatus; re-reading it would only echo.
+        const selfAt = selfStatusWrites.get(agentId);
+        if (selfAt && Date.now() - selfAt < SELF_WRITE_WINDOW_MS) return;
+        // An EXTERNAL write: broadcast only if it parsed and validated.
+        // Same shape as updateAgentStatus (transparency contract).
+        if (loadAgentStatus(agentId)) {
+          broadcast('agent_status', { ...agents[agentId], agentId, status: agents[agentId].status, note: agents[agentId].lastAction || null });
+        }
       }
     } else if (filename === 'ALERTS.md') {
       broadcast('alerts_updated', { timestamp: new Date().toISOString() });

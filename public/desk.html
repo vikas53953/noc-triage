@@ -703,17 +703,14 @@ pre.term{
   .whotag span{max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   /* Polish P1: the right-hand group must never push the page wider than the
      phone. It shrinks (and clips its own contents) before the page scrolls. */
-  .top-right{flex:0 1 auto;overflow:hidden;flex-wrap:nowrap}
-  .top-right .iconbtn,.top-right .capbtn{flex-shrink:0}
-}
-@media (max-width:480px){
-  /* phone: the name tag becomes the avatar alone, the Capabilities button its
-     gear — every control still there, nothing wider than the screen. */
-  .whotag span{display:none}
-  .whotag{padding:.2rem}
-  .top-right .chip{max-width:70px}
-  .capbtn{font-size:0;padding:.3rem .45rem}
-  .capbtn::before{content:'⚙';font-size:.9rem}
+  /* the control group never shrinks or clips (a clipped control is an
+     unreachable control); the BRAND gives way instead (ellipsis), and the
+     numbers below keep the sum under every phone width. */
+  .top-right{flex:0 0 auto;flex-wrap:nowrap}
+  .top-right .iconbtn,.top-right .capbtn,.top-right .whotag{flex-shrink:0}
+  /* the connection chip is the one control allowed to shrink to its dot
+     (its words ride in the title). */
+  .top-right .chip{flex:0 1 auto;min-width:22px}
 }
 
 /* ============================================================
@@ -729,6 +726,25 @@ pre.term{
   display:inline-flex;align-items:center;gap:.35rem;transition:.15s;white-space:nowrap;flex-shrink:0
 }
 .capbtn:hover{background:var(--hover);color:var(--ink);border-color:var(--accent)}
+/* Polish P1 — phone width. This block sits AFTER the .capbtn base rule on
+   purpose: same specificity, so the later rule wins (the first cut of this
+   wave put it before and it was dead in the cascade). The gear is real markup
+   (.capico), the label a span that hides — never a pseudo-element stacked on
+   text. Geometry is asserted in the browser at 320/360/390/480/600/601/760.
+   600px, not 480: between 481 and 600 the full label + name still overflowed
+   the 320-budget numbers by a few px (review P1 round 2). */
+@media (max-width:600px){
+  .capbtn .caplbl{display:none}
+  .capbtn{padding:0 .45rem}
+  .whotag span{display:none}
+  .whotag{padding:.2rem}
+  .top-right .chip{max-width:22px;padding:0 .3rem;overflow:hidden}
+  /* 320px budget: 5 controls (22+28+27+28+34) + 4 gaps ≈ 161px, brand ≥ 96px,
+     padding 2×.6rem ≈ 19px → 276px. Fits with room at 320. */
+  .top{padding:0 .6rem}
+  .brand{min-width:96px}
+  .brand h1{font-size:.9rem}
+}
 .cap-scrim{
   position:fixed;inset:0;z-index:300;background:rgba(6,10,18,.6);backdrop-filter:blur(3px);
   opacity:0;pointer-events:none;transition:opacity .2s ease
@@ -822,7 +838,7 @@ pre.term{
     <span class="chip wait" id="connChip"><span class="dot"></span>Connecting…</span>
     <span class="clock" id="clock">--:--:--</span>
     <a class="iconbtn" href="/" title="Back to the classic Evidence Split Console">🖥</a>
-    <button class="capbtn" id="capBtn" title="See every feature and what's connected right now">⚙ Capabilities</button>
+    <button class="capbtn" id="capBtn" title="See every feature and what's connected right now"><span class="capico" aria-hidden="true">⚙</span><span class="caplbl">Capabilities</span></button>
     <button class="iconbtn" id="themeBtn" title="Switch light / dark">🌗</button>
     <div class="whotag" id="whoTag" title="Change who's at the desk">
       <div class="avatar" id="avi">?</div><span id="whoName">—</span>
@@ -4535,9 +4551,11 @@ document.addEventListener('click', function(e){
 var ws = null, wsRetry = 0;
 function setConn(state){
   var c = $('connChip');
-  if(state === 'up'){ c.className = 'chip'; c.innerHTML = '<span class="dot"></span>Live'; }
-  else if(state === 'down'){ c.className = 'chip down'; c.innerHTML = '<span class="dot"></span>Not connected — retrying'; }
-  else { c.className = 'chip wait'; c.innerHTML = '<span class="dot"></span>Connecting…'; }
+  /* the words also ride in the title, so the dot-only chip at phone width
+     still says what it means on tap/hover */
+  if(state === 'up'){ c.className = 'chip'; c.innerHTML = '<span class="dot"></span>Live'; c.title = 'Live — connected to the console'; }
+  else if(state === 'down'){ c.className = 'chip down'; c.innerHTML = '<span class="dot"></span>Not connected — retrying'; c.title = 'Not connected — retrying'; }
+  else { c.className = 'chip wait'; c.innerHTML = '<span class="dot"></span>Connecting…'; c.title = 'Connecting…'; }
 }
 function connectWS(){
   var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
